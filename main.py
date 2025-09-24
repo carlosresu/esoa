@@ -403,27 +403,53 @@ def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_ma
     df["norm_compact"] = df["norm"].map(lambda s: re.sub(r"[ \-]", "", s))
 
     # Scan (normal + compact)
-    generic_id, generic_name_hit, multi_hit = [], [], []
+    generic_id, generic_name_hit, multi_hit, pnf_hits_count = [], [], [], []
     for s_norm, s_comp in zip(df["norm"], df["norm_compact"]):
         hits = scan_with_automata(s_norm, s_comp, A_norm, A_comp)
+        distinct_gids = {h[2] for h in hits}
+        pnf_hits_count.append(len(distinct_gids))
         if not hits:
             generic_id.append(None); generic_name_hit.append(None); multi_hit.append(False); continue
+        # prefer longest match
         hits.sort(key=lambda x: x[1]-x[0], reverse=True)
-        distinct_gids = {h[2] for h in hits}
         generic_id.append(hits[0][2]); generic_name_hit.append(hits[0][3])
         multi_hit.append(len(distinct_gids) > 1)
 
     df["generic_id"] = generic_id
     df["molecule_token"] = generic_name_hit
     df["multi_hit"] = multi_hit
+    df["pnf_hits_count"] = pnf_hits_count
+
 
     df["dosage_parsed"] = df["norm"].map(extract_dosage)
     df["route"], df["form"], df["route_evidence"] = zip(*df["norm"].map(extract_route_and_form))
-    df["looks_combo"] = [looks_like_combination(s, {g} if g else set())
-                         for s, g in zip(df["norm"], df["generic_id"])]
+    # A row is a combination if:
+    #   (a) it textually looks like a combo (e.g., "+", "with", "a/b" after dose masking), OR
+    #   (b) ≥2 distinct PNF generics were detected.
+    combo_marker = df["norm"].map(lambda s: looks_like_combination(s, set()))
+    df["looks_combo"] = combo_marker | (df["pnf_hits_count"] >= 2)
 
-    df["bucket"] = np.where(df["looks_combo"], "Others:Combination",
-                    np.where(df["generic_id"].isna(), "Others:Brand/NoGeneric", "Candidate"))
+    # Explain WHY a row is in Others:Combination
+    df["combo_reason"] = np.select(
+        [
+            df["pnf_hits_count"] >= 2,
+            (df["pnf_hits_count"] == 1) & combo_marker,
+            (df["pnf_hits_count"] == 0) & combo_marker,
+        ],
+        [
+            "2+ PNF generics",
+            "two+ generics but only 1 in PNF",
+            "no PNF generic",
+        ],
+        default=""
+    )
+
+    # Bucketing (rename Others:Brand/NoGeneric -> BrandOnly/NoGeneric)
+    df["bucket"] = np.where(
+        df["looks_combo"], "Others:Combination",
+        np.where(df["generic_id"].isna(), "BrandOnly/NoGeneric", "Candidate")
+    )
+
 
     # Candidate subset (carry esoa fields along so groups are self-contained)
     df_cand = df.loc[df["bucket"].eq("Candidate"), ["esoa_idx","generic_id","route","form","dosage_parsed"]].merge(
@@ -525,7 +551,13 @@ def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_ma
                      np.where(out["bucket"].eq("Candidate") & between_mask, "Needs review", out["bucket"]))
 
     out["normalized"] = out["norm"]
-    out["why_flagged"] = out["atc_note"].fillna("")
+
+    # Preserve the combination explanation; otherwise use atc_note
+    out["why_flagged"] = ""
+    is_combo_mask = out["bucket"].eq("Others:Combination")
+    out.loc[is_combo_mask, "why_flagged"] = out.loc[is_combo_mask, "combo_reason"].fillna("combination")
+    out.loc[~is_combo_mask, "why_flagged"] = out.loc[~is_combo_mask, "atc_note"].fillna("")
+
 
     keep_cols = [
         "raw_text","normalized",
