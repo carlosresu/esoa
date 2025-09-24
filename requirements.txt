@@ -1,0 +1,4 @@
+pandas>=2.2
+numpy>=1.26
+pyahocorasick>=2.1.0
+rapidfuzz>=3.9.0
