@@ -11,15 +11,23 @@ Exports:
 """
 
 import argparse
+import math
 import os
 import re
-import math
-from typing import List, Optional, Dict, Any, Tuple
-
-import pandas as pd
-import numpy as np
 import unicodedata
-import ahocorasick
+from typing import Any, Dict, List, Optional, Tuple
+
+import numpy as np
+import pandas as pd
+
+# The pip package is "pyahocorasick", but it imports as "ahocorasick"
+try:
+    import ahocorasick  # type: ignore
+except Exception as e:
+    raise ImportError(
+        "pyahocorasick (imported as 'ahocorasick') is required. "
+        "Install with: pip install pyahocorasick>=2.1.0"
+    ) from e
 
 # =========================
 # Shared helpers
@@ -530,6 +538,32 @@ def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_ma
     out.to_csv(out_csv, index=False, encoding="utf-8")
     total = len(out)
     print(f"[match] wrote {out_csv} with {total:,} rows")
+
+    # ----- also write Excel with frozen header and autofilter -----
+    xlsx_out = os.path.splitext(out_csv)[0] + ".xlsx"
+
+    # Prefer xlsxwriter (best autofilter/freeze support); fall back to openpyxl if needed
+    try:
+        with pd.ExcelWriter(xlsx_out, engine="xlsxwriter") as writer:
+            out.to_excel(writer, index=False, sheet_name="matched")
+            ws = writer.sheets["matched"]
+            # Freeze top row
+            ws.freeze_panes(1, 0)
+            # Add autofilter across the full header row
+            nrows, ncols = out.shape
+            ws.autofilter(0, 0, nrows, ncols - 1)
+    except Exception:
+        # Fallback (openpyxl). Freeze and autofilter if available.
+        with pd.ExcelWriter(xlsx_out, engine="openpyxl") as writer:
+            out.to_excel(writer, index=False, sheet_name="matched")
+            ws = writer.sheets["matched"]
+            try:
+                ws.freeze_panes = "A2"  # freeze header row
+                ws.auto_filter.ref = ws.dimensions  # enable filter on entire used range
+            except Exception:
+                pass
+
+    print(f"[match] wrote {xlsx_out} with filters and frozen header")
 
     # ---- quick breakdown: n (%) by bucket + why_flagged ----
     # Treat empty reason as "OK" for readability
