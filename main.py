@@ -528,8 +528,30 @@ def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_ma
     ]
     out = out[keep_cols]
     out.to_csv(out_csv, index=False, encoding="utf-8")
-    print(f"[match] wrote {out_csv} with {len(out):,} rows")
+    total = len(out)
+    print(f"[match] wrote {out_csv} with {total:,} rows")
+
+    # ---- quick breakdown: n (%) by bucket + why_flagged ----
+    # Treat empty reason as "OK" for readability
+    breakdown = (
+        out.assign(why_flagged=out["why_flagged"].replace("", "OK"))
+        .groupby(["bucket", "why_flagged"], dropna=False)
+        .size()
+        .reset_index(name="n")
+    )
+
+    # percentage
+    breakdown["pct"] = (breakdown["n"] / float(total) * 100).round(2)
+
+    # nice, grouped printout
+    print("\n[summary] Distribution by bucket + why_flagged")
+    for bucket, g in breakdown.sort_values(["bucket", "n"], ascending=[True, False]).groupby("bucket"):
+        print(f"  - {bucket}:")
+        # Only iterate needed columns and unpack correctly
+        for why, n, pct in g[["why_flagged", "n", "pct"]].itertuples(index=False):
+            print(f"      • {why}: {n:,} ({pct}%)")
     return out_csv
+
 
 # =========================
 # RUN ALL
