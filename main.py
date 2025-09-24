@@ -8,22 +8,18 @@ Exports:
 - prepare(pnf_csv, esoa_csv, outdir) -> (pnf_prepared_csv, esoa_prepared_csv)
 - match(pnf_prepared_csv, esoa_prepared_csv, out_csv) -> out_csv
 - run_all(pnf_csv, esoa_csv, outdir, out_csv) -> out_csv
-
-CLI:
-  python main.py --pnf pnf.csv --esoa esoa.csv --outdir . --out esoa_matched.csv
 """
 
 import argparse
 import os
 import re
 import math
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 
 import pandas as pd
 import numpy as np
 import unicodedata
 import ahocorasick
-
 
 # =========================
 # Shared helpers
@@ -40,6 +36,9 @@ def normalize_text(s: str) -> str:
     s = s.replace("gm", "g").replace("gms", "g").replace("milligram", "mg")
     s = re.sub(r"\s+", " ", s).strip()
     return s
+
+def normalize_compact(s: str) -> str:
+    return re.sub(r"[ \-]", "", normalize_text(s))
 
 def slug_id(name: str) -> str:
     base = normalize_text(str(name))
@@ -91,14 +90,14 @@ def map_route_token(r) -> List[str]:
 FORM_TO_ROUTE = {
     "tablet": "oral", "tab": "oral", "capsule": "oral", "cap": "oral",
     "syrup": "oral", "suspension": "oral", "solution": "oral",
+    "sachet": "oral",
     "drop": "ophthalmic", "eye drop": "ophthalmic", "ear drop": "otic",
     "cream": "topical", "ointment": "topical", "gel": "topical", "lotion": "topical",
-    "patch": "transdermal", "inhaler": "inhalation", "nebule": "inhalation",
+    "patch": "transdermal", "inhaler": "inhalation", "nebule": "inhalation", "neb": "inhalation",
     "ampoule": "intravenous", "amp": "intravenous", "ampul": "intravenous",
-    "vial": "intravenous", "inj": "intravenous",
+    "vial": "intravenous", "vl": "intravenous", "inj": "intravenous",
     "suppository": "rectal"
 }
-
 FORM_WORDS = sorted(set(FORM_TO_ROUTE.keys()), key=len, reverse=True)
 
 # Dosage regex
@@ -142,7 +141,7 @@ def to_mg(value: Optional[float], unit: Optional[str]) -> Optional[float]:
     if u == "mg": return value
     if u == "g":  return value * 1000.0
     if u in ("mcg","ug"): return value / 1000.0
-    return None  # IU unknown
+    return None
 
 def safe_ratio_mg_per_ml(strength, unit, per_val):
     mg = to_mg(strength, unit)
@@ -150,7 +149,6 @@ def safe_ratio_mg_per_ml(strength, unit, per_val):
     if mg is None or pv in (None, 0):
         return None
     return mg / pv
-
 
 # =========================
 # PREPARE
@@ -169,7 +167,6 @@ def prepare(pnf_csv: str, esoa_csv: str, outdir: str = ".") -> tuple[str, str]:
     pnf["route_tokens"] = pnf["Route"].map(map_route_token)
     pnf["atc_code"]     = pnf["ATC Code"].map(clean_atc)
 
-    # Where to parse dose/form from
     text_cols = [c for c in ["Technical Specifications", "Specs", "Specification"] if c in pnf.columns]
     pnf["_tech"] = pnf[text_cols[0]].fillna("") if text_cols else ""
     pnf["_parse_src"] = (pnf["generic_name"].astype(str) + " " + pnf["_tech"].astype(str)).str.strip().map(normalize_text)
@@ -216,7 +213,6 @@ def prepare(pnf_csv: str, esoa_csv: str, outdir: str = ".") -> tuple[str, str]:
     print(f"[prepare] wrote {esoa_out} with {len(esoa_prepared):,} rows")
 
     return pnf_out, esoa_out
-
 
 # =========================
 # MATCH
@@ -273,22 +269,44 @@ def extract_dosage(s_norm: str):
             return {"kind":"percent","pct":float(d["pct"])}
     return None
 
-def build_molecule_automaton(pnf_df: pd.DataFrame) -> ahocorasick.Automaton:
-    A = ahocorasick.Automaton()
-    seen = set()
+# dual automata (normal & compact)
+def build_molecule_automata(pnf_df: pd.DataFrame) -> Tuple[ahocorasick.Automaton, ahocorasick.Automaton]:
+    A_norm = ahocorasick.Automaton()
+    A_comp = ahocorasick.Automaton()
+    seen_norm = set()
+    seen_comp = set()
     for gid, gname in pnf_df[["generic_id","generic_name"]].drop_duplicates().itertuples(index=False):
-        key = normalize_text(gname)
-        if key and (gid, key) not in seen:
-            A.add_word(key, (gid, key)); seen.add((gid, key))
+        key_norm = normalize_text(gname)
+        key_comp = normalize_compact(gname)
+        if key_norm and (gid, key_norm) not in seen_norm:
+            A_norm.add_word(key_norm, (gid, key_norm)); seen_norm.add((gid, key_norm))
+        if key_comp and (gid, key_comp) not in seen_comp:
+            A_comp.add_word(key_comp, (gid, key_comp)); seen_comp.add((gid, key_comp))
     if "synonyms" in pnf_df.columns:
         for gid, syns in pnf_df[["generic_id","synonyms"]].itertuples(index=False):
             if isinstance(syns, str) and syns.strip():
                 for s in syns.split("|"):
-                    key = normalize_text(s)
-                    if key and (gid, key) not in seen:
-                        A.add_word(key, (gid, key)); seen.add((gid, key))
-    A.make_automaton()
-    return A
+                    key_norm = normalize_text(s)
+                    key_comp = normalize_compact(s)
+                    if key_norm and (gid, key_norm) not in seen_norm:
+                        A_norm.add_word(key_norm, (gid, key_norm)); seen_norm.add((gid, key_norm))
+                    if key_comp and (gid, key_comp) not in seen_comp:
+                        A_comp.add_word(key_comp, (gid, key_comp)); seen_comp.add((gid, key_comp))
+    A_norm.make_automaton()
+    A_comp.make_automaton()
+    return A_norm, A_comp
+
+def scan_with_automata(text_norm: str, text_comp: str,
+                       A_norm: ahocorasick.Automaton,
+                       A_comp: ahocorasick.Automaton) -> List[Tuple[int,int,str,str]]:
+    hits = []
+    for end_idx, (gid, key) in A_norm.iter(text_norm):
+        start_idx = end_idx - len(key) + 1
+        hits.append((start_idx, end_idx, gid, key))
+    for end_idx, (gid, key) in A_comp.iter(text_comp):
+        start_idx = end_idx - len(key) + 1
+        hits.append((start_idx, end_idx, gid, key))
+    return hits
 
 def to_mg_match(value: float, unit: str):
     u = unit.lower()
@@ -341,30 +359,19 @@ def dose_similarity(esoa_dose: dict, pnf_row: pd.Series) -> float:
     return 0.0
 
 def looks_like_combination(s_norm: str, molecule_hits: set) -> bool:
-    # Multiple distinct molecule hits => combination
     if len(molecule_hits) > 1:
         return True
-
-    # Mask dosage ratios like "5 mg/ml", "120 mg / 5 ml" so their "/" doesn't trigger
     dosage_ratio_rx = re.compile(r"""
         \b
-        \d+(?:[\.,]\d+)?\s*(?:mg|g|mcg|ug|iu)   # numerator amount+unit
+        \d+(?:[\.,]\d+)?\s*(?:mg|g|mcg|ug|iu)
         \s*/\s*
-        (?:\d+(?:[\.,]\d+)?\s*)?(?:ml|l)        # optional per-value + mL/L
+        (?:\d+(?:[\.,]\d+)?\s*)?(?:ml|l)
         \b
     """, re.IGNORECASE | re.VERBOSE)
     s_masked = dosage_ratio_rx.sub(" <DOSE> ", s_norm)
-
-    # If there's an explicit "with" or a plus sign, it's almost certainly a combo
-    if re.search(r"\bwith\b", s_masked):
-        return True
-    if "+" in s_masked:
-        return True
-
-    # Slash between words (not numbers/units) indicates combo (e.g., amox/clav)
-    if re.search(r"[a-z]\s*/\s*[a-z]", s_masked):
-        return True
-
+    if re.search(r"\bwith\b", s_masked): return True
+    if "+" in s_masked: return True
+    if re.search(r"[a-z]\s*/\s*[a-z]", s_masked): return True
     return False
 
 def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_matched.csv") -> str:
@@ -380,17 +387,17 @@ def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_ma
     if "raw_text" not in esoa_df.columns:
         raise ValueError(f"{esoa_prepared_csv} must contain a 'raw_text' column")
 
-    A = build_molecule_automaton(pnf_df)
+    A_norm, A_comp = build_molecule_automata(pnf_df)
 
     df = esoa_df[["raw_text"]].copy()
+    df["esoa_idx"] = df.index  # <-- stable id for grouping/merge
     df["norm"] = df["raw_text"].map(normalize_text)
+    df["norm_compact"] = df["norm"].map(lambda s: re.sub(r"[ \-]", "", s))
 
+    # Scan (normal + compact)
     generic_id, generic_name_hit, multi_hit = [], [], []
-    for s in df["norm"]:
-        hits = []
-        for end_idx, (gid, key) in A.iter(s):
-            start_idx = end_idx - len(key) + 1
-            hits.append((start_idx, end_idx, gid, key))
+    for s_norm, s_comp in zip(df["norm"], df["norm_compact"]):
+        hits = scan_with_automata(s_norm, s_comp, A_norm, A_comp)
         if not hits:
             generic_id.append(None); generic_name_hit.append(None); multi_hit.append(False); continue
         hits.sort(key=lambda x: x[1]-x[0], reverse=True)
@@ -410,10 +417,12 @@ def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_ma
     df["bucket"] = np.where(df["looks_combo"], "Others:Combination",
                     np.where(df["generic_id"].isna(), "Others:Brand/NoGeneric", "Candidate"))
 
-    df_cand = df.loc[df["bucket"].eq("Candidate")].merge(
+    # Candidate subset (carry esoa fields along so groups are self-contained)
+    df_cand = df.loc[df["bucket"].eq("Candidate"), ["esoa_idx","generic_id","route","form","dosage_parsed"]].merge(
         pnf_df, on="generic_id", how="left"
     )
 
+    # Route screen
     def route_ok(row):
         r = row["route"]; allowed = row.get("route_allowed")
         if pd.isna(r) or not r:
@@ -424,20 +433,44 @@ def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_ma
 
     df_cand = df_cand[df_cand.apply(route_ok, axis=1)]
 
+    # Dose similarity (precompute)
     df_cand["dose_sim"] = df_cand.apply(lambda r: dose_similarity(r["dosage_parsed"], r), axis=1)
     df_cand["dose_sim"] = pd.to_numeric(df_cand["dose_sim"], errors="coerce").fillna(0.0)
 
+    # Pick best candidate per esoa_idx (no more fragile index lookups)
     def pick_best(group: pd.DataFrame):
         if group.empty:
-            return pd.Series({"atc_code_final": None, "atc_note":"Needs review: no route/dose match",
-                              "selected_form": None, "selected_variant": None, "dose_sim": 0.0})
-        g = group.sort_values(["dose_sim"], ascending=False)
-        top = g.iloc[0]
-        note = "OK" if float(top["dose_sim"]) >= 0.6 else "Needs review: weak dose match"
-        strength = top.get("strength"); unit = top.get("unit") or ""
-        per_val = top.get("per_val"); per_unit = top.get("per_unit") or ""
-        pct = top.get("pct")
-        variant = f'{top.get("dose_kind")}:{strength}{unit}' if pd.notna(strength) else str(top.get("dose_kind"))
+            return pd.Series({
+                "atc_code_final": None,
+                "atc_note": "Needs review: no route/dose match",
+                "selected_form": None,
+                "selected_variant": None,
+                "dose_sim": 0.0,
+            })
+
+        esoa_form = group.iloc[0]["form"]
+        esoa_route = group.iloc[0]["route"]
+        esoa_dose = group.iloc[0]["dosage_parsed"]
+
+        scored = []
+        for _, row in group.iterrows():
+            score = 0.0
+            if esoa_form and row.get("form_token") and esoa_form == row["form_token"]:
+                score += 40
+            if esoa_route and row.get("route_allowed") and esoa_route == row["route_allowed"]:
+                score += 30
+            sim = dose_similarity(esoa_dose, row)
+            score += sim * 30  # sim in [0,1]
+            scored.append((score, sim, row))
+
+        scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
+        _, best_sim, best_row = scored[0]
+
+        note = "OK" if best_sim >= 0.6 else "Needs review: weak dose match"
+        strength = best_row.get("strength"); unit = best_row.get("unit") or ""
+        per_val = best_row.get("per_val"); per_unit = best_row.get("per_unit") or ""
+        pct = best_row.get("pct")
+        variant = f'{best_row.get("dose_kind")}:{strength}{unit}' if pd.notna(strength) else str(best_row.get("dose_kind"))
         if pd.notna(per_val):
             try:
                 pv_int = int(per_val)
@@ -446,17 +479,22 @@ def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_ma
             variant += f'/{pv_int}{per_unit}'
         if pd.notna(pct):
             variant += f' {pct}%'
+
         return pd.Series({
-            "atc_code_final": top["atc_code"] if isinstance(top["atc_code"], str) and top["atc_code"] else None,
+            "atc_code_final": best_row["atc_code"] if isinstance(best_row["atc_code"], str) and best_row["atc_code"] else None,
             "atc_note": note,
-            "selected_form": top.get("form_token"),
+            "selected_form": best_row.get("form_token"),
             "selected_variant": variant,
-            "dose_sim": float(top.get("dose_sim", 0.0)),
+            "dose_sim": float(best_sim),
         })
 
-    best_by_idx = df_cand.groupby(level=0).apply(pick_best)
-    df_candidates_resolved = df.loc[df["bucket"].eq("Candidate")].join(best_by_idx, how="left")
+    best_by_idx = df_cand.groupby("esoa_idx", sort=False).apply(pick_best, include_groups=False)
+    # Merge back on esoa_idx (stable key)
+    out = df.merge(
+        best_by_idx, left_on="esoa_idx", right_index=True, how="left"
+    )
 
+    # Confidence
     def score_row(r):
         score = 0
         if pd.notna(r.get("generic_id")): score += 60
@@ -464,23 +502,16 @@ def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_ma
         if r.get("route_evidence"): score += 10
         if pd.notna(r.get("atc_code_final")) and r.get("atc_note") == "OK": score += 15
         sim = r.get("dose_sim")
-        try:
-            sim = float(sim)
-        except Exception:
-            sim = 0.0
-        if math.isnan(sim):
-            sim = 0.0
+        try: sim = float(sim)
+        except Exception: sim = 0.0
+        if math.isnan(sim): sim = 0.0
         score += int(max(0.0, min(1.0, sim)) * 10)
         if str(r.get("atc_note","")).startswith("Needs review"): score -= 15
         return score
 
-    df_candidates_resolved["confidence"] = df_candidates_resolved.apply(score_row, axis=1)
+    out["confidence"] = out.apply(score_row, axis=1)
 
-    out = df.merge(
-        df_candidates_resolved[["atc_code_final","atc_note","selected_form","selected_variant","dose_sim","confidence"]],
-        left_index=True, right_index=True, how="left"
-    )
-
+    # Final bucket
     between_mask = (out["confidence"] >= 70) & (out["confidence"] <= 89)
     out["bucket"] = np.where(out["bucket"].eq("Candidate") & (out["confidence"]>=90), "Auto-Accept",
                      np.where(out["bucket"].eq("Candidate") & between_mask, "Needs review", out["bucket"]))
@@ -500,14 +531,12 @@ def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_ma
     print(f"[match] wrote {out_csv} with {len(out):,} rows")
     return out_csv
 
-
 # =========================
 # RUN ALL
 # =========================
 def run_all(pnf_csv: str, esoa_csv: str, outdir: str = ".", out_csv: str = "esoa_matched.csv") -> str:
     pnf_prepared, esoa_prepared = prepare(pnf_csv, esoa_csv, outdir)
     return match(pnf_prepared, esoa_prepared, out_csv)
-
 
 # =========================
 # CLI
