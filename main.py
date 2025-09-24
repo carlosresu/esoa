@@ -94,9 +94,11 @@ FORM_TO_ROUTE = {
     "drop": "ophthalmic", "eye drop": "ophthalmic", "ear drop": "otic",
     "cream": "topical", "ointment": "topical", "gel": "topical", "lotion": "topical",
     "patch": "transdermal", "inhaler": "inhalation", "nebule": "inhalation",
-    "ampoule": "intravenous", "vial": "intravenous", "inj": "intravenous",
+    "ampoule": "intravenous", "amp": "intravenous", "ampul": "intravenous",
+    "vial": "intravenous", "inj": "intravenous",
     "suppository": "rectal"
 }
+
 FORM_WORDS = sorted(set(FORM_TO_ROUTE.keys()), key=len, reverse=True)
 
 # Dosage regex
@@ -339,10 +341,30 @@ def dose_similarity(esoa_dose: dict, pnf_row: pd.Series) -> float:
     return 0.0
 
 def looks_like_combination(s_norm: str, molecule_hits: set) -> bool:
+    # Multiple distinct molecule hits => combination
     if len(molecule_hits) > 1:
         return True
-    if re.search(r"\bwith\b|\+|/", s_norm):
+
+    # Mask dosage ratios like "5 mg/ml", "120 mg / 5 ml" so their "/" doesn't trigger
+    dosage_ratio_rx = re.compile(r"""
+        \b
+        \d+(?:[\.,]\d+)?\s*(?:mg|g|mcg|ug|iu)   # numerator amount+unit
+        \s*/\s*
+        (?:\d+(?:[\.,]\d+)?\s*)?(?:ml|l)        # optional per-value + mL/L
+        \b
+    """, re.IGNORECASE | re.VERBOSE)
+    s_masked = dosage_ratio_rx.sub(" <DOSE> ", s_norm)
+
+    # If there's an explicit "with" or a plus sign, it's almost certainly a combo
+    if re.search(r"\bwith\b", s_masked):
         return True
+    if "+" in s_masked:
+        return True
+
+    # Slash between words (not numbers/units) indicates combo (e.g., amox/clav)
+    if re.search(r"[a-z]\s*/\s*[a-z]", s_masked):
+        return True
+
     return False
 
 def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_matched.csv") -> str:
