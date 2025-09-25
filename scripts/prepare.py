@@ -1,6 +1,3 @@
-# ===============================
-# File: scripts/prepare.py
-# ===============================
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
@@ -65,7 +62,6 @@ def prepare(pnf_csv: str, esoa_csv: str, outdir: str = ".") -> tuple[str, str]:
 
     pnf_out = os.path.join(outdir, "pnf_prepared.csv")
     pnf_prepared.to_csv(pnf_out, index=False, encoding="utf-8")
-    print(f"[prepare] wrote {pnf_out} with {len(pnf_prepared):,} rows")
 
     esoa = pd.read_csv(esoa_csv)
     if "DESCRIPTION" not in esoa.columns:
@@ -73,6 +69,5 @@ def prepare(pnf_csv: str, esoa_csv: str, outdir: str = ".") -> tuple[str, str]:
     esoa_prepared = esoa.rename(columns={"DESCRIPTION": "raw_text"}).copy()
     esoa_out = os.path.join(outdir, "esoa_prepared.csv")
     esoa_prepared.to_csv(esoa_out, index=False, encoding="utf-8")
-    print(f"[prepare] wrote {esoa_out} with {len(esoa_prepared):,} rows")
 
     return pnf_out, esoa_out

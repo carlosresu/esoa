@@ -1,25 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""
-FDA Philippines Human Drugs export → brand map (CSV-export-only)
-
-This cut-down tool:
-1) Downloads the FDA "Human Drugs" CSV via the official export endpoint.
-2) Normalizes columns.
-3) Infers a simple form token and route (using scripts.routes_forms).
-4) Writes a dose/route/form-aware brand→generic map.
-
-Default output folder (if not overridden):
-  ./inputs
-
-Output CSV columns:
-  brand_name, generic_name, dosage_form, route, dosage_strength, registration_number
-
-Usage:
-  python -m scripts.fda_ph_drug_scraper --outdir inputs --outfile inputs/fda_brand_map_YYYY-MM-DD.csv
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -143,19 +124,14 @@ def main() -> None:
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    if args.outfile:
-        out_csv = Path(args.outfile)
-    else:
-        from datetime import datetime
-        out_csv = outdir / f"fda_brand_map_{datetime.now().strftime('%Y-%m-%d')}.csv"
+    out_csv = Path(args.outfile) if args.outfile else outdir / f"fda_brand_map_{Path.cwd().name}.csv"
+    # Use explicit filename if provided; otherwise the caller supplies one via subprocess args
 
     fieldnames = ["brand_name", "generic_name", "dosage_form", "route", "dosage_strength", "registration_number"]
     with out_csv.open("w", encoding="utf-8", newline="") as f:
         w = csv.DictWriter(f, fieldnames=fieldnames)
         w.writeheader()
         w.writerows(brand_map)
-
-    print(f"[brandmap] wrote {out_csv} with {len(brand_map):,} rows")
 
 
 if __name__ == "__main__":

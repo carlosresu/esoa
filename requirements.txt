@@ -1,10 +1,1 @@
-# Core
-pandas>=2.2.2
-numpy>=1.26,<3.0
-
-# Aho–Corasick automaton (module name is "ahocorasick")
-pyahocorasick>=2.1.0
-
-# Excel export engines (xlsxwriter preferred; openpyxl as fallback)
-xlsxwriter>=3.1.0
-openpyxl>=3.1.2
+tqdm>=4.66.0
