@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
@@ -18,6 +17,7 @@ from .routes_forms import extract_route_and_form
 from .text_utils import _base_name, _normalize_text_basic, normalize_text, extract_parenthetical_phrases
 from .who_molecules import detect_all_who_molecules, load_who_molecules
 
+
 def _friendly_dose(d: dict) -> str:
     if not d:
         return ""
@@ -34,6 +34,7 @@ def _friendly_dose(d: dict) -> str:
     if kind == "percent":
         return f"{d.get('pct')}%"
     return ""
+
 
 def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_matched.csv") -> str:
     pnf_df = pd.read_csv(pnf_prepared_csv)
@@ -82,6 +83,7 @@ def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_ma
     from .dose import extract_dosage as _extract_dosage
     df["dosage_parsed"] = df["norm"].map(_extract_dosage)
     df["dose_recognized"] = df["dosage_parsed"].map(_friendly_dose)
+    df["dose_kind_detected"] = df["dosage_parsed"].map(lambda d: (d or {}).get("kind") or (d or {}).get("dose_kind") or "")
     df["route"], df["form"], df["route_evidence"] = zip(*df["norm"].map(extract_route_and_form))
 
     # WHO molecules
@@ -127,9 +129,13 @@ def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_ma
         np.where(df["generic_id"].isna(), "BrandOnly/NoGeneric", "Candidate"),
     )
 
-    # --- Combo segment analysis ---
-    DOSE_OR_UNIT_RX = re.compile(r"(?:(\b\d+(?:[\.,]\d+)?\s*(?:mg|g|mcg|ug|iu|lsu|ml|l|%)(?:\b|/))|(\b\d+(?:[\.,]\d+)?\b))",
-                                 re.IGNORECASE)
+    # --- Combo segment analysis (for consolidated debug columns) ---
+    DOSE_OR_UNIT_RX = re.compile(
+        r"(?:(\b\d+(?:[\.,]\d+)?\s*(?:mg|g|mcg|ug|iu|lsu|ml|l|%)(?:\b|/))|(\b\d+(?:[\.,]\d+)?\b))",
+        re.IGNORECASE
+    )
+
+    pnf_name_set = set(pnf_df["generic_name"].dropna().map(_base_name).map(_normalize_text_basic))
 
     def _segment_norm(seg: str) -> str:
         s = _normalize_text_basic(_base_name(seg))
@@ -141,14 +147,28 @@ def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_ma
     def analyze_combo_segments(row: pd.Series):
         segs = split_combo_segments(row.get("normalized", ""))
         norms = [_segment_norm(s) for s in segs if s]
-        in_pnf = [n in set(pnf_df["generic_name"].map(_base_name).map(_normalize_text_basic)) for n in norms]
+        if not norms:
+            return 0, 0, 0, 0, 0  # total, identified, unknown_in_pnf, unknown_in_who, unknown_in_both
+        in_pnf = [n in pnf_name_set for n in norms]
         in_who = [n in who_name_set for n in norms]
-        id_count = sum(1 for pnff, whof in zip(in_pnf, in_who) if pnff or whof)
-        unk_in_pnf = sum(1 for pnff, whof in zip(in_pnf, in_who) if not pnff and whof)
-        unk_in_who = sum(1 for pnff, whof in zip(in_pnf, in_who) if pnff and not whof)
-        return len(norms), id_count, unk_in_pnf, unk_in_who
+        identified = sum(1 for pnff, whof in zip(in_pnf, in_who) if pnff or whof)
+        unknown_in_pnf = sum(1 for pnff, whof in zip(in_pnf, in_who) if (not pnff) and whof)
+        unknown_in_who = sum(1 for pnff, whof in zip(in_pnf, in_who) if pnff and (not whof))
+        unknown_in_both = sum(1 for pnff, whof in zip(in_pnf, in_who) if (not pnff) and (not whof))
+        return len(norms), identified, unknown_in_pnf, unknown_in_who, unknown_in_both
 
-    df["combo_segments_total"], df["combo_id_molecules"], df["combo_unknown_in_pnf"], df["combo_unknown_in_who"] =         zip(*df.apply(lambda r: analyze_combo_segments(r) if r.get("looks_combo_final") else (0,0,0,0), axis=1))
+    (
+        df["combo_segments_total"],
+        df["combo_id_molecules"],
+        df["combo_unknown_in_pnf"],
+        df["combo_unknown_in_who"],
+        df["combo_unknown_in_both"],
+    ) = zip(
+        *df.apply(
+            lambda r: analyze_combo_segments(r) if r.get("looks_combo_final") else (0, 0, 0, 0, 0),
+            axis=1,
+        )
+    )
 
     # Candidate subset for dose/route scoring
     df_cand = df.loc[df["bucket"].eq("Candidate"), ["esoa_idx", "generic_id", "route", "form", "dosage_parsed"]].merge(
@@ -253,8 +273,10 @@ def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_ma
     out["confidence"] = out.apply(score_row, axis=1)
 
     between_mask = (out["confidence"] >= 70) & (out["confidence"] <= 89)
-    out["bucket"] = np.where(out["bucket"].eq("Candidate") & (out["confidence"] >= 90), "Auto-Accept",
-                       np.where(out["bucket"].eq("Candidate") & between_mask, "Candidate", out["bucket"]))
+    out["bucket"] = np.where(
+        out["bucket"].eq("Candidate") & (out["confidence"] >= 90), "Auto-Accept",
+        np.where(out["bucket"].eq("Candidate") & between_mask, "Candidate", out["bucket"])
+    )
 
     out["normalized"] = out["norm"]
 
@@ -274,15 +296,19 @@ def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_ma
             if not isinstance(t, str):
                 continue
             names.append(_normalize_text_basic(_base_name(t)))
-        seen = set(); uniq = []
+        seen = set()
+        uniq = []
         for n in names:
             if not n or n in seen:
                 continue
-            seen.add(n); uniq.append(n)
+            seen.add(n)
+            uniq.append(n)
         return uniq
 
     out["molecules_recognized_list"] = out.apply(_union_molecules, axis=1)
     out["molecules_recognized"] = out["molecules_recognized_list"].map(lambda xs: "|".join(xs) if xs else "")
+    out["molecules_recognized_count"] = out["molecules_recognized_list"].map(lambda xs: len(xs or []))
+    out["who_atc_count"] = out["who_atc_codes_list"].map(lambda xs: len(xs or []))
 
     out["probable_atc"] = np.where(~out["present_in_pnf"] & out["present_in_who"], out["who_atc_codes"], "")
 
@@ -311,7 +337,7 @@ def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_ma
 
     brand_mask = final_bucket.eq("BrandOnly/NoGeneric")
     final_bucket.loc[brand_mask] = "Needs review"
-    final_why.loc[brand_mask] = "BrandOnly/NoGenericInPNForWHO"
+    final_why.loc[brand_mask] = "BrandOnly/NoGenericInPNF/NoGenericInWHO"
 
     any_who_codes = out["who_atc_codes"].astype(str).str.len().gt(0)
     any_not_in_pnf = out["who_molecules_list"].map(
@@ -331,13 +357,29 @@ def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_ma
     out["bucket_final"] = final_bucket
     out["why_final"] = final_why.fillna("")
 
+    # ---- FINAL OUTPUT (include all review/debug-friendly fields you asked for) ----
     out_small = out[[
+        # Core user-visible fields
         "raw_text", "normalized",
-        "molecules_recognized", "probable_brands", "dose_recognized",
+        "molecules_recognized", "molecules_recognized_count",
+        "probable_brands", "dose_recognized", "dose_kind_detected",
         "route", "form",
         "present_in_pnf", "present_in_who", "probable_atc",
-        "pnf_hits_tokens", "who_molecules", "who_atc_codes",
-        "route_evidence", "looks_combo_raw", "looks_combo_final", "combo_reason",
+
+        # Recognition details / debugging
+        "generic_id", "molecule_token",
+        "pnf_hits_count", "pnf_hits_tokens",
+        "who_molecules", "who_atc_codes", "who_atc_count",
+        "route_evidence",
+        "dosage_parsed",
+        "selected_form", "selected_variant", "dose_sim",
+
+        # Combination consolidation columns
+        "looks_combo_raw", "looks_combo_final", "combo_reason",
+        "combo_segments_total", "combo_id_molecules",
+        "combo_unknown_in_pnf", "combo_unknown_in_who", "combo_unknown_in_both",
+
+        # Final classification
         "atc_code_final", "confidence", "bucket_final", "why_final",
     ]].copy()
 
@@ -383,7 +425,7 @@ def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_ma
                 return (0, s)
             if s.startswith("Candidate:"):
                 return (1, s)
-            if s == "BrandOnly/NoGenericInPNForWHO":
+            if s == "BrandOnly/NoGenericInPNF/NoGenericInWHO":
                 return (2, s)
             return (3, s)
         nr = nr.sort_values(by=["why_final"], key=lambda c: c.map(fam_order))
