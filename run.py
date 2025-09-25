@@ -9,6 +9,7 @@ Console behavior:
 
 File outputs:
   • scripts/match_outputs.py writes ./outputs/summary.txt (overwritten each run).
+  • Finally runs resolve_unknowns.py to analyze unmatched terms and write its outputs under ./outputs.
 """
 from __future__ import annotations
 
@@ -205,6 +206,27 @@ def build_brand_map(inputs_dir: Path, outfile: Path | None) -> Path:
     return out_csv
 
 
+def run_resolve_unknowns() -> None:
+    """Run resolve_unknowns.py if present (either at project root or under scripts/)."""
+    # Prefer scripts/resolve_unknowns.py when available, otherwise fallback to root-level resolve_unknowns.py
+    mod_name = None
+    if (THIS_DIR / "scripts" / "resolve_unknowns.py").is_file():
+        mod_name = "scripts.resolve_unknowns"
+    elif (THIS_DIR / "resolve_unknowns.py").is_file():
+        mod_name = "resolve_unknowns"
+    else:
+        # If the script doesn't exist, nothing to do
+        return
+    with open(os.devnull, "w") as devnull:
+        subprocess.run(
+            [sys.executable, "-m", mod_name],
+            check=True,
+            cwd=str(THIS_DIR),
+            stdout=devnull,
+            stderr=devnull,
+        )
+
+
 # ----------------------------
 # Main entry
 # ----------------------------
@@ -261,6 +283,9 @@ def main_entry() -> None:
     t_match = time.perf_counter() - t0
     print(f"✓ Match & write outputs — done in {t_match:0.2f}s")
     timings.append(("Match & write outputs", t_match))
+
+    t = run_with_spinner("Resolve unknowns", run_resolve_unknowns)
+    timings.append(("Resolve unknowns", t))
 
     # Final timing summary (console only)
     print("\n=== Timing Summary ===")
