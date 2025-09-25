@@ -2,7 +2,13 @@
 # -*- coding: utf-8 -*-
 """
 run.py — Install requirements, optionally run ATC (R) preprocessing,
-then run the ESOA pipeline (prepare → match).
+then run the FDA brand map builder (CSV export), then run the ESOA pipeline (prepare → match).
+
+Changes:
+- Looks for brand map script in EITHER:
+  1) ./dependencies/fda_ph_drug_scraper/fda_ph_drug_scraper.py (preferred)
+  2) ./fda_ph_drug_scraper.py (fallback for legacy placement)
+- Writes brand maps to: ./dependencies/fda_ph_drug_scraper/output/brand_map_YYYY-MM-DD.csv
 
 Usage:
   python run.py --pnf inputs/pnf.csv --esoa inputs/esoa.csv --out esoa_matched.csv
@@ -10,6 +16,7 @@ Usage:
   #   --requirements requirements.txt
   #   --skip-install
   #   --skip-r
+  #   --skip-brandmap
 """
 from __future__ import annotations
 
@@ -18,6 +25,7 @@ import os
 import shutil
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
@@ -28,6 +36,8 @@ THIS_DIR: Path = Path(__file__).resolve().parent
 DEFAULT_INPUTS_DIR = "inputs"
 OUTPUTS_DIR = "outputs"
 ATCD_SUBDIR = Path("dependencies") / "atcd"
+FDA_SUBDIR = Path("dependencies") / "fda_ph_drug_scraper"
+FDA_OUTPUT_SUBDIR = FDA_SUBDIR / "output"
 ATCD_SCRIPTS: tuple[str, ...] = ("atcd.R", "export.R", "filter.R")
 
 
@@ -203,11 +213,53 @@ def create_master_file(root_dir: Path) -> None:
 
 
 # ---------------------------------------------------------------------
+# Brand map builder (FDA PH export)
+# ---------------------------------------------------------------------
+def _find_brandmap_script() -> Path:
+    """Return the path to fda_ph_drug_scraper.py, searching preferred and legacy locations."""
+    preferred = THIS_DIR / FDA_SUBDIR / "fda_ph_drug_scraper.py"
+    legacy = THIS_DIR / "fda_ph_drug_scraper.py"
+    if preferred.is_file():
+        return preferred
+    if legacy.is_file():
+        return legacy
+    raise FileNotFoundError(
+        "Missing brand map script. Expected at either:\n"
+        f"  - {preferred}\n"
+        f"  - {legacy}\n"
+        "Please place fda_ph_drug_scraper.py in the preferred location."
+    )
+
+
+def build_brand_map() -> Path:
+    """
+    Invoke the FDA PH brand map builder (CSV export only).
+    Writes a dose/route/form-aware brand map CSV to ./dependencies/fda_ph_drug_scraper/output/brand_map_YYYY-MM-DD.csv
+    Returns the path to the CSV.
+    """
+    script_path = _find_brandmap_script()
+    outdir = THIS_DIR / FDA_OUTPUT_SUBDIR
+    outdir.mkdir(parents=True, exist_ok=True)
+    brandmap_path = outdir / f"brand_map_{datetime.now().strftime('%Y-%m-%d')}.csv"
+
+    # Run quietly; raise on non-zero exit.
+    with open(os.devnull, "w") as devnull:
+        subprocess.run(
+            [sys.executable, str(script_path), "--outdir", str(outdir), "--outfile", str(brandmap_path)],
+            check=True,
+            cwd=str(THIS_DIR),
+            stdout=devnull,
+            stderr=devnull,
+        )
+    return brandmap_path
+
+
+# ---------------------------------------------------------------------
 # Entry
 # ---------------------------------------------------------------------
 def main_entry() -> None:
     parser = argparse.ArgumentParser(
-        description="Run full ESOA pipeline (ATC → prepare → match)",
+        description="Run full ESOA pipeline (ATC → build brand map → prepare → match)",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--pnf", default=f"{DEFAULT_INPUTS_DIR}/pnf.csv", help="Path to PNF CSV")
@@ -216,6 +268,7 @@ def main_entry() -> None:
     parser.add_argument("--requirements", default="requirements.txt", help="Requirements file to install")
     parser.add_argument("--skip-install", action="store_true", help="Skip pip install of requirements")
     parser.add_argument("--skip-r", action="store_true", help="Skip running ATC R preprocessing scripts")
+    parser.add_argument("--skip-brandmap", action="store_true", help="Skip building FDA brand map CSV")
     args = parser.parse_args()
 
     # Build debug/master.py for inspection
@@ -228,6 +281,11 @@ def main_entry() -> None:
     # Run ATC preprocessing (R)
     if not args.skip_r:
         run_r_scripts()
+
+    # Brand map (via FDA PH CSV export)
+    if not args.skip_brandmap:
+        brandmap_path = build_brand_map()
+        print(f"[brandmap] built → {brandmap_path}")
 
     # Import main (after potential dependency install)
     import main  # noqa: WPS433  (allow runtime import for pipeline)
