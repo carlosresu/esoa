@@ -1,13 +1,10 @@
-# ===============================
-# File: scripts/combos.py
-# ===============================
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
 import re
 from typing import List
 
-COMBO_SEP_RX = re.compile(r"\s*(?:\+|/| with )\s*")
+COMBO_SEP_RX = re.compile(r"\s*(?:\+|/|with)\s*")
 
 
 def split_combo_segments(s: str) -> List[str]:

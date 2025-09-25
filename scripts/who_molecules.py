@@ -1,7 +1,3 @@
-
-# ===============================
-# File: scripts/who_molecules.py
-# ===============================
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
@@ -46,3 +42,16 @@ def detect_all_who_molecules(text: str, regex, codes_by_name) -> Tuple[List[str]
     names = list(dict.fromkeys(names))
     codes = sorted(set().union(*[codes_by_name.get(n, set()) for n in names])) if names else []
     return names, codes
+    
+
+def extract_parenthesized_content(s: str) -> str:
+    if not isinstance(s, str):
+        return ""
+    matches = re.findall(r"\(([^)]+)\)", s)
+    return "|".join(matches)
+    
+
+def clean_parentheses(s: str) -> str:
+    if not isinstance(s, str):
+        return ""
+    return re.sub(r"\([^)]+\)", "", s).strip()

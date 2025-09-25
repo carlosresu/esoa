@@ -1,6 +1,3 @@
-# ===============================
-# File: scripts/match.py
-# ===============================
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
@@ -18,7 +15,7 @@ from .combos import looks_like_combination, split_combo_segments
 from .dose import dose_similarity
 from .routes_forms import FORM_TO_ROUTE, FORM_WORDS, extract_route_and_form
 from .text_utils import _base_name, _normalize_text_basic, normalize_text
-from .who_molecules import detect_all_who_molecules, load_who_molecules
+from .who_molecules import detect_all_who_molecules, load_who_molecules, extract_parenthesized_content, clean_parentheses
 
 
 def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_matched.csv") -> str:
@@ -38,11 +35,13 @@ def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_ma
 
     df = esoa_df[["raw_text"]].copy()
     df["esoa_idx"] = df.index
-    df["norm"] = df["raw_text"].map(normalize_text)
-    df["norm_compact"] = df["norm"].map(lambda s: re.sub(r"[ \-]", "", s))
+    df["paren_content"] = df["raw_text"].map(extract_parenthesized_content)
+    df["raw_text_no_paren"] = df["raw_text"].map(clean_parentheses)
+    df["normalized"] = df["raw_text_no_paren"].map(normalize_text)
+    df["norm_compact"] = df["normalized"].map(lambda s: re.sub(r"[ \-]", "", s))
 
     primary_gid, primary_token, pnf_hits_gids, pnf_hits_tokens, pnf_hits_count = [], [], [], [], []
-    for s_norm, s_comp in zip(df["norm"], df["norm_compact"]):
+    for s_norm, s_comp in zip(df["normalized"], df["norm_compact"]):
         gids, tokens = scan_pnf_all(s_norm, s_comp, A_norm, A_comp)
         pnf_hits_gids.append(gids)
         pnf_hits_tokens.append(tokens)
@@ -59,12 +58,13 @@ def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_ma
     df["pnf_hits_count"] = pnf_hits_count
     df["generic_id"] = primary_gid
     df["molecule_token"] = primary_token
+    df["present_in_pnf"] = df["pnf_hits_count"].gt(0)
 
-    df["dosage_parsed"] = df["norm"].map(lambda s: None)
+    df["dosage_parsed"] = df["normalized"].map(lambda s: None)
     # reuse extractor from dose but keep the original API names
     from .dose import extract_dosage as _extract_dosage
-    df["dosage_parsed"] = df["norm"].map(_extract_dosage)
-    df["route"], df["form"], df["route_evidence"] = zip(*df["norm"].map(extract_route_and_form))
+    df["dosage_parsed"] = df["normalized"].map(_extract_dosage)
+    df["route"], df["form"], df["route_evidence"] = zip(*df["normalized"].map(extract_route_and_form))
 
     # WHO molecules path relative to repo root (one level up from scripts/)
     root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
@@ -72,12 +72,19 @@ def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_ma
     candidates = glob.glob(os.path.join(who_dir, "who_atc_*_molecules.csv"))
     who_file = max(candidates, key=os.path.getmtime) if candidates else None
 
+    df["who_molecules_list"] = [[] for _ in range(len(df))]
+    df["who_atc_codes_list"] = [[] for _ in range(len(df))]
+    df["who_molecules"] = ""
+    df["who_atc_codes"] = ""
+    df["present_in_who"] = False
+    df["probable_atc"] = ""
+
     if who_file and os.path.exists(who_file):
         print(f"[not_in_pnf] Using WHO molecules file: {who_file}")
         codes_by_name, candidate_names = load_who_molecules(who_file)
-        regex = re.compile(r"\\b(" + "|".join(map(re.escape, candidate_names)) + r")\\b")
+        regex = re.compile(r"\b(" + "|".join(map(re.escape, candidate_names)) + r")\b")
         who_names_all, who_atc_all = [], []
-        for txt in df["norm"].tolist():
+        for txt in df["normalized"].tolist():
             names, codes = detect_all_who_molecules(txt, regex, codes_by_name)
             who_names_all.append(names)
             who_atc_all.append(sorted(codes))
@@ -85,16 +92,14 @@ def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_ma
         df["who_atc_codes_list"] = who_atc_all
         df["who_molecules"] = df["who_molecules_list"].map(lambda xs: "|".join(xs) if xs else "")
         df["who_atc_codes"] = df["who_atc_codes_list"].map(lambda xs: "|".join(xs) if xs else "")
+        df["present_in_who"] = df["who_atc_codes_list"].map(bool)
+        df["probable_atc"] = np.where(df["present_in_who"] & ~df["present_in_pnf"], df["who_atc_codes"], "")
     else:
         print("[not_in_pnf] WHO molecules file not found, skipping.")
-        df["who_molecules_list"] = [[] for _ in range(len(df))]
-        df["who_atc_codes_list"] = [[] for _ in range(len(df))]
-        df["who_molecules"] = ""
-        df["who_atc_codes"] = ""
 
     df["looks_combo"] = [
         looks_like_combination(s, p_cnt, len(w_names))
-        for s, p_cnt, w_names in zip(df["norm"], df["pnf_hits_count"], df["who_molecules_list"])
+        for s, p_cnt, w_names in zip(df["normalized"], df["pnf_hits_count"], df["who_molecules_list"])
     ]
 
     df["bucket"] = np.where(
@@ -207,27 +212,28 @@ def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_ma
     out["bucket"] = np.where(out["bucket"].eq("Candidate") & (out["confidence"] >= 90), "Auto-Accept",
                        np.where(out["bucket"].eq("Candidate") & between_mask, "Candidate", out["bucket"]))
 
-    out["normalized"] = out["norm"]
+    out["normalized"] = out["normalized"]
 
     pnf_basenorm_set = set(pnf_df["generic_name"].dropna().map(_base_name).map(_normalize_text_basic))
 
     def classify_combo_reason(row: pd.Series) -> str:
         P = int(row.get("pnf_hits_count") or 0)
         who_names = row.get("who_molecules_list") or []
+        # Filter WHO molecules to those NOT in PNF
         W = len([n for n in who_names if n and (n not in pnf_basenorm_set)])
         segs = split_combo_segments(row.get("normalized", ""))
         total = len(segs) if len(segs) >= 2 else max(2, P + W) if (P + W) >= 2 else (P + W)
         U = max(0, total - (P + W))
         if P >= 2 and W == 0 and U == 0:
-            return "Combinations: PNF-only (≥2)"
+            return "Combinations: PNF-only (2)"
         if P >= 1 and W >= 1 and (P + W) >= 2 and U == 0:
-            return "Combinations: PNF+WHO (≥2)"
+            return "Combinations: PNF+WHO (2)"
         if P == 0 and W >= 2 and U == 0:
-            return "Combinations: WHO-only (≥2)"
+            return "Combinations: WHO-only (2)"
         if (P + W) >= 1 and U >= 1:
             return "Combinations: Contains Unknown(s)"
         if P == 0 and W == 0 and total >= 2:
-            return "Combinations: Unknown-only (≥2)"
+            return "Combinations: Unknown-only (2)"
         return "Combinations"
 
     final_bucket = out["bucket"].copy()
@@ -238,30 +244,42 @@ def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_ma
         final_bucket.loc[others_mask] = "Others"
         final_why.loc[others_mask] = out.loc[others_mask].apply(classify_combo_reason, axis=1)
 
+    # Re-evaluate BrandOnly/NoGeneric to account for new WHO info
+    brand_mask = final_bucket.eq("BrandOnly/NoGeneric") & ~out["present_in_who"]
+    final_bucket.loc[brand_mask] = "Needs review"
+    final_why.loc[brand_mask] = "BrandOnly/NoGenericInPNForWHO"
+
+    # New classification for items in WHO but not PNF
+    who_not_pnf_mask = final_bucket.eq("BrandOnly/NoGeneric") & out["present_in_who"]
+    final_bucket.loc[who_not_pnf_mask] = "Needs review"
+    final_why.loc[who_not_pnf_mask] = "ValidMoleculeWithATC/NotInPNF:not in PNF"
+
     cand_mask = final_bucket.eq("Candidate")
     final_bucket.loc[cand_mask] = "Needs review"
     cand_reason = out.loc[cand_mask, "match_note"].fillna("unspecified")
     final_why.loc[cand_mask] = "Candidate:" + cand_reason
 
-    brand_mask = final_bucket.eq("BrandOnly/NoGeneric")
-    final_bucket.loc[brand_mask] = "Needs review"
-    final_why.loc[brand_mask] = "BrandOnly/NoGenericInPNForWHO"
+    # Handle the special case of 'ATORVASTATIN CALCIUM'
+    def handle_salt_case(row):
+        # Specific rule for molecule salts
+        if 'calcium' in row['normalized'] and 'atorvastatin' in row['normalized'] and row['pnf_hits_count'] > 1:
+            return False
+        return row['looks_combo']
+        
+    out['looks_combo'] = out.apply(handle_salt_case, axis=1)
+    
+    # Handle the 'OXYGEN/LITER' case
+    def handle_oxygen(row):
+        if row['normalized'] == 'oxygen/liter':
+            return 'Others', 'Not a combination: special case'
+        else:
+            return row['bucket_final'], row['why_final']
 
-    any_who_codes = out["who_atc_codes"].astype(str).str.len().gt(0)
-    any_not_in_pnf = out["who_molecules_list"].map(
-        lambda names: any((n not in pnf_basenorm_set) for n in (names or []))
-    )
-    vm_mask = any_who_codes & any_not_in_pnf
-    if vm_mask.any():
-        subreason = np.where(
-            vm_mask & (out["pnf_hits_count"] >= 1) & out["looks_combo"],
-            "2+ generics but only 1+ in PNF",
-            "not in PNF",
-        )
-        final_bucket.loc[vm_mask] = "Needs review"
-        sr = pd.Series(subreason, index=out.index)[vm_mask]
-        final_why.loc[vm_mask] = "ValidMoleculeWithATC/NotInPNF:" + sr
-
+    # Update the final bucket and why columns based on the new logic
+    final_bucket = np.where(out["normalized"] == "oxygen/liter", "Others", final_bucket)
+    final_why = np.where(out["normalized"] == "oxygen/liter", "Not a combination: special case", final_why)
+    
+    
     out["bucket_final"] = final_bucket
     out["why_final"] = final_why.fillna("")
 
@@ -272,6 +290,9 @@ def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_ma
         "raw_text", "normalized",
         "atc_code_final", "confidence",
         "bucket_final", "why_final",
+        "molecule_token", "who_molecules", "paren_content",
+        "dosage_parsed", "route", "form",
+        "present_in_pnf", "present_in_who", "probable_atc"
     ]].copy()
 
     out_small.to_csv(out_csv, index=False, encoding="utf-8")

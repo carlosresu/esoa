@@ -1,6 +1,3 @@
-# ===============================
-# File: scripts/text_utils.py
-# ===============================
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
@@ -17,7 +14,7 @@ def _normalize_text_basic(s: str) -> str:
 
 def _base_name(name: str) -> str:
     name = str(name).lower().strip()
-    name = re.split(r",| incl\.| including ", name, maxsplit=1)[0]
+    name = re.split(r",|incl\.| including ", name, maxsplit=1)[0]
     return re.sub(r"\s+", " ", name).strip()
 
 
@@ -28,7 +25,7 @@ def normalize_text(s: str) -> str:
     s = "".join(c for c in s if not unicodedata.combining(c))
     s = s.lower()
     s = re.sub(r"[^\w%/+\.\- ]+", " ", s)
-    s = s.replace("microgram", "mcg").replace("μg", "mcg").replace("µg", "mcg")
+    s = s.replace("microgram", "mcg").replace("g", "mcg").replace("µg", "mcg")
     s = s.replace("cc", "ml").replace("milli litre", "ml").replace("milliliter", "ml")
     s = s.replace("gm", "g").replace("gms", "g").replace("milligram", "mg")
     s = re.sub(r"\s+", " ", s).strip()

@@ -1,6 +1,3 @@
-# ===============================
-# File: scripts/routes_forms.py
-# ===============================
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
@@ -65,7 +62,7 @@ def map_route_token(r) -> List[str]:
 
 def parse_form_from_text(s_norm: str) -> Optional[str]:
     for fw in FORM_WORDS:
-        if re.search(rf"\\b{re.escape(fw)}\\b", s_norm):
+        if re.search(rf"\b{re.escape(fw)}\b", s_norm):
             return fw
     return None
 
@@ -75,12 +72,12 @@ def extract_route_and_form(s_norm: str) -> Tuple[Optional[str], Optional[str], s
     form_found = None
     evidence = []
     for fw in FORM_WORDS:
-        if re.search(rf"\\b{re.escape(fw)}\\b", s_norm):
+        if re.search(rf"\b{re.escape(fw)}\b", s_norm):
             form_found = fw
             evidence.append(f"form:{fw}")
             break
     for alias, route in ROUTE_ALIASES.items():
-        if re.search(rf"\\b{re.escape(alias)}\\b", s_norm):
+        if re.search(rf"\b{re.escape(alias)}\b", s_norm):
             route_found = route
             evidence.append(f"route:{alias}->{route}")
             break

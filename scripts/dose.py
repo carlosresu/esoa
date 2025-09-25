@@ -1,6 +1,3 @@
-# ===============================
-# File: scripts/dose.py
-# ===============================
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
@@ -11,7 +8,7 @@ from .text_utils import safe_to_float
 
 DOSAGE_PATTERNS = [
     r"(?P<strength>\d+(?:[\.,]\d+)?)\s?(?P<unit>mg|g|mcg|ug|iu)\b",
-    r"(?P<strength>\d+(?:[\.,]\d+)?)\s?(?P<unit>mg|g|mcg|ug|iu)\s?(?:/| per )\s?(?P<per_val>1)?\s*(?P<per_unit>ml)\b",
+    r"(?P<strength>\d+(?:[\.,]\d+)?)\s?(?P<unit>mg|g|mcg|ug|iu)\s?(?:/|per)\s?(?P<per_val>1)?\s*(?P<per_unit>ml)\b",
     r"(?P<strength>\d+(?:[\.,]\d+)?)\s?(?P<unit>mg|g|mcg|ug|iu)\s?(?:/| per )\s?(?P<per_val>\d+(?:[\.,]\d+)?)\s*(?P<per_unit>ml)\b",
     r"(?P<pct>\d+(?:[\.,]\d+)?)\s?%",
 ]

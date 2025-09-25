@@ -1,6 +1,3 @@
-# ===============================
-# File: run.py (top-level)
-# ===============================
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
@@ -29,18 +26,17 @@ if THIS_DIR not in sys.path:
 
 
 def install_requirements(req_path: str):
-    """Install requirements with the same Python interpreter running this script."""
-    if not req_path:
+    """Install requirements silently with the same Python interpreter running this script."""
+    if not req_path or not os.path.isfile(req_path):
         return
-    if not os.path.isfile(req_path):
-        print(f">>> Skipping install: requirements file not found: {req_path}")
-        return
-    print(f">>> Installing dependencies from: {req_path}")
+
+    # Run pip install silently by redirecting stdout and stderr
     subprocess.check_call(
         [sys.executable, "-m", "pip", "install", "--disable-pip-version-check", "-r", req_path],
         cwd=THIS_DIR,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
-    print(">>> Dependencies installed.")
 
 
 def _resolve_input_path(p: str, default_subdir: str = "inputs") -> str:
