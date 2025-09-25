@@ -206,14 +206,17 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 esoa_matched.csv
-.gitignore
 esoa_prepared.csv
 esoa.csv
 pnf_prepared.csv
 pnf.csv
-data/inputs/raw/03 ESOA_ITEM_LIB.csv
-data/inputs/raw/pnf_no_cancer.csv
-data/inputs/raw/data_doh_pnf_raw_pnf_20241211.xlsx
-data/inputs/raw/pnf_no_cancer.xlsx
+data/inputs/raw/*
 esoa_matched.xlsx
 ~$esoa_matched.xlsx
+not_in_pnf.csv
+**/.DS_Store
+output/*
+**/*.csv
+**/*.xlsx
+**/*.rds
+**/output/*
