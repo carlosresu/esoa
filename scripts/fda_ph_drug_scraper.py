@@ -17,7 +17,7 @@ Output CSV columns:
   brand_name, generic_name, dosage_form, route, dosage_strength, registration_number
 
 Usage:
-  python -m scripts.fda_ph_drug_scraper --outdir inputs --outfile inputs/brand_map_YYYY-MM-DD.csv
+  python -m scripts.fda_ph_drug_scraper --outdir inputs --outfile inputs/fda_brand_map_YYYY-MM-DD.csv
 """
 
 from __future__ import annotations
@@ -41,16 +41,9 @@ HEADERS = {
 
 
 def fetch_csv_export() -> List[Dict[str, str]]:
-    """
-    Fetch CSV export from the FDA Human Drugs list.
-    Returns a list of dictionaries (rows). Raises on failure.
-    """
     with requests.Session() as s:
-        # Warm up session
         r0 = s.get(HUMAN_DRUGS_URL, headers=HEADERS, timeout=30)
         r0.raise_for_status()
-
-        # Export endpoint
         r = s.get(f"{HUMAN_DRUGS_URL}?export=csv", headers=HEADERS, timeout=120)
         r.raise_for_status()
         text = r.text
@@ -90,12 +83,8 @@ def normalize_columns(rows: List[Dict[str, str]]) -> List[Dict[str, str]]:
 
 
 def infer_form_and_route(dosage_form: Optional[str]) -> (Optional[str], Optional[str]):
-    """
-    Infer form token and route from the free-text 'Dosage Form' using our existing heuristics.
-    """
     if not isinstance(dosage_form, str) or not dosage_form.strip():
         return None, None
-    # Normalize and detect
     norm = normalize_text(dosage_form)
     form_token = parse_form_from_text(norm)
     route = FORM_TO_ROUTE.get(form_token) if form_token else None
@@ -103,10 +92,6 @@ def infer_form_and_route(dosage_form: Optional[str]) -> (Optional[str], Optional
 
 
 def build_brand_map(rows: List[Dict[str, str]]) -> List[Dict[str, str]]:
-    """
-    Create a dose/route/form-aware brand→generic map.
-    Deduplicated by (brand_name, generic_name, dosage_form, route, dosage_strength).
-    """
     seen = set()
     out: List[Dict[str, str]] = []
     for r in rows:
@@ -162,9 +147,8 @@ def main() -> None:
         out_csv = Path(args.outfile)
     else:
         from datetime import datetime
-        out_csv = outdir / f"brand_map_{datetime.now().strftime('%Y-%m-%d')}.csv"
+        out_csv = outdir / f"fda_brand_map_{datetime.now().strftime('%Y-%m-%d')}.csv"
 
-    # Write CSV
     fieldnames = ["brand_name", "generic_name", "dosage_form", "route", "dosage_strength", "registration_number"]
     with out_csv.open("w", encoding="utf-8", newline="") as f:
         w = csv.DictWriter(f, fieldnames=fieldnames)

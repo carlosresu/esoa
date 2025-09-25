@@ -15,18 +15,23 @@ def _route_ok(row: pd.Series) -> bool:
 
 def _pick_best(group: pd.DataFrame) -> pd.Series:
     if group.empty:
-        return pd.Series({"atc_code_final": None, "match_note": "no route/dose match", "selected_form": None, "selected_variant": None, "dose_sim": 0.0})
+        return pd.Series({"atc_code_final": None, "dose_sim": 0.0, "form_ok": False, "route_ok": False, "match_quality": "no route/dose match", "selected_form": None, "selected_variant": None})
     esoa_form = group.iloc[0]["form"]; esoa_route = group.iloc[0]["route"]; esoa_dose = group.iloc[0]["dosage_parsed"]
     scored = []
     for _, row in group.iterrows():
         score = 0.0
-        if esoa_form and row.get("form_token") and esoa_form == row["form_token"]: score += 40
-        if esoa_route and row.get("route_allowed") and esoa_route == row["route_allowed"]: score += 30
+        form_ok = bool(esoa_form and row.get("form_token") and esoa_form == row["form_token"])
+        route_ok = bool(esoa_route and row.get("route_allowed") and esoa_route == row["route_allowed"])
+        if form_ok: score += 40
+        if route_ok: score += 30
         sim = dose_similarity(esoa_dose, row); score += sim * 30
-        scored.append((score, sim, row))
+        scored.append((score, sim, form_ok, route_ok, row))
     scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
-    _, best_sim, best_row = scored[0]
-    note = "weak dose match" if best_sim >= 0.6 else "no/poor dose match"
+    _, best_sim, best_form_ok, best_route_ok, best_row = scored[0]
+    note = "OK"
+    if best_sim < 0.6: note = "no/poor dose match"
+    if not best_form_ok and (note == "OK"): note = "no/poor form match"
+    if not best_route_ok and (note == "OK"): note = "no/poor route match"
     strength = best_row.get("strength"); unit = best_row.get("unit") or ""
     per_val = best_row.get("per_val"); per_unit = best_row.get("per_unit") or ""; pct = best_row.get("pct")
     variant = f"{best_row.get('dose_kind')}:{strength}{unit}" if pd.notna(strength) else str(best_row.get("dose_kind"))
@@ -35,7 +40,15 @@ def _pick_best(group: pd.DataFrame) -> pd.Series:
         except Exception: pv_int = per_val
         variant += f"/{pv_int}{per_unit}"
     if pd.notna(pct): variant += f" {pct}%"
-    return pd.Series({"atc_code_final": best_row["atc_code"] if isinstance(best_row["atc_code"], str) and best_row["atc_code"] else None, "match_note": note, "selected_form": best_row.get("form_token"), "selected_variant": variant, "dose_sim": float(best_sim)})
+    return pd.Series({
+        "atc_code_final": best_row["atc_code"] if isinstance(best_row["atc_code"], str) and best_row["atc_code"] else None,
+        "dose_sim": float(best_sim),
+        "form_ok": bool(best_form_ok),
+        "route_ok": bool(best_route_ok),
+        "match_quality": note,
+        "selected_form": best_row.get("form_token"),
+        "selected_variant": variant,
+    })
 
 def _score_row(r: pd.Series) -> int:
     score = 0
@@ -64,9 +77,18 @@ def _union_molecules(row: pd.Series) -> List[str]:
         seen.add(n); uniq.append(n)
     return uniq
 
+def _mk_reason(series: pd.Series, default_ok: str) -> pd.Series:
+    """Safe stringy replace without silent downcasting warnings."""
+    s = series.astype("string")
+    s = s.fillna(default_ok)
+    s = s.replace({"unspecified": default_ok})
+    return s.astype("string")
+
 def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.DataFrame:
     df = features_df.copy()
-    df_cand = df.loc[df["bucket"].eq("Candidate"), ["esoa_idx","generic_id","route","form","dosage_parsed"]].merge(pnf_df, on="generic_id", how="left")
+
+    # Candidate rows that have PNF generic_id
+    df_cand = df.loc[df["generic_id"].notna(), ["esoa_idx","generic_id","route","form","dosage_parsed"]].merge(pnf_df, on="generic_id", how="left")
     if not df_cand.empty:
         df_cand = df_cand[df_cand.apply(_route_ok, axis=1)]
         df_cand["dose_sim"] = df_cand.apply(lambda r: dose_similarity(r["dosage_parsed"], r), axis=1)
@@ -75,43 +97,77 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
         out = df.merge(best_by_idx, left_on="esoa_idx", right_index=True, how="left")
     else:
         out = df.copy()
-        out[["atc_code_final","match_note","selected_form","selected_variant","dose_sim"]] = [None, "no route/dose match", None, None, 0.0]
+        out[["atc_code_final","dose_sim","form_ok","route_ok","match_quality","selected_form","selected_variant"]] = [None, 0.0, False, False, "unspecified", None, None]
+
+    # Confidence and molecules recognized
     out["confidence"] = out.apply(_score_row, axis=1)
-    between_mask = (out["confidence"] >= 70) & (out["confidence"] <= 89)
-    out["bucket"] = np.where(out["bucket"].eq("Candidate") & (out["confidence"] >= 90), "Auto-Accept", np.where(out["bucket"].eq("Candidate") & between_mask, "Candidate", out["bucket"]))
-    pnf_basenorm_set = set(pnf_df["generic_name"].dropna().map(_base_name).map(_normalize_text_basic))
-    out["present_in_pnf"] = out["pnf_hits_count"].astype(int).gt(0)
-    out["present_in_who"] = out["who_atc_codes"].astype(str).str.len().gt(0)
     out["molecules_recognized_list"] = out.apply(_union_molecules, axis=1)
     out["molecules_recognized"] = out["molecules_recognized_list"].map(lambda xs: "|".join(xs) if xs else "")
     out["molecules_recognized_count"] = out["molecules_recognized_list"].map(lambda xs: len(xs or []))
     out["who_atc_count"] = out["who_atc_codes_list"].map(lambda xs: len(xs or []))
+
+    # Probable ATC if absent in PNF but present in WHO
     out["probable_atc"] = np.where(~out["present_in_pnf"] & out["present_in_who"], out["who_atc_codes"], "")
-    def classify_combo_reason(row: pd.Series) -> str:
-        if row.get("combo_segments_total", 0) > 1:
-            return (f"Combinations: Contains Unknown(s) — identified={row['combo_id_molecules']}, unknown_in_pnf={row['combo_unknown_in_pnf']}, unknown_in_who={row['combo_unknown_in_who']}")
-        return "Combinations"
-    final_bucket = out["bucket"].copy()
-    final_why = pd.Series([""] * len(out), index=out.index)
-    others_mask = final_bucket.eq("Others:Combinations")
-    if others_mask.any():
-        final_bucket.loc[others_mask] = "Others"
-        final_why.loc[others_mask] = out.loc[others_mask].apply(classify_combo_reason, axis=1)
-    cand_mask = final_bucket.eq("Candidate")
-    final_bucket.loc[cand_mask] = "Needs review"
-    cand_reason = out.loc[cand_mask, "match_note"].fillna("unspecified")
-    final_why.loc[cand_mask] = "Candidate:" + cand_reason
-    brand_mask = final_bucket.eq("BrandOnly/NoGeneric")
-    final_bucket.loc[brand_mask] = "Needs review"
-    final_why.loc[brand_mask] = "BrandOnly/NoGenericInPNF/NoGenericInWHO"
-    any_who_codes = out["who_atc_codes"].astype(str).str.len().gt(0)
-    any_not_in_pnf = out["who_molecules_list"].map(lambda names: any((_normalize_text_basic(_base_name(n)) not in pnf_basenorm_set) for n in (names or [])))
-    vm_mask = any_who_codes & any_not_in_pnf
-    if vm_mask.any():
-        subreason = np.where(vm_mask & (out["pnf_hits_count"] >= 1) & out["looks_combo_final"], "2+ generics but only 1+ in PNF", "not in PNF")
-        final_bucket.loc[vm_mask] = "Needs review"
-        sr = pd.Series(subreason, index=out.index)[vm_mask]
-        final_why.loc[vm_mask] = "ValidMoleculeWithATC/NotInPNF:" + sr
-    out["bucket_final"] = final_bucket
-    out["why_final"] = final_why.fillna("")
+
+    # Initialize new bucket/why_flagged/reason
+    out["bucket_final"] = ""
+    out["why_final"] = ""
+    out["reason_final"] = ""
+
+    # AUTO-ACCEPT: high confidence candidate and OK/brand swap note
+    is_candidate_like = out["generic_id"].notna()
+    high_conf = out["confidence"].ge(90)
+    out.loc[is_candidate_like & high_conf, "bucket_final"] = "Auto-Accept"
+    out.loc[is_candidate_like & high_conf & out["did_brand_swap"], "why_final"] = "OK, brand->generic swap"
+    out.loc[is_candidate_like & high_conf & (~out["did_brand_swap"]), "why_final"] = "OK, no changes"
+    out.loc[is_candidate_like & high_conf, "reason_final"] = "OK"
+
+    # NEEDS REVIEW: remaining candidate-like
+    needs_rev_mask = is_candidate_like & ~high_conf
+    out.loc[needs_rev_mask, "bucket_final"] = "Candidate"
+    out.loc[needs_rev_mask, "why_final"] = "Needs review"
+    out.loc[needs_rev_mask, "reason_final"] = _mk_reason(out.loc[needs_rev_mask, "match_quality"], "no/poor dose/form/route")
+
+    # VALID MOLECULE (single) WITH ATC in WHO/FDA but Not in PNF
+    single_not_in_pnf = (~out["present_in_pnf"]) & (out["molecules_recognized_count"].ge(1)) & (~out["looks_combo_final"])
+    present_in_who = out["present_in_who"]
+    present_in_fda = out["present_in_fda_generic"]
+    mask_who_single = single_not_in_pnf & present_in_who
+    mask_fda_single = single_not_in_pnf & (~present_in_who) & present_in_fda
+    out.loc[mask_who_single, ["bucket_final","why_final"]] = ["Candidate","ValidMoleculeWithATC/NotInPNF/PresentInWHO"]
+    out.loc[mask_fda_single, ["bucket_final","why_final"]] = ["Candidate","ValidMoleculeWithATC/NotInPNF/PresentInFDA"]
+    for m in [mask_who_single, mask_fda_single]:
+        out.loc[m, "reason_final"] = _mk_reason(out.loc[m, "match_quality"], "OK")
+
+    # VALID COMBINATION WITH ATC in WHO/FDA but Not in PNF
+    combo = out["looks_combo_final"]
+    mask_who_combo = combo & (~out["present_in_pnf"]) & present_in_who
+    mask_fda_combo = combo & (~out["present_in_pnf"]) & (~present_in_who) & present_in_fda
+    out.loc[mask_who_combo, ["bucket_final","why_final"]] = ["Candidate","ValidMoleculeCombinationWithATC/NotInPNF/PresentInWHO"]
+    out.loc[mask_fda_combo, ["bucket_final","why_final"]] = ["Candidate","ValidMoleculeCombinationWithATC/NotInPNF/PresentInFDA"]
+    for m in [mask_who_combo, mask_fda_combo]:
+        out.loc[m, "reason_final"] = _mk_reason(out.loc[m, "match_quality"], "OK")
+
+    # OTHERS: UnknownWord
+    unknown_single = out["unknown_kind"].eq("Single - Unknown")
+    unknown_multi_all = out["unknown_kind"].eq("Multiple - All Unknown")
+    unknown_multi_some = out["unknown_kind"].eq("Multiple - Some Unknown")
+    none_found = out["unknown_kind"].eq("None")
+    fallback_unknown = (~is_candidate_like) & (~present_in_who) & (~present_in_fda) & (~combo) & (~none_found)
+    for cond, reason in [
+        (unknown_single | (fallback_unknown & unknown_single), "Single - Unknown"),
+        (unknown_multi_all | (fallback_unknown & unknown_multi_all), "Multiple - All Unknown"),
+        (unknown_multi_some | (fallback_unknown & unknown_multi_some), "Multiple - Some Unknown"),
+    ]:
+        mask = cond & (out["bucket_final"] == "")
+        out.loc[mask, "bucket_final"] = "Others"
+        out.loc[mask, "why_final"] = "Unknown"
+        out.loc[mask, "reason_final"] = reason
+
+    # Any remaining empties move to Candidate with default string reason
+    remaining = out["bucket_final"].eq("")
+    out.loc[remaining, "bucket_final"] = "Candidate"
+    out.loc[remaining, "why_final"] = "Needs review"
+    out.loc[remaining, "reason_final"] = _mk_reason(out.loc[remaining, "match_quality"], "no/poor dose/form/route")
+
     return out
