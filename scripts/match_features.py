@@ -2,17 +2,19 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 import glob, os, re
-from typing import Tuple, Optional, List, Dict
+from typing import Tuple, Optional, List, Dict, Set
 import numpy as np, pandas as pd
 from .aho import build_molecule_automata, scan_pnf_all
 from .combos import looks_like_combination, split_combo_segments
 from .routes_forms import extract_route_and_form
 from .text_utils import _base_name, _normalize_text_basic, normalize_text, extract_parenthetical_phrases
 from .who_molecules import detect_all_who_molecules, load_who_molecules
-from .brand_map import load_latest_brandmap, build_brand_automata
+from .brand_map import load_latest_brandmap, build_brand_automata, fda_generics_set
 
-# FIX: The previous pattern had over-escaped backslashes; this version actually matches doses/units.
+# Dose/units scrubber
 DOSE_OR_UNIT_RX = re.compile(r"(?:(\b\d+(?:[.,]\d+)?\s*(?:mg|g|mcg|ug|iu|lsu|ml|l|%)(?:\b|/))|(\b\d+(?:[.,]\d+)?\b))", re.I)
+
+GENERIC_TOKEN_RX = re.compile(r"[a-z]+", re.I)
 
 
 def _friendly_dose(d: dict) -> str:
@@ -36,19 +38,6 @@ def _segment_norm(seg: str) -> str:
     return s
 
 
-def _analyze_combo_segments(row: pd.Series, pnf_name_set: set, who_name_set: set):
-    segs = split_combo_segments(row.get("match_basis", "") or row.get("normalized", ""))
-    norms = [_segment_norm(s) for s in segs if s]
-    if not norms: return 0,0,0,0,0
-    in_pnf = [n in pnf_name_set for n in norms]
-    in_who = [n in who_name_set for n in norms]
-    identified = sum(1 for pnff, whof in zip(in_pnf, in_who) if pnff or whof)
-    unknown_in_pnf = sum(1 for pnff, whof in zip(in_pnf, in_who) if (not pnff) and whof)
-    unknown_in_who = sum(1 for pnff, whof in zip(in_pnf, in_who) if pnff and (not whof))
-    unknown_in_both = sum(1 for pnff, whof in zip(in_pnf, in_who) if (not pnff) and (not whof))
-    return len(norms), identified, unknown_in_pnf, unknown_in_who, unknown_in_both
-
-
 def load_latest_who_dir(root_dir: str) -> str | None:
     who_dir = os.path.join(root_dir, "dependencies", "atcd", "output")
     candidates = glob.glob(os.path.join(who_dir, "who_atc_*_molecules.csv"))
@@ -61,11 +50,6 @@ def _select_generic_for_brand(
     esoa_form: Optional[str],
     friendly_dose: str,
 ) -> Optional[str]:
-    """
-    Choose a generic display string for a given brand, preferring ones that exist in PNF,
-    then scoring by (dose match + form match).
-    Returns the chosen generic *original* (display) string, or None.
-    """
     if not matches_for_brand:
         return None
 
@@ -75,7 +59,6 @@ def _select_generic_for_brand(
             sc += 2
         if esoa_form and m.dosage_form and esoa_form.lower() == (m.dosage_form or "").lower():
             sc += 1
-        # small bias if generic is present in PNF list
         gen_base = _normalize_text_basic(_base_name(m.generic))
         if gen_base in pnf_name_to_gid:
             sc += 3
@@ -94,11 +77,7 @@ def _build_match_basis_single(
     pnf_name_to_gid: Dict[str, Tuple[str, str]],
     esoa_form: Optional[str],
     friendly_dose: str,
-) -> str:
-    """
-    Create 'match_basis' by replacing all detected brands with their selected generic names,
-    while keeping everything else untouched (spacing, units, etc.).
-    """
+) -> Tuple[str, bool]:
     # Detect brand hits keyed by normalized basic brand token
     found_keys: List[str] = []
     lengths: Dict[str, int] = {}
@@ -107,34 +86,36 @@ def _build_match_basis_single(
     for _, bn in brand_A_comp.iter(norm_compact):
         found_keys.append(bn); lengths[bn] = max(lengths.get(bn, 0), len(bn))
     if not found_keys:
-        return norm_text
+        return norm_text, False
 
-    # Deduplicate & prefer longer tokens first to avoid partial overlaps
     uniq_keys = list(dict.fromkeys(found_keys))
     uniq_keys.sort(key=lambda k: (-lengths.get(k, len(k)), k))
 
     out = norm_text
+    replaced_any = False
     for bn in uniq_keys:
         options = brandmap_lookup.get(bn, [])
         chosen_generic = _select_generic_for_brand(options, pnf_name_to_gid, esoa_form, friendly_dose)
         if not chosen_generic:
             continue
         gd_norm = normalize_text(chosen_generic)
-        # Replace whole-word brand occurrences with generic
-        out = re.sub(rf"\b{re.escape(bn)}\b", gd_norm, out)
-    # normalize spaces once
+        new_out = re.sub(rf"\b{re.escape(bn)}\b", gd_norm, out)
+        if new_out != out:
+            replaced_any = True
+            out = new_out
     out = re.sub(r"\s+", " ", out).strip()
-    return out
+    return out, replaced_any
 
 
-def build_features(pnf_df: pd.DataFrame, esoa_df: pd.DataFrame) -> Tuple[pd.DataFrame, set, set]:
+def _tokenize_unknowns(s_norm: str) -> List[str]:
+    return [m.group(0) for m in GENERIC_TOKEN_RX.finditer(s_norm)]
+
+
+def build_features(pnf_df: pd.DataFrame, esoa_df: pd.DataFrame) -> Tuple[pd.DataFrame, Set[str], Set[str], Set[str]]:
     required_pnf = {"generic_id","generic_name","synonyms","atc_code","route_allowed","form_token","dose_kind","strength","unit","per_val","per_unit","pct","strength_mg","ratio_mg_per_ml"}
     missing = required_pnf - set(pnf_df.columns)
     if missing: raise ValueError(f"pnf_prepared.csv missing columns: {missing}")
     if "raw_text" not in esoa_df.columns: raise ValueError("esoa_prepared.csv must contain a 'raw_text' column")
-
-    # Aho for PNF
-    A_norm, A_comp = build_molecule_automata(pnf_df)
 
     # Map normalized PNF names to gid + original name
     pnf_name_to_gid: Dict[str, Tuple[str, str]] = {}
@@ -142,49 +123,65 @@ def build_features(pnf_df: pd.DataFrame, esoa_df: pd.DataFrame) -> Tuple[pd.Data
         key = _normalize_text_basic(_base_name(str(gname)))
         if key and key not in pnf_name_to_gid:
             pnf_name_to_gid[key] = (gid, gname)
+    pnf_name_set: Set[str] = set(pnf_name_to_gid.keys())
 
-    # Brand map (if present under ./inputs)
+    # WHO molecules (names + regex)
+    root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+    who_file = load_latest_who_dir(root_dir)
+    codes_by_name, candidate_names = ({}, [])
+    who_name_set: Set[str] = set()
+    who_regex = None
+    if who_file and os.path.exists(who_file):
+        codes_by_name, candidate_names = load_who_molecules(who_file)
+        who_name_set = set(codes_by_name.keys())
+        who_regex = re.compile(r"\b(" + "|".join(map(re.escape, candidate_names)) + r")\b") if candidate_names else None
+
+    # Brand map & FDA generics
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
     inputs_dir = os.path.join(project_root, "inputs")
     brand_df = load_latest_brandmap(inputs_dir)
     has_brandmap = brand_df is not None and not brand_df.empty
     if has_brandmap:
         B_norm, B_comp, brand_lookup = build_brand_automata(brand_df)
+        fda_gens = fda_generics_set(brand_df)
     else:
         B_norm = B_comp = None
         brand_lookup = {}
+        fda_gens = set()
+
+    # Aho for PNF
+    A_norm, A_comp = build_molecule_automata(pnf_df)
 
     # Base frame
     df = esoa_df[["raw_text"]].copy()
     df["esoa_idx"] = df.index
-    # Keep "normalized" as purely normalized raw text (no brand rewrites)
     df["normalized"] = df["raw_text"].map(normalize_text)
     df["norm_compact"] = df["normalized"].map(lambda s: re.sub(r"[ \-]", "", s))
-    df["probable_brands_list"] = df["raw_text"].map(extract_parenthetical_phrases)
-    df["probable_brands"] = df["probable_brands_list"].map(lambda xs: "|".join(xs) if xs else "")
 
-    # Dose (from normalized raw) for use in brand scoring; route/form too
+    # Dose/route/form on *original normalized* (helpful for brand scoring)
     from .dose import extract_dosage as _extract_dosage
     df["dosage_parsed_raw"] = df["normalized"].map(_extract_dosage)
     df["dose_recognized"] = df["dosage_parsed_raw"].map(_friendly_dose)
-    df["dose_kind_detected"] = df["dosage_parsed_raw"].map(lambda d: (d or {}).get("kind") or (d or {}).get("dose_kind") or "")
     df["route_raw"], df["form_raw"], df["route_evidence_raw"] = zip(*df["normalized"].map(extract_route_and_form))
 
-    # Build match_basis by replacing brands → generics (leave "normalized" untouched)
+    # 1) BRAND → GENERIC replacement first (match_basis)
     if has_brandmap:
-        match_basis = []
+        mb_list = []
+        swapped = []
         for norm, comp, form, friendly in zip(df["normalized"], df["norm_compact"], df["form_raw"], df["dose_recognized"]):
-            mb = _build_match_basis_single(norm, comp, B_norm, B_comp, brand_lookup, pnf_name_to_gid, form, friendly)
-            match_basis.append(mb)
-        df["match_basis"] = match_basis
+            mb, did_swap = _build_match_basis_single(norm, comp, B_norm, B_comp, brand_lookup, pnf_name_to_gid, form, friendly)
+            mb_list.append(mb); swapped.append(did_swap)
+        df["match_basis"] = mb_list
+        df["did_brand_swap"] = swapped
     else:
         df["match_basis"] = df["normalized"]
+        df["did_brand_swap"] = False
 
-    # Re-extract dose/route/form on match_basis for matching logic
+    # 2) Re-extract dose/route/form on match_basis
     df["dosage_parsed"] = df["match_basis"].map(_extract_dosage)
     df["route"], df["form"], df["route_evidence"] = zip(*df["match_basis"].map(extract_route_and_form))
 
-    # PNF hits should operate on match_basis so brand replacements match generics
+    # 3) PNF hits operate on match_basis
     primary_gid, primary_token, pnf_hits_gids, pnf_hits_tokens, pnf_hits_count = [], [], [], [], []
     for s_norm, s_comp in zip(df["match_basis"], df["norm_compact"]):
         gids, tokens = scan_pnf_all(s_norm, s_comp, A_norm, A_comp)
@@ -194,17 +191,11 @@ def build_features(pnf_df: pd.DataFrame, esoa_df: pd.DataFrame) -> Tuple[pd.Data
     df["pnf_hits_gids"] = pnf_hits_gids; df["pnf_hits_tokens"] = pnf_hits_tokens; df["pnf_hits_count"] = pnf_hits_count
     df["generic_id"] = primary_gid; df["molecule_token"] = primary_token
 
-    # WHO molecules (optional) — also based on match_basis
-    root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
-    who_file = load_latest_who_dir(root_dir)
-    who_name_set = set()
-    if who_file and os.path.exists(who_file):
-        codes_by_name, candidate_names = load_who_molecules(who_file)
-        who_name_set = set(codes_by_name.keys())
-        regex = re.compile(r"\b(" + "|".join(map(re.escape, candidate_names)) + r")\b")
+    # 4) WHO molecules on match_basis
+    if who_regex:
         who_names_all, who_atc_all = [], []
         for txt in df["match_basis"].tolist():
-            names, codes = detect_all_who_molecules(txt, regex, codes_by_name)
+            names, codes = detect_all_who_molecules(txt, who_regex, codes_by_name)
             who_names_all.append(names); who_atc_all.append(sorted(codes))
         df["who_molecules_list"] = who_names_all; df["who_atc_codes_list"] = who_atc_all
         df["who_molecules"] = df["who_molecules_list"].map(lambda xs: "|".join(xs) if xs else "")
@@ -214,15 +205,57 @@ def build_features(pnf_df: pd.DataFrame, esoa_df: pd.DataFrame) -> Tuple[pd.Data
         df["who_atc_codes_list"] = [[] for _ in range(len(df))]
         df["who_molecules"] = ""; df["who_atc_codes"] = ""
 
-    # Combo heuristic + initial bucket based on match_basis
-    looks_raw = [looks_like_combination(s, p_cnt, len(w_names)) for s, p_cnt, w_names in zip(df["match_basis"], df["pnf_hits_count"], df["who_molecules_list"]) ]
-    df["looks_combo_raw"] = looks_raw; df["looks_combo_final"] = looks_raw
-    df["combo_reason"] = np.where(df["looks_combo_final"], "combo/heuristic", "single/heuristic")
-    df["bucket"] = np.where(df["looks_combo_final"], "Others:Combinations", np.where(df["generic_id"].isna(), "BrandOnly/NoGeneric", "Candidate"))
+    # 5) Combination detection: only combinations of known generics (PNF or WHO or FDA generics)
+    def _known_generic_tokens(text_norm: str) -> List[str]:
+        # remove doses/units then split
+        s = _segment_norm(text_norm)
+        toks = _tokenize_unknowns(s)
+        out = []
+        for t in toks:
+            if t in pnf_name_set or t in who_name_set or t in fda_gens:
+                out.append(t)
+        # dedupe preserving order
+        seen=set(); res=[]
+        for t in out:
+            if t not in seen:
+                seen.add(t); res.append(t)
+        return res
 
-    # Combo stats (use match_basis)
-    pnf_name_set = set(pnf_df["generic_name"].dropna().map(_base_name).map(_normalize_text_basic))
-    (df["combo_segments_total"], df["combo_id_molecules"], df["combo_unknown_in_pnf"], df["combo_unknown_in_who"], df["combo_unknown_in_both"]) = zip(*df.apply(lambda r: _analyze_combo_segments(r, pnf_name_set, who_name_set) if r.get("looks_combo_final") else (0,0,0,0,0), axis=1))
+    known_counts = df["match_basis"].map(lambda s: len(_known_generic_tokens(s)))
+    df["combo_known_generics_count"] = known_counts
+    df["looks_combo_final"] = df["combo_known_generics_count"].ge(2)
+    df["combo_reason"] = np.where(df["looks_combo_final"], "combo/known-generics>=2", "single/heuristic")
 
-    # Keep "normalized" untouched; we've already created "match_basis" for all matching operations
-    return df, pnf_name_set, who_name_set
+    # 6) Unknown words extraction (after removing brands and known generics)
+    def _unknown_kind_and_list(text_norm: str) -> Tuple[str, List[str]]:
+        s = _segment_norm(text_norm)
+        all_toks = _tokenize_unknowns(s)
+        unknowns = []
+        for t in all_toks:
+            if (t not in pnf_name_set) and (t not in who_name_set) and (t not in fda_gens):
+                unknowns.append(t)
+        # dedupe
+        seen=set(); unknowns_uniq=[]
+        for t in unknowns:
+            if t not in seen:
+                seen.add(t); unknowns_uniq.append(t)
+        if not unknowns_uniq:
+            return "None", []
+        if len(unknowns_uniq) == len(all_toks):
+            # everything unknown
+            if len(unknowns_uniq) == 1:
+                return "Single - Unknown", unknowns_uniq
+            return "Multiple - All Unknown", unknowns_uniq
+        return ("Multiple - Some Unknown", unknowns_uniq)
+
+    kinds, lists_ = zip(*df["match_basis"].map(_unknown_kind_and_list))
+    df["unknown_kind"] = kinds
+    df["unknown_words_list"] = lists_
+    df["unknown_words"] = df["unknown_words_list"].map(lambda xs: "|".join(xs) if xs else "")
+
+    # 7) present flags
+    df["present_in_pnf"] = df["pnf_hits_count"].astype(int).gt(0)
+    df["present_in_who"] = df["who_atc_codes"].astype(str).str.len().gt(0)
+    df["present_in_fda_generic"] = df["match_basis"].map(lambda s: any(tok in fda_gens for tok in _tokenize_unknowns(_segment_norm(s))))
+
+    return df, pnf_name_set, who_name_set, fda_gens

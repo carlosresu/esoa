@@ -5,7 +5,8 @@ run.py — Install requirements, optionally run ATC (R) preprocessing,
 then build the FDA brand map (CSV export), then run the ESOA pipeline (prepare → match).
 
 Scraper module path: scripts/fda_ph_drug_scraper.py (executed as a module)
-Brand map outputs to: ./inputs/brand_map_YYYY-MM-DD.csv
+Brand map outputs to: ./inputs/fda_brand_map_YYYY-MM-DD.csv
+Prepared files (pnf_prepared.csv, esoa_prepared.csv) are written to: ./inputs
 """
 from __future__ import annotations
 
@@ -28,7 +29,7 @@ if str(THIS_DIR) not in sys.path:
     sys.path.insert(0, str(THIS_DIR))
 
 def install_requirements(req_path: str | os.PathLike[str]) -> None:
-    req = Path(req_path)
+    req = Path(req_path) if req_path else None
     if not req or not req.is_file():
         return
     with open(os.devnull, "w") as devnull:
@@ -73,13 +74,19 @@ def _assert_all_exist(root: Path, files: Iterable[str | os.PathLike[str]]) -> No
 def run_r_scripts() -> None:
     atcd_dir = THIS_DIR / ATCD_SUBDIR
     if not atcd_dir.is_dir():
-        raise FileNotFoundError(f"ATC directory not found: {atcd_dir}")
+        print(f">>> ATC directory not found: {atcd_dir}; skipping R preprocessing.")
+        return
     out_dir = atcd_dir / "output"
     out_dir.mkdir(parents=True, exist_ok=True)
     rscript = shutil.which("Rscript")
     if not rscript:
-        raise RuntimeError("Rscript not found in PATH. Please install R and ensure 'Rscript' is available.")
-    _assert_all_exist(atcd_dir, ATCD_SCRIPTS)
+        print(">>> Rscript not found in PATH; skipping ATC R preprocessing.")
+        return
+    try:
+        _assert_all_exist(atcd_dir, ATCD_SCRIPTS)
+    except FileNotFoundError as e:
+        print(f">>> {e}; skipping ATC R preprocessing.")
+        return
     with open(os.devnull, "w") as devnull:
         for script in ATCD_SCRIPTS:
             subprocess.run([rscript, script], check=True, cwd=str(atcd_dir), stdout=devnull, stderr=devnull)
@@ -105,23 +112,23 @@ def create_master_file(root_dir: Path) -> None:
         root_dir / "main.py",
         root_dir / "run.py",
     ]
-    header_text = "# START OF REPO FILES\n"
-    footer_text = "# END OF REPO FILES\n"
+    header_text = "# START OF REPO FILES"
+    footer_text = "# END OF REPO FILES"
     with output_file_path.open("w", encoding="utf-8") as outfile:
         outfile.write(header_text)
         for file_path in files_to_concatenate:
             if not file_path.is_file():
                 continue
             relative_path = file_path.relative_to(root_dir).as_posix()
-            outfile.write(f"\n# <{relative_path}>\n")
+            outfile.write(f"\\n# <{relative_path}>\\n")
             with file_path.open("r", encoding="utf-8") as infile:
                 outfile.write(infile.read())
-            outfile.write("\n")
+            outfile.write("\\n")
         outfile.write(footer_text)
 
 def build_brand_map(inputs_dir: Path, outfile: Path | None) -> Path:
     date_str = datetime.now().strftime("%Y-%m-%d")
-    out_csv = outfile or (inputs_dir / f"brand_map_{date_str}.csv")
+    out_csv = outfile or (inputs_dir / f"fda_brand_map_{date_str}.csv")
     with open(os.devnull, "w") as devnull:
         subprocess.run(
             [sys.executable, "-m", "scripts.fda_ph_drug_scraper", "--outdir", str(inputs_dir), "--outfile", str(out_csv)],
@@ -158,7 +165,11 @@ def main_entry() -> None:
     inputs_dir = _ensure_inputs_dir()
 
     if not args.skip_brandmap:
-        build_brand_map(inputs_dir, outfile=None)
+        try:
+            bm = build_brand_map(inputs_dir, outfile=None)
+            print(f">>> Built FDA brand map: {bm}")
+        except Exception as e:
+            print(f">>> FDA brand map build failed: {e}")
 
     import main  # noqa: WPS433
 
@@ -166,7 +177,11 @@ def main_entry() -> None:
     esoa_path = _resolve_input_path(args.esoa)
 
     out_path = outdir / Path(args.out).name
-    main.run_all(str(pnf_path), str(esoa_path), str(outdir), str(out_path))
+    # IMPORTANT: write prepared CSVs into ./inputs (not ./outputs)
+    main.run_all(str(pnf_path), str(esoa_path), str(inputs_dir), str(out_path))
+
+    # NOTE: We intentionally removed the extra summary print to avoid duplicate summaries.
+    # The detailed summary already comes from scripts.match_outputs.write_outputs().
 
 if __name__ == "__main__":
     try:

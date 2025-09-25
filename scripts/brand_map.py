@@ -6,7 +6,7 @@ from __future__ import annotations
 import glob
 import os
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Set
 
 import ahocorasick  # type: ignore
 import pandas as pd
@@ -24,8 +24,13 @@ class BrandMatch:
 
 
 def _latest_brandmap_path(inputs_dir: str) -> Optional[str]:
-    pattern = os.path.join(inputs_dir, "brand_map_*.csv")
-    candidates = glob.glob(pattern)
+    # Prefer renamed pattern
+    pattern_new = os.path.join(inputs_dir, "fda_brand_map_*.csv")
+    candidates = glob.glob(pattern_new)
+    if not candidates:
+        # Backward-compatibility with old name
+        pattern_old = os.path.join(inputs_dir, "brand_map_*.csv")
+        candidates = glob.glob(pattern_old)
     if not candidates:
         return None
     candidates.sort(reverse=True)
@@ -85,3 +90,15 @@ def scan_brands(text_norm: str, text_comp: str,
     for _, bn in A_comp.iter(text_comp):
         found[bn] = max(found.get(bn, 0), len(bn))
     return [k for k, _ in sorted(found.items(), key=lambda kv: (-kv[1], kv[0]))]
+
+
+def fda_generics_set(brand_df: pd.DataFrame) -> Set[str]:
+    """Return a set of normalized base generic names present in FDA brand map."""
+    gens: Set[str] = set()
+    if not isinstance(brand_df, pd.DataFrame) or "generic_name" not in brand_df.columns:
+        return gens
+    for g in brand_df["generic_name"].fillna("").astype(str).tolist():
+        gb = _normalize_text_basic(_base_name(g))
+        if gb:
+            gens.add(gb)
+    return gens
