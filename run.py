@@ -1,6 +1,24 @@
+# ===============================
+# File: run.py (top-level)
+# ===============================
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+run.py — Install requirements, (optionally) run ATC preprocessing (R scripts from ./dependencies/atcd),
+then import main.py and run the pipeline.
+
+Usage examples:
+  python run.py
+  python run.py --pnf inputs/pnf.csv --esoa inputs/esoa.csv --out esoa_matched.csv
+  python run.py --requirements requirements.txt
+  python run.py --skip-r
+  python run.py --skip-install
+"""
+
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 
@@ -19,7 +37,7 @@ def install_requirements(req_path: str):
         return
     print(f">>> Installing dependencies from: {req_path}")
     subprocess.check_call(
-        [sys.executable, "-m", "pip", "install", "-r", req_path],
+        [sys.executable, "-m", "pip", "install", "--disable-pip-version-check", "-r", req_path],
         cwd=THIS_DIR,
     )
     print(">>> Dependencies installed.")
@@ -62,39 +80,80 @@ def _outputs_dir() -> str:
     return d
 
 
+def run_r_scripts():
+    """
+    Run the ATC R preprocessing scripts with cwd=./dependencies/atcd
+    so relative outputs are written to ./dependencies/atcd/output/*
+
+    NOTE: scripts.match looks for WHO molecules under ./dependencies/atcd/output,
+    so we ensure that directory exists.
+    """
+    atcd_dir = os.path.join(THIS_DIR, "dependencies", "atcd")
+
+    if not os.path.isdir(atcd_dir):
+        raise FileNotFoundError(f"ATC directory not found: {atcd_dir}")
+
+    out_dir = os.path.join(atcd_dir, "output")
+    os.makedirs(out_dir, exist_ok=True)
+
+    rscript = shutil.which("Rscript")
+    if not rscript:
+        raise RuntimeError("Rscript not found in PATH. Please install R and ensure 'Rscript' is available.")
+
+    scripts = ["atcd.R", "export.R", "filter.R"]
+
+    for script in scripts:
+        script_path = os.path.join(atcd_dir, script)
+        if not os.path.isfile(script_path):
+            raise FileNotFoundError(f"Required R script not found: {script_path}")
+
+    for script in scripts:
+        print(f">>> Running R script (cwd={atcd_dir}): {script}")
+        subprocess.run([rscript, script], check=True, cwd=atcd_dir)
+
+    print(">>> All R scripts completed successfully.")
+
+
 def main_entry():
-    parser = argparse.ArgumentParser(description="Run full ESOA pipeline (prepare → match)")
+    parser = argparse.ArgumentParser(description="Run full ESOA pipeline (ATC → prepare → match)")
     parser.add_argument(
         "--pnf",
         default="inputs/pnf.csv",
-        help="Path to PNF CSV (default: inputs/pnf.csv)",
+        help="Path to raw PNF CSV (default: inputs/pnf.csv)",
     )
     parser.add_argument(
         "--esoa",
         default="inputs/esoa.csv",
-        help="Path to ESOA CSV (default: inputs/esoa.csv)",
+        help="Path to raw eSOA CSV (default: inputs/esoa.csv)",
     )
     parser.add_argument(
         "--out",
         default="esoa_matched.csv",
         help="Final matched CSV filename (always written to ./outputs/)",
     )
-    parser.add_argument("--requirements", default="", help="Optional requirements.txt to install")
-    parser.add_argument("--skip-install", action="store_true", help="Skip pip install step")
-
+    parser.add_argument(
+        "--requirements",
+        default="requirements.txt",
+        help="Path to requirements file (default: requirements.txt)",
+    )
+    parser.add_argument("--skip-install", action="store_true", help="Skip installing requirements")
+    parser.add_argument("--skip-r", action="store_true", help="Skip running ATC R scripts")
     args = parser.parse_args()
 
-    if args.requirements and not args.skip_install:
+    if not args.skip_install and args.requirements:
         install_requirements(args.requirements)
 
-    # Defer heavy imports until after optional install
+    if not args.skip_r:
+        run_r_scripts()
+
+    # Defer heavy imports until after optional install & R preprocessing
     import main  # noqa: E402
 
     # Resolve inputs and outputs
     pnf_path = _resolve_input_path(args.pnf)
     esoa_path = _resolve_input_path(args.esoa)
 
-    # Force all outputs to ./outputs/
+    # Force all pipeline outputs to ./outputs/
     outdir = _outputs_dir()
     out_path = os.path.join(outdir, os.path.basename(args.out))
 
@@ -106,6 +165,8 @@ def main_entry():
 
     # Run the full pipeline (always writing under ./outputs)
     main.run_all(pnf_path, esoa_path, outdir, out_path)
+
+    print("\n>>> Pipeline complete. Final output:", out_path)
 
 
 if __name__ == "__main__":
