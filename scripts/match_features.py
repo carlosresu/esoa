@@ -11,7 +11,7 @@ from .text_utils import _base_name, _normalize_text_basic, normalize_text, extra
 from .who_molecules import detect_all_who_molecules, load_who_molecules
 from .brand_map import load_latest_brandmap, build_brand_automata, scan_brands
 
-DOSE_OR_UNIT_RX = re.compile(r"(?:(\b\d+(?:[\.,]\d+)?\s*(?:mg|g|mcg|ug|iu|lsu|ml|l|%)(?:\b|/))|(\b\d+(?:[\.,]\d+)?\b))", re.I)
+DOSE_OR_UNIT_RX = re.compile(r"(?:(\\b\\d+(?:[\\.,]\\d+)?\\s*(?:mg|g|mcg|ug|iu|lsu|ml|l|%)(?:\\b|/))|(\\b\\d+(?:[\\.,]\\d+)?\\b))", re.I)
 
 def _friendly_dose(d: dict) -> str:
     if not d: return ""
@@ -28,8 +28,8 @@ def _friendly_dose(d: dict) -> str:
 def _segment_norm(seg: str) -> str:
     s = _normalize_text_basic(_base_name(seg))
     s = DOSE_OR_UNIT_RX.sub(" ", s)
-    s = re.sub(r"\b(?:per|with|and)\b", " ", s)
-    s = re.sub(r"\s+", " ", s).strip()
+    s = re.sub(r"\\b(?:per|with|and)\\b", " ", s)
+    s = re.sub(r"\\s+", " ", s).strip()
     return s
 
 def _analyze_combo_segments(row: pd.Series, pnf_name_set: set, who_name_set: set):
@@ -54,20 +54,21 @@ def _brand_fallback_enricher(
     brand_hits_norm: List[str],
     brandmap_lookup: Dict[str, List],
     pnf_name_to_gid: Dict[str, Tuple[str, str]],
-) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:
+    """Return (generic_id, generic_token, brand_display, generic_display) if we can infer from brand; else Nones."""
     if row.get("generic_id") or not brand_hits_norm:
-        return row.get("generic_id"), row.get("molecule_token"), None
+        return row.get("generic_id"), row.get("molecule_token"), None, None
     norm_brand_key = brand_hits_norm[0]
     matches = brandmap_lookup.get(norm_brand_key, [])
     if not matches:
-        return None, None, None
+        return None, None, None, None
     friendly = _friendly_dose(row.get("dosage_parsed") or {})
     form = row.get("form") or ""
     def _score(m):
         sc = 0
-        if friendly and m.dosage_strength and friendly in m.dosage_strength.lower():
+        if friendly and m.dosage_strength and friendly in (m.dosage_strength or "").lower():
             sc += 2
-        if form and m.dosage_form and form == m.dosage_form.lower():
+        if form and m.dosage_form and form == (m.dosage_form or "").lower():
             sc += 1
         return sc
     matches = sorted(matches, key=_score, reverse=True)
@@ -75,29 +76,46 @@ def _brand_fallback_enricher(
     gen_base = _normalize_text_basic(_base_name(picked.generic))
     if gen_base in pnf_name_to_gid:
         gid, gen_orig = pnf_name_to_gid[gen_base]
-        parts = [picked.generic]
-        if picked.brand and picked.brand.lower() not in picked.generic.lower():
-            parts.append(f"({picked.brand})")
-        if friendly:
-            parts.append(friendly)
-        if form:
-            parts.append(form)
-        explain = "because " + " ".join([p for p in parts if p]).strip()
-        return gid, gen_orig, explain
+        return gid, gen_orig, picked.brand, picked.generic
     else:
-        return None, None, None
+        return None, None, None, None
+
+def _rewrite_normalized_with_brand_generic(base_norm: str, brand_display: Optional[str], generic_display: Optional[str]) -> str:
+    """Produce '<generic> (<brand>) <rest>'.
+       If the brand appears at the start of base_norm, remove it before appending the rest.
+       Keep everything lowercase per normalize_text style.
+    """
+    if not brand_display or not generic_display:
+        return base_norm
+    bd_norm = normalize_text(brand_display)
+    gd_norm = normalize_text(generic_display)
+    s = base_norm
+    if s.startswith(bd_norm):
+        rest = s[len(bd_norm):].lstrip()
+    else:
+        rest = s
+    new_norm = f"{gd_norm} ({bd_norm})"
+    if rest:
+        new_norm = f"{new_norm} {rest}"
+    return re.sub(r"\\s+", " ", new_norm).strip()
 
 def build_features(pnf_df: pd.DataFrame, esoa_df: pd.DataFrame) -> Tuple[pd.DataFrame, set, set]:
     required_pnf = {"generic_id","generic_name","synonyms","atc_code","route_allowed","form_token","dose_kind","strength","unit","per_val","per_unit","pct","strength_mg","ratio_mg_per_ml"}
     missing = required_pnf - set(pnf_df.columns)
     if missing: raise ValueError(f"pnf_prepared.csv missing columns: {missing}")
     if "raw_text" not in esoa_df.columns: raise ValueError("esoa_prepared.csv must contain a 'raw_text' column")
+
+    # Aho for PNF
     A_norm, A_comp = build_molecule_automata(pnf_df)
+
+    # Map normalized PNF names to gid + original name
     pnf_name_to_gid: Dict[str, Tuple[str, str]] = {}
     for gid, gname in pnf_df[["generic_id","generic_name"]].drop_duplicates().itertuples(index=False):
         key = _normalize_text_basic(_base_name(str(gname)))
         if key and key not in pnf_name_to_gid:
             pnf_name_to_gid[key] = (gid, gname)
+
+    # Brand map (if present under ./inputs)
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
     inputs_dir = os.path.join(project_root, "inputs")
     brand_df = load_latest_brandmap(inputs_dir)
@@ -107,12 +125,16 @@ def build_features(pnf_df: pd.DataFrame, esoa_df: pd.DataFrame) -> Tuple[pd.Data
     else:
         B_norm = B_comp = None
         brand_lookup = {}
+
+    # Base frame
     df = esoa_df[["raw_text"]].copy()
     df["esoa_idx"] = df.index
     df["norm"] = df["raw_text"].map(normalize_text)
-    df["norm_compact"] = df["norm"].map(lambda s: re.sub(r"[ \-]", "", s))
+    df["norm_compact"] = df["norm"].map(lambda s: re.sub(r"[ \\-]", "", s))
     df["probable_brands_list"] = df["raw_text"].map(extract_parenthetical_phrases)
     df["probable_brands"] = df["probable_brands_list"].map(lambda xs: "|".join(xs) if xs else "")
+
+    # PNF hits
     primary_gid, primary_token, pnf_hits_gids, pnf_hits_tokens, pnf_hits_count = [], [], [], [], []
     for s_norm, s_comp in zip(df["norm"], df["norm_compact"]):
         gids, tokens = scan_pnf_all(s_norm, s_comp, A_norm, A_comp)
@@ -121,18 +143,22 @@ def build_features(pnf_df: pd.DataFrame, esoa_df: pd.DataFrame) -> Tuple[pd.Data
         else: primary_gid.append(None); primary_token.append(None)
     df["pnf_hits_gids"] = pnf_hits_gids; df["pnf_hits_tokens"] = pnf_hits_tokens; df["pnf_hits_count"] = pnf_hits_count
     df["generic_id"] = primary_gid; df["molecule_token"] = primary_token
+
+    # Dose, route/form
     from .dose import extract_dosage as _extract_dosage
     df["dosage_parsed"] = df["norm"].map(_extract_dosage)
     df["dose_recognized"] = df["dosage_parsed"].map(_friendly_dose)
     df["dose_kind_detected"] = df["dosage_parsed"].map(lambda d: (d or {}).get("kind") or (d or {}).get("dose_kind") or "")
     df["route"], df["form"], df["route_evidence"] = zip(*df["norm"].map(extract_route_and_form))
+
+    # WHO molecules (optional)
     root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
     who_file = load_latest_who_dir(root_dir)
     who_name_set = set()
     if who_file and os.path.exists(who_file):
         codes_by_name, candidate_names = load_who_molecules(who_file)
         who_name_set = set(codes_by_name.keys())
-        regex = re.compile(r"\b(" + "|".join(map(re.escape, candidate_names)) + r")\b")
+        regex = re.compile(r"\\b(" + "|".join(map(re.escape, candidate_names)) + r")\\b")
         who_names_all, who_atc_all = [], []
         for txt in df["norm"].tolist():
             names, codes = detect_all_who_molecules(txt, regex, codes_by_name)
@@ -144,18 +170,23 @@ def build_features(pnf_df: pd.DataFrame, esoa_df: pd.DataFrame) -> Tuple[pd.Data
         df["who_molecules_list"] = [[] for _ in range(len(df))]
         df["who_atc_codes_list"] = [[] for _ in range(len(df))]
         df["who_molecules"] = ""; df["who_atc_codes"] = ""
+
+    # Combo heuristic + initial bucket
     looks_raw = [looks_like_combination(s, p_cnt, len(w_names)) for s, p_cnt, w_names in zip(df["norm"], df["pnf_hits_count"], df["who_molecules_list"]) ]
     df["looks_combo_raw"] = looks_raw; df["looks_combo_final"] = looks_raw
     df["combo_reason"] = np.where(df["looks_combo_final"], "combo/heuristic", "single/heuristic")
     df["bucket"] = np.where(df["looks_combo_final"], "Others:Combinations", np.where(df["generic_id"].isna(), "BrandOnly/NoGeneric", "Candidate"))
+
+    # Combo stats
     pnf_name_set = set(pnf_df["generic_name"].dropna().map(_base_name).map(_normalize_text_basic))
     (df["combo_segments_total"], df["combo_id_molecules"], df["combo_unknown_in_pnf"], df["combo_unknown_in_who"], df["combo_unknown_in_both"]) = zip(*df.apply(lambda r: _analyze_combo_segments(r, pnf_name_set, who_name_set) if r.get("looks_combo_final") else (0,0,0,0,0), axis=1))
+
     # BRAND FALLBACK
     used_fallback = []
-    fallback_brand = []
+    fallback_brand_display = []
+    fallback_generic_display = []
     new_gid = []
     new_token = []
-    explain_suffixes = []
     if has_brandmap:
         brand_hits = []
         for s_norm, s_comp in zip(df["norm"], df["norm_compact"]):
@@ -164,30 +195,40 @@ def build_features(pnf_df: pd.DataFrame, esoa_df: pd.DataFrame) -> Tuple[pd.Data
         df["brand_hits_norm"] = brand_hits
         for i, r in df.iterrows():
             if r.get("looks_combo_final") or pd.notna(r.get("generic_id")):
-                used_fallback.append(False); fallback_brand.append(""); new_gid.append(r.get("generic_id")); new_token.append(r.get("molecule_token")); explain_suffixes.append(None)
+                used_fallback.append(False)
+                fallback_brand_display.append(None)
+                fallback_generic_display.append(None)
+                new_gid.append(r.get("generic_id"))
+                new_token.append(r.get("molecule_token"))
                 continue
             hits = r.get("brand_hits_norm") or []
-            gid, token, explain = _brand_fallback_enricher(r, hits, brand_lookup, pnf_name_to_gid)
+            gid, token, brand_disp, generic_disp = _brand_fallback_enricher(r, hits, brand_lookup, pnf_name_to_gid)
             used = bool(gid) and bool(token)
             used_fallback.append(used)
-            fallback_brand.append(hits[0] if (hits and used) else "")
+            fallback_brand_display.append(brand_disp if used else None)
+            fallback_generic_display.append(generic_disp if used else None)
             new_gid.append(gid if used else r.get("generic_id"))
             new_token.append(token if used else r.get("molecule_token"))
-            explain_suffixes.append(explain if used else None)
         df["brand_fallback_used"] = used_fallback
-        df["brand_fallback_normkey"] = fallback_brand
+        df["fallback_brand_display"] = fallback_brand_display
+        df["fallback_generic_display"] = fallback_generic_display
         df["generic_id"] = new_gid
         df["molecule_token"] = new_token
+
+        # IMPORTANT: Re-bucket brand-fallback rows as Candidate so they get scored
+        mask_fb = df["brand_fallback_used"] & (~df["looks_combo_final"])
+        df.loc[mask_fb, "bucket"] = "Candidate"
     else:
         df["brand_hits_norm"] = [[] for _ in range(len(df))]
         df["brand_fallback_used"] = [False] * len(df)
-        df["brand_fallback_normkey"] = [""] * len(df)
-        explain_suffixes = [None] * len(df)
-    df["normalized"] = df["norm"]
-    def _append_explain(idx, base):
-        ex = explain_suffixes[idx]
-        if ex:
-            return (base + " " + ex).strip()
-        return base
-    df["normalized"] = [ _append_explain(i, base) for i, base in enumerate(df["normalized"].tolist()) ]
+        df["fallback_brand_display"] = [None] * len(df)
+        df["fallback_generic_display"] = [None] * len(df)
+
+    # Final normalized string
+    # Base normalized = df["norm"]; then, if brand-fallback was used, rewrite to "<generic> (<brand>) ..."
+    df["normalized"] = [
+        _rewrite_normalized_with_brand_generic(base, bd, gd)
+        for base, bd, gd in zip(df["norm"].tolist(), df["fallback_brand_display"].tolist(), df["fallback_generic_display"].tolist())
+    ]
+
     return df, pnf_name_set, who_name_set
