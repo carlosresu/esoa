@@ -7,7 +7,7 @@ import numpy as np, pandas as pd
 from .aho import build_molecule_automata, scan_pnf_all
 from .combos import looks_like_combination, split_combo_segments
 from .routes_forms import extract_route_and_form
-from .text_utils import _base_name, _normalize_text_basic, normalize_text, extract_parenthetical_phrases
+from .text_utils import _base_name, _normalize_text_basic, normalize_text, extract_parenthetical_phrases, STOPWORD_TOKENS
 from .who_molecules import detect_all_who_molecules, load_who_molecules
 from .brand_map import load_latest_brandmap, build_brand_automata, fda_generics_set
 from .pnf_partial import PnfTokenIndex
@@ -302,7 +302,12 @@ def build_features(pnf_df: pd.DataFrame, esoa_df: pd.DataFrame) -> pd.DataFrame:
             all_toks = _tokenize_unknowns(s)
             unknowns = []
             for t in all_toks:
-                if (t not in pnf_name_set) and (t not in who_name_set) and (t not in fda_gens):
+                if (
+                    (t not in pnf_name_set)
+                    and (t not in who_name_set)
+                    and (t not in fda_gens)
+                    and (t not in STOPWORD_TOKENS)
+                ):
                     unknowns.append(t)
             seen=set(); unknowns_uniq=[]
             for t in unknowns:
