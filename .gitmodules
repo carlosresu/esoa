@@ -1,6 +1,3 @@
 [submodule "dependencies/atcd"]
 	path = dependencies/atcd
 	url = https://github.com/carlosresu/atcd
-[submodule "dependencies/fda_ph_drug_scraper"]
-	path = dependencies/fda_ph_drug_scraper
-	url = https://github.com/carlosresu/fda_ph_drug_scraper
