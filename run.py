@@ -5,7 +5,8 @@ run.py — Full ESOA pipeline with on-demand spinner and timing.
 
 Console behavior:
   • Only the spinner/timer lines and the final timing summary are printed.
-  • All other steps run silently.
+  • The heavy “Match & write outputs” step uses a tqdm progress bar that starts immediately.
+
 File outputs:
   • scripts/match_outputs.py writes ./outputs/summary.txt (overwritten each run).
 """
@@ -28,6 +29,7 @@ OUTPUTS_DIR = "outputs"
 ATCD_SUBDIR = Path("dependencies") / "atcd"
 ATCD_SCRIPTS: tuple[str, ...] = ("atcd.R", "export.R", "filter.R")
 
+# Ensure local imports when called from other CWDs
 if str(THIS_DIR) not in sys.path:
     sys.path.insert(0, str(THIS_DIR))
 
@@ -95,7 +97,6 @@ def run_with_spinner(label: str, func: Callable[[], None], start_delay: float = 
     spinner_frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
     idx = 0
 
-    # Show spinner immediately (per request)
     while not done.is_set():
         elapsed = time.perf_counter() - t0
         frame = spinner_frames[idx % len(spinner_frames)]
@@ -187,7 +188,6 @@ def create_master_file(root_dir: Path) -> None:
                 outfile.write("\n")
             outfile.write(footer_text + "\n")
     except Exception:
-        # Silent best-effort
         pass
 
 
@@ -251,11 +251,16 @@ def main_entry() -> None:
     t = run_with_spinner("Prepare inputs", lambda: _prepare(str(pnf_path), str(esoa_path), str(inputs_dir)))
     timings.append(("Prepare inputs", t))
 
-    t = run_with_spinner(
-        "Match & write outputs",
-        lambda: _match(str(inputs_dir / "pnf_prepared.csv"), str(inputs_dir / "esoa_prepared.csv"), str(out_path)),
+    # Let tqdm own the console for matching; no outer spinner here.
+    t0 = time.perf_counter()
+    _match(
+        str(inputs_dir / "pnf_prepared.csv"),
+        str(inputs_dir / "esoa_prepared.csv"),
+        str(out_path),
     )
-    timings.append(("Match & write outputs", t))
+    t_match = time.perf_counter() - t0
+    print(f"✓ Match & write outputs — done in {t_match:0.2f}s")
+    timings.append(("Match & write outputs", t_match))
 
     # Final timing summary (console only)
     print("\n=== Timing Summary ===")
