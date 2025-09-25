@@ -61,6 +61,11 @@ def _score_row(r: pd.Series) -> int:
     except Exception: sim = 0.0
     if math.isnan(sim): sim = 0.0
     score += int(max(0.0, min(1.0, sim)) * 10)
+    try:
+        if r.get("did_brand_swap") and r.get("form_ok") and r.get("route_ok") and float(r.get("dose_sim", 0)) >= 0.6:
+            score += 10
+    except Exception:
+        pass
     return score
 
 def _union_molecules(row: pd.Series) -> List[str]:
@@ -114,16 +119,18 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     out["why_final"] = ""
     out["reason_final"] = ""
 
-    # AUTO-ACCEPT: high confidence candidate and OK/brand swap note
+    # AUTO-ACCEPT: only when generic is in PNF AND has ATC code AND quality is OK
     is_candidate_like = out["generic_id"].notna()
-    high_conf = out["confidence"].ge(90)
-    out.loc[is_candidate_like & high_conf, "bucket_final"] = "Auto-Accept"
-    out.loc[is_candidate_like & high_conf & out["did_brand_swap"], "why_final"] = "OK, brand->generic swap"
-    out.loc[is_candidate_like & high_conf & (~out["did_brand_swap"]), "why_final"] = "OK, no changes"
-    out.loc[is_candidate_like & high_conf, "reason_final"] = "OK"
+    has_pnf_atc = out["atc_code_final"].astype(str).str.len().gt(0)
+    ok_quality = out["match_quality"].eq("OK")
+    auto_mask = is_candidate_like & has_pnf_atc & ok_quality
+    out.loc[auto_mask, "bucket_final"] = "Auto-Accept"
+    out.loc[auto_mask & out["did_brand_swap"], "why_final"] = "OK, brand->generic swap"
+    out.loc[auto_mask & (~out["did_brand_swap"]), "why_final"] = "OK, no changes"
+    out.loc[auto_mask, "reason_final"] = "OK"
 
     # NEEDS REVIEW: remaining candidate-like
-    needs_rev_mask = is_candidate_like & ~high_conf
+    needs_rev_mask = is_candidate_like & (~auto_mask)
     out.loc[needs_rev_mask, "bucket_final"] = "Candidate"
     out.loc[needs_rev_mask, "why_final"] = "Needs review"
     out.loc[needs_rev_mask, "reason_final"] = _mk_reason(out.loc[needs_rev_mask, "match_quality"], "no/poor dose/form/route")
