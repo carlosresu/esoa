@@ -74,3 +74,17 @@ def extract_parenthetical_phrases(raw_text: str) -> List[str]:
         seen.add(k)
         uniq.append(c)
     return uniq
+
+from .combos import SALT_TOKENS
+from .routes_forms import FORM_TO_ROUTE, ROUTE_ALIASES
+
+STOPWORD_TOKENS = (
+    set(SALT_TOKENS)
+    | set(FORM_TO_ROUTE.keys())
+    | set(ROUTE_ALIASES.keys())
+    | {
+        "ml","l","mg","g","mcg","ug","iu","lsu",
+        "dose","dosing","unit","units","strength",
+        "solution","suspension","syrup"
+    }
+)
