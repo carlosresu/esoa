@@ -113,28 +113,69 @@ def run_r_scripts():
 
     print(">>> All R scripts completed successfully.")
 
-
-def copy_py_files_to_debug(root_dir: str):
+def create_master_file(root_dir: str):
     """
-    Copies all .py files from the ./scripts/ directory to ./debug/,
-    excluding '__init__.py'.
+    Concatenates all specified Python files into a single master.py file.
     """
     debug_dir = os.path.join(root_dir, "debug")
     os.makedirs(debug_dir, exist_ok=True)
+    output_file_path = os.path.join(debug_dir, "master.py")
     
-    print(">>> Copying code snapshot to ./debug/")
+    # Files to be included in the master file
+    files_to_concatenate = [
+        os.path.join(root_dir, "scripts", "aho.py"),
+        os.path.join(root_dir, "scripts", "combos.py"),
+        os.path.join(root_dir, "scripts", "dose.py"),
+        os.path.join(root_dir, "scripts", "match.py"),
+        os.path.join(root_dir, "scripts", "prepare.py"),
+        os.path.join(root_dir, "scripts", "routes_forms.py"),
+        os.path.join(root_dir, "scripts", "text_utils.py"),
+        os.path.join(root_dir, "scripts", "who_molecules.py"),
+        os.path.join(root_dir, "main.py"),
+        os.path.join(root_dir, "run.py"),
+    ]
 
-    # Files to copy from the scripts directory
-    scripts_dir = os.path.join(root_dir, "scripts")
-    if os.path.isdir(scripts_dir):
-        for filename in os.listdir(scripts_dir):
-            if filename.endswith(".py") and filename != "__init__.py":
-                src_path = os.path.join(scripts_dir, filename)
-                dest_path = os.path.join(debug_dir, filename)
-                shutil.copy2(src_path, dest_path)
-                print(f"    - Copied: scripts/{filename}")
+    header_text = """
+# INSTRUCTIONS:
+# 1. With every query, I will provide the file contents of my Python repository.
+# 2. The files are marked with their paths as comments (e.g., # <file_path>).
+# 3. Your task is to analyze the provided code, then respond to my queries by providing the complete/corrected/expanded code for any file that needs to be changed or created, as a downloadable file(s).
+# 4. For each file you modify or create, use the following format:
+# - change 1: edit <file_path> by pasting the below
+#   <entire_file_content_here>
+# - change 2: create <file_path> by pasting the below
+#   <entire_file_content_here>
+# - <and so on...>
+# 5. DO NOT SEND ANY CODE IN CHAT. Only give me drop-in files I replace my files with.
 
-    print(">>> Code snapshot copied to ./debug/ directory.")
+# START OF REPO FILES
+"""
+
+    footer_text = """
+# END OF REPO FILES
+"""
+
+    print(">>> Creating master.py...")
+    
+    with open(output_file_path, "w", encoding="utf-8") as outfile:
+        outfile.write(header_text)
+        
+        for file_path in files_to_concatenate:
+            if not os.path.isfile(file_path):
+                print(f"Warning: File not found, skipping: {file_path}")
+                continue
+            
+            relative_path = os.path.relpath(file_path, root_dir)
+            outfile.write(f"\n# <{relative_path}>\n")
+            
+            with open(file_path, "r", encoding="utf-8") as infile:
+                outfile.write(infile.read())
+            
+            outfile.write("\n")
+        
+        outfile.write(footer_text)
+        
+    print(f">>> master.py created successfully at: {output_file_path}")
 
 
 def main_entry():
@@ -163,8 +204,8 @@ def main_entry():
     parser.add_argument("--skip-r", action="store_true", help="Skip running ATC R scripts")
     args = parser.parse_args()
 
-    # Copy the Python files to the debug directory first
-    copy_py_files_to_debug(THIS_DIR)
+    # Create the master.py file first
+    create_master_file(THIS_DIR)
 
     if not args.skip_install and args.requirements:
         install_requirements(args.requirements)
@@ -202,4 +243,3 @@ if __name__ == "__main__":
         # Bubble up with a helpful message; keep original traceback for debugging
         print(f"ERROR: {e}", file=sys.stderr)
         raise
-    
