@@ -146,6 +146,7 @@ def build_features(pnf_df: pd.DataFrame, esoa_df: pd.DataFrame) -> pd.DataFrame:
     df = [None]
     def _mk_base():
         tmp = esoa_df[["raw_text"]].copy()
+        tmp["parentheticals"] = tmp["raw_text"].map(extract_parenthetical_phrases)
         tmp["esoa_idx"] = tmp.index
         tmp["normalized"] = tmp["raw_text"].map(normalize_text)
         tmp["norm_compact"] = tmp["normalized"].map(lambda s: re.sub(r"[ \-]", "", s))
@@ -166,9 +167,13 @@ def build_features(pnf_df: pd.DataFrame, esoa_df: pd.DataFrame) -> pd.DataFrame:
         if not has_brandmap:
             df["match_basis"] = df["normalized"]
             df["did_brand_swap"] = False
+            df["fda_dose_corroborated"] = False
             return
         mb_list, swapped = [], []
-        for norm, comp, form, friendly in zip(df["normalized"], df["norm_compact"], df["form_raw"], df["dose_recognized"]):
+        fda_hits = []
+        for norm, comp, form, friendly, parens in zip(
+            df["normalized"], df["norm_compact"], df["form_raw"], df["dose_recognized"], df["parentheticals"]
+        ):
             # Inline selection/scoring identical to prior implementation
             found_keys: List[str] = []
             lengths: Dict[str, int] = {}
@@ -176,8 +181,18 @@ def build_features(pnf_df: pd.DataFrame, esoa_df: pd.DataFrame) -> pd.DataFrame:
                 found_keys.append(bn); lengths[bn] = max(lengths.get(bn, 0), len(bn))
             for _, bn in B_comp.iter(comp):  # type: ignore
                 found_keys.append(bn); lengths[bn] = max(lengths.get(bn, 0), len(bn))
+            if parens:
+                for p in parens:
+                    pn = _normalize_text_basic(_base_name(p))
+                    pc = re.sub(r"[ \-]", "", pn)
+                    if B_norm is not None:
+                        for _, bn in B_norm.iter(pn):  # type: ignore
+                            found_keys.append(bn); lengths[bn] = max(lengths.get(bn, 0), len(bn))
+                    if B_comp is not None:
+                        for _, bn in B_comp.iter(pc):  # type: ignore
+                            found_keys.append(bn); lengths[bn] = max(lengths.get(bn, 0), len(bn))
             if not found_keys:
-                mb_list.append(norm); swapped.append(False); continue
+                mb_list.append(norm); swapped.append(False); fda_hits.append(False); continue
             uniq_keys = list(dict.fromkeys(found_keys))
             uniq_keys.sort(key=lambda k: (-lengths.get(k, len(k)), k))
 
@@ -204,9 +219,16 @@ def build_features(pnf_df: pd.DataFrame, esoa_df: pd.DataFrame) -> pd.DataFrame:
                     replaced_any = True
                     out = new_out
             out = re.sub(r"\s+", " ", out).strip()
-            mb_list.append(out); swapped.append(replaced_any)
+            # FDA dose corroboration
+            fda_hit = False
+            if options and friendly:
+                ds = getattr(options[0], "dosage_strength", "") or ""
+                if ds and friendly.lower() in ds.lower():
+                    fda_hit = True
+            mb_list.append(out); swapped.append(replaced_any); fda_hits.append(fda_hit)
         df["match_basis"] = mb_list
         df["did_brand_swap"] = swapped
+        df["fda_dose_corroborated"] = fda_hits
     _run_with_spinner("Apply brand→generic swaps", _brand_swap)
 
     # 9) Dose/route/form on match_basis

@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
@@ -15,7 +14,18 @@ FORM_TO_ROUTE = {
     "patch": "transdermal", "inhaler": "inhalation", "nebule": "inhalation", "neb": "inhalation",
     "ampoule": "intravenous", "amp": "intravenous", "ampul": "intravenous", "ampule": "intravenous",
     "vial": "intravenous", "vl": "intravenous", "inj": "intravenous", "injection": "intravenous",
-    "suppository": "rectal"
+    "suppository": "rectal",
+    "mdi": "inhalation",
+    "dpi": "inhalation",
+    "metered dose inhaler": "inhalation",
+    "dry powder inhaler": "inhalation",
+    "spray": "nasal",
+    "nasal spray": "nasal",
+    "susp": "oral",
+    "soln": "oral",
+    "syr": "oral",
+    "td": "transdermal",
+    "supp": "rectal"
 }
 FORM_WORDS = sorted(set(FORM_TO_ROUTE.keys()), key=len, reverse=True)
 
@@ -31,6 +41,19 @@ ROUTE_ALIASES = {
     "inh": "inhalation", "neb": "inhalation", "inhalation": "inhalation",
     "rectal": "rectal", "vaginal": "vaginal",
     "intrathecal": "intrathecal", "nasal": "nasal",
+    "per os": "oral",
+    "td": "transdermal",
+    "transdermal": "transdermal",
+    "intradermal": "intradermal",
+    "id": "intradermal",
+    "subdermal": "subcutaneous",
+    "per rectum": "rectal",
+    "pr": "rectal",
+    "per vaginam": "vaginal",
+    "pv": "vaginal",
+    "per nasal": "nasal",
+    "intranasal": "nasal",
+    "inhaler": "inhalation"
 }
 
 def map_route_token(r) -> List[str]:

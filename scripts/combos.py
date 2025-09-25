@@ -13,6 +13,8 @@ SALT_TOKENS = {
     "bitartrate","succinate","citrate","lactate","gluconate","bicarbonate","carbonate",
     "bromide","chloride","iodide","nitrate","selenite","thiosulfate",
     "dihydrate","trihydrate","monohydrate","hydrate","hemihydrate","anhydrous",
+    "decanoate","palmitate","stearate","pamoate","benzoate","valerate","propionate",
+    "hydrobromide","docusate","hemisuccinate",
 }
 
 COMBO_SEP_RX = re.compile(r"\s*(?:\+|/| with )\s*")

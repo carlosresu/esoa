@@ -9,24 +9,48 @@ from typing import Any, Dict, Optional
 
 from .text_utils import safe_to_float
 
+PACK_RX = re.compile(r"\b(\d+)\s*(?:x|×)\s*(\d+(?:[.,]\d+)?)\s*(mg|g|mcg|ug|iu)\b", re.I)
+RATIO_RX_EXTRA = re.compile(r"(?P<num>\d+(?:[.,]\d+)?)\s?(?P<num_unit>mg|g|mcg|ug)\s*/\s?(?P<den>\d+(?:[.,]\d+)?)\s?(?P<den_unit>ml|l)\b", re.I)
+PER_UNIT_WORDS = r"(?:tab(?:let)?s?|cap(?:sule)?s?|sachet(?:s)?|drop(?:s)?|gtt|actuation(?:s)?|spray(?:s)?|puff(?:s)?)"
+
 DOSAGE_PATTERNS = [
-    r"(?P<strength>\d+(?:[\.,]\d+)?)\s?(?P<unit>mg|g|mcg|ug|iu)\b",
-    r"(?P<strength>\d+(?:[\.,]\d+)?)\s?(?P<unit>mg|g|mcg|ug|iu)\s?(?:/| per )\s?(?P<per_val>1)?\s*(?P<per_unit>ml)\b",
-    r"(?P<strength>\d+(?:[\.,]\d+)?)\s?(?P<unit>mg|g|mcg|ug|iu)\s?(?:/| per )\s?(?P<per_val>\d+(?:[\.,]\d+)?)\s*(?P<per_unit>ml)\b",
-    r"(?P<pct>\d+(?:[\.,]\d+)?)\s?%",
+    # amount-only (e.g., 500 mg)
+    r"(?P<strength>\d+(?:[.,]\d+)?)\s?(?P<unit>mg|g|mcg|ug|iu)\b",
+    # amount per mL or L (e.g., 5 mg/5 mL, 1 g/100 L)
+    r"(?P<strength>\d+(?:[.,]\d+)?)\s?(?P<unit>mg|g|mcg|ug|iu)\s?(?:/| per )\s?(?P<per_val>\d+(?:[.,]\d+)?)\s*(?P<per_unit>ml|l)\b",
+    # amount per unit-dose nouns (tab/cap/sachet/drop/actuation/spray/puff)
+    rf"(?P<strength>\d+(?:[.,]\d+)?)\s?(?P<unit>mg|g|mcg|ug|iu)\s?(?:/| per )\s?(?P<per_val>1)?\s*(?P<per_unit>{PER_UNIT_WORDS})\b",
+    # compact noun suffix (e.g., mg/tab, mg/cap)
+    rf"(?P<strength>\d+(?:[.,]\d+)?)\s?(?P<unit>mg|g|mcg|ug|iu)\s*/\s?(?P<per_unit>{PER_UNIT_WORDS})\b",
+    # percent (optionally w/v or w/w)
+    r"(?P<pct>\d+(?:[.,]\d+)?)\s?%(?:\s?(?:w/v|w/w))?",
 ]
 DOSAGE_REGEXES = [re.compile(p, flags=re.I) for p in DOSAGE_PATTERNS]
 
 
+def _unmask_pack_strength(s_norm: str) -> str:
+    """Convert '10 x 500 mg'/'10×500 mg' to just '500 mg' for dose parsing."""
+    def repl(m: re.Match):
+        amt = m.group(2)
+        unit = m.group(3)
+        return f"{amt}{unit}"
+    return PACK_RX.sub(repl, s_norm)
+
+
 def parse_dose_struct_from_text(s_norm: str) -> Dict[str, Any]:
+    if not isinstance(s_norm, str) or not s_norm:
+        return {}
+    s_proc = _unmask_pack_strength(s_norm)
     matches = []
     for rx in DOSAGE_REGEXES:
-        for m in rx.finditer(s_norm):
+        for m in rx.finditer(s_proc):
             d = {k: (v.replace(",", ".") if isinstance(v, str) else v) for k, v in m.groupdict().items()}
             matches.append(d)
     for d in matches:
-        if d.get("strength") and d.get("per_unit") == "ml":
+        if d.get("strength") and d.get("per_unit") in ("ml", "l"):
             per_val = float(d["per_val"]) if d.get("per_val") else 1.0
+            if d.get("per_unit", "").lower() == "l":
+                per_val *= 1000.0
             return {"dose_kind": "ratio", "strength": float(d["strength"]), "unit": d["unit"].lower(),
                     "per_val": per_val, "per_unit": "ml"}
     for d in matches:
@@ -35,6 +59,14 @@ def parse_dose_struct_from_text(s_norm: str) -> Dict[str, Any]:
     for d in matches:
         if d.get("pct"):
             return {"dose_kind": "percent", "pct": float(d["pct"])}
+    m = RATIO_RX_EXTRA.search(s_proc)
+    if m:
+        num = float(m.group("num"))
+        num_unit = m.group("num_unit").lower()
+        den = float(m.group("den"))
+        if m.group("den_unit").lower() == "l":
+            den *= 1000.0
+        return {"dose_kind": "ratio", "strength": num, "unit": num_unit, "per_val": den, "per_unit": "ml"}
     return {}
 
 
@@ -71,14 +103,19 @@ def safe_ratio_mg_per_ml(strength, unit, per_val):
 
 
 def extract_dosage(s_norm: str):
+    if not isinstance(s_norm, str) or not s_norm:
+        return None
+    s_proc = _unmask_pack_strength(s_norm)
     matches = []
     for rx in DOSAGE_REGEXES:
-        for m in rx.finditer(s_norm):
+        for m in rx.finditer(s_proc):
             d = {k: (v.replace(",", ".") if isinstance(v, str) else v) for k, v in m.groupdict().items()}
             matches.append(d)
     for d in matches:
-        if d.get("strength") and d.get("per_unit") == "ml":
+        if d.get("strength") and d.get("per_unit") in ("ml", "l"):
             per_val = float(d["per_val"]) if d.get("per_val") else 1.0
+            if d.get("per_unit", "").lower() == "l":
+                per_val *= 1000.0
             return {"kind": "ratio", "strength": float(d["strength"]), "unit": d["unit"].lower(),
                     "per_val": per_val, "per_unit": "ml"}
     for d in matches:
@@ -87,6 +124,14 @@ def extract_dosage(s_norm: str):
     for d in matches:
         if d.get("pct"):
             return {"kind": "percent", "pct": float(d["pct"])}
+    m = RATIO_RX_EXTRA.search(s_proc)
+    if m:
+        num = float(m.group("num"))
+        num_unit = m.group("num_unit").lower()
+        den = float(m.group("den"))
+        if m.group("den_unit").lower() == "l":
+            den *= 1000.0
+        return {"kind": "ratio", "strength": num, "unit": num_unit, "per_val": den, "per_unit": "ml"}
     return None
 
 
