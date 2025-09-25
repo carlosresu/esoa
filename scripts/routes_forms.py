@@ -1,6 +1,4 @@
-# ===============================
-# File: scripts/routes_forms.py
-# ===============================
+
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
@@ -8,14 +6,15 @@ import re
 from typing import List, Optional, Tuple
 
 FORM_TO_ROUTE = {
-    "tablet": "oral", "tab": "oral", "capsule": "oral", "cap": "oral",
+    "tablet": "oral", "tab": "oral", "tabs": "oral",
+    "capsule": "oral", "cap": "oral", "caps": "oral",
     "syrup": "oral", "suspension": "oral", "solution": "oral",
     "sachet": "oral",
     "drop": "ophthalmic", "eye drop": "ophthalmic", "ear drop": "otic",
     "cream": "topical", "ointment": "topical", "gel": "topical", "lotion": "topical",
     "patch": "transdermal", "inhaler": "inhalation", "nebule": "inhalation", "neb": "inhalation",
-    "ampoule": "intravenous", "amp": "intravenous", "ampul": "intravenous",
-    "vial": "intravenous", "vl": "intravenous", "inj": "intravenous",
+    "ampoule": "intravenous", "amp": "intravenous", "ampul": "intravenous", "ampule": "intravenous",
+    "vial": "intravenous", "vl": "intravenous", "inj": "intravenous", "injection": "intravenous",
     "suppository": "rectal"
 }
 FORM_WORDS = sorted(set(FORM_TO_ROUTE.keys()), key=len, reverse=True)
@@ -24,16 +23,15 @@ ROUTE_ALIASES = {
     "po": "oral", "per orem": "oral", "by mouth": "oral",
     "iv": "intravenous", "intravenous": "intravenous",
     "im": "intramuscular", "intramuscular": "intramuscular",
-    "sc": "subcutaneous", "subcut": "subcutaneous",
-    "sl": "sublingual", "bucc": "buccal",
-    "topical": "topical", "cut": "topical", "dermal": "transdermal",
-    "oph": "ophthalmic", "eye": "ophthalmic",
+    "sc": "subcutaneous", "subcut": "subcutaneous", "subcutaneous": "subcutaneous",
+    "sl": "sublingual", "sublingual": "sublingual", "bucc": "buccal", "buccal": "buccal",
+    "topical": "topical", "cutaneous": "topical", "dermal": "transdermal",
+    "oph": "ophthalmic", "eye": "ophthalmic", "ophthalmic": "ophthalmic",
     "otic": "otic", "ear": "otic",
-    "inh": "inhalation", "neb": "inhalation",
+    "inh": "inhalation", "neb": "inhalation", "inhalation": "inhalation",
     "rectal": "rectal", "vaginal": "vaginal",
     "intrathecal": "intrathecal", "nasal": "nasal",
 }
-
 
 def map_route_token(r) -> List[str]:
     if not isinstance(r, str):
@@ -62,25 +60,23 @@ def map_route_token(r) -> List[str]:
     }
     return table.get(r, [])
 
-
 def parse_form_from_text(s_norm: str) -> Optional[str]:
     for fw in FORM_WORDS:
-        if re.search(rf"\\b{re.escape(fw)}\\b", s_norm):
+        if re.search(rf"\b{re.escape(fw)}\b", s_norm):
             return fw
     return None
-
 
 def extract_route_and_form(s_norm: str) -> Tuple[Optional[str], Optional[str], str]:
     route_found = None
     form_found = None
     evidence = []
     for fw in FORM_WORDS:
-        if re.search(rf"\\b{re.escape(fw)}\\b", s_norm):
+        if re.search(rf"\b{re.escape(fw)}\b", s_norm):
             form_found = fw
             evidence.append(f"form:{fw}")
             break
     for alias, route in ROUTE_ALIASES.items():
-        if re.search(rf"\\b{re.escape(alias)}\\b", s_norm):
+        if re.search(rf"\b{re.escape(alias)}\b", s_norm):
             route_found = route
             evidence.append(f"route:{alias}->{route}")
             break
