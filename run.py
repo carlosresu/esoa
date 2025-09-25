@@ -114,6 +114,29 @@ def run_r_scripts():
     print(">>> All R scripts completed successfully.")
 
 
+def copy_py_files_to_debug(root_dir: str):
+    """
+    Copies all .py files from the ./scripts/ directory to ./debug/,
+    excluding '__init__.py'.
+    """
+    debug_dir = os.path.join(root_dir, "debug")
+    os.makedirs(debug_dir, exist_ok=True)
+    
+    print(">>> Copying code snapshot to ./debug/")
+
+    # Files to copy from the scripts directory
+    scripts_dir = os.path.join(root_dir, "scripts")
+    if os.path.isdir(scripts_dir):
+        for filename in os.listdir(scripts_dir):
+            if filename.endswith(".py") and filename != "__init__.py":
+                src_path = os.path.join(scripts_dir, filename)
+                dest_path = os.path.join(debug_dir, filename)
+                shutil.copy2(src_path, dest_path)
+                print(f"    - Copied: scripts/{filename}")
+
+    print(">>> Code snapshot copied to ./debug/ directory.")
+
+
 def main_entry():
     parser = argparse.ArgumentParser(description="Run full ESOA pipeline (ATC → prepare → match)")
     parser.add_argument(
@@ -139,6 +162,9 @@ def main_entry():
     parser.add_argument("--skip-install", action="store_true", help="Skip installing requirements")
     parser.add_argument("--skip-r", action="store_true", help="Skip running ATC R scripts")
     args = parser.parse_args()
+
+    # Copy the Python files to the debug directory first
+    copy_py_files_to_debug(THIS_DIR)
 
     if not args.skip_install and args.requirements:
         install_requirements(args.requirements)
@@ -176,3 +202,4 @@ if __name__ == "__main__":
         # Bubble up with a helpful message; keep original traceback for debugging
         print(f"ERROR: {e}", file=sys.stderr)
         raise
+    
