@@ -1,6 +1,4 @@
-# ===============================
-# File: scripts/match.py
-# ===============================
+
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
@@ -8,7 +6,7 @@ import glob
 import math
 import os
 import re
-from typing import Tuple
+from typing import Tuple, List
 
 import numpy as np
 import pandas as pd
@@ -16,10 +14,26 @@ import pandas as pd
 from .aho import build_molecule_automata, scan_pnf_all
 from .combos import looks_like_combination, split_combo_segments
 from .dose import dose_similarity
-from .routes_forms import FORM_TO_ROUTE, FORM_WORDS, extract_route_and_form
-from .text_utils import _base_name, _normalize_text_basic, normalize_text
+from .routes_forms import extract_route_and_form
+from .text_utils import _base_name, _normalize_text_basic, normalize_text, extract_parenthetical_phrases
 from .who_molecules import detect_all_who_molecules, load_who_molecules
 
+def _friendly_dose(d: dict) -> str:
+    if not d:
+        return ""
+    kind = d.get("kind") or d.get("dose_kind")
+    if kind == "amount":
+        return f"{d.get('strength')}{d.get('unit','')}"
+    if kind == "ratio":
+        pv = d.get("per_val", 1)
+        try:
+            pv = int(pv)
+        except Exception:
+            pass
+        return f"{d.get('strength')}{d.get('unit','')}/{pv}{d.get('per_unit','')}"
+    if kind == "percent":
+        return f"{d.get('pct')}%"
+    return ""
 
 def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_matched.csv") -> str:
     pnf_df = pd.read_csv(pnf_prepared_csv)
@@ -41,6 +55,10 @@ def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_ma
     df["norm"] = df["raw_text"].map(normalize_text)
     df["norm_compact"] = df["norm"].map(lambda s: re.sub(r"[ \-]", "", s))
 
+    # Parenthetical probable brands before normalization loss
+    df["probable_brands_list"] = df["raw_text"].map(extract_parenthetical_phrases)
+    df["probable_brands"] = df["probable_brands_list"].map(lambda xs: "|".join(xs) if xs else "")
+
     primary_gid, primary_token, pnf_hits_gids, pnf_hits_tokens, pnf_hits_count = [], [], [], [], []
     for s_norm, s_comp in zip(df["norm"], df["norm_compact"]):
         gids, tokens = scan_pnf_all(s_norm, s_comp, A_norm, A_comp)
@@ -60,13 +78,13 @@ def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_ma
     df["generic_id"] = primary_gid
     df["molecule_token"] = primary_token
 
-    df["dosage_parsed"] = df["norm"].map(lambda s: None)
-    # reuse extractor from dose but keep the original API names
+    # Dose & route/form
     from .dose import extract_dosage as _extract_dosage
     df["dosage_parsed"] = df["norm"].map(_extract_dosage)
+    df["dose_recognized"] = df["dosage_parsed"].map(_friendly_dose)
     df["route"], df["form"], df["route_evidence"] = zip(*df["norm"].map(extract_route_and_form))
 
-    # WHO molecules path relative to repo root (one level up from scripts/)
+    # WHO molecules
     root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
     who_dir = os.path.join(root_dir, "dependencies", "atcd", "output")
     candidates = glob.glob(os.path.join(who_dir, "who_atc_*_molecules.csv"))
@@ -75,7 +93,7 @@ def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_ma
     if who_file and os.path.exists(who_file):
         print(f"[not_in_pnf] Using WHO molecules file: {who_file}")
         codes_by_name, candidate_names = load_who_molecules(who_file)
-        regex = re.compile(r"\\b(" + "|".join(map(re.escape, candidate_names)) + r")\\b")
+        regex = re.compile(r"\b(" + "|".join(map(re.escape, candidate_names)) + r")\b")
         who_names_all, who_atc_all = [], []
         for txt in df["norm"].tolist():
             names, codes = detect_all_who_molecules(txt, regex, codes_by_name)
@@ -92,13 +110,18 @@ def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_ma
         df["who_molecules"] = ""
         df["who_atc_codes"] = ""
 
-    df["looks_combo"] = [
+    # Combination logic
+    looks_raw = [
         looks_like_combination(s, p_cnt, len(w_names))
         for s, p_cnt, w_names in zip(df["norm"], df["pnf_hits_count"], df["who_molecules_list"])
     ]
+    df["looks_combo_raw"] = looks_raw
+    df["looks_combo_final"] = looks_raw
+    df["combo_reason"] = np.where(df["looks_combo_final"], "combo/heuristic", "single/heuristic")
 
+    # Initial bucket
     df["bucket"] = np.where(
-        df["looks_combo"], "Others:Combinations",
+        df["looks_combo_final"], "Others:Combinations",
         np.where(df["generic_id"].isna(), "BrandOnly/NoGeneric", "Candidate"),
     )
 
@@ -209,7 +232,33 @@ def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_ma
 
     out["normalized"] = out["norm"]
 
+    # Present in PNF/WHO flags & molecules recognized
     pnf_basenorm_set = set(pnf_df["generic_name"].dropna().map(_base_name).map(_normalize_text_basic))
+
+    out["present_in_pnf"] = out["pnf_hits_count"].astype(int).gt(0)
+    out["present_in_who"] = out["who_atc_codes"].astype(str).str.len().gt(0)
+
+    def _union_molecules(row) -> List[str]:
+        names = []
+        for t in (row.get("pnf_hits_tokens") or []):
+            if not isinstance(t, str):
+                continue
+            names.append(_normalize_text_basic(_base_name(t)))
+        for t in (row.get("who_molecules_list") or []):
+            if not isinstance(t, str):
+                continue
+            names.append(_normalize_text_basic(_base_name(t)))
+        seen = set(); uniq = []
+        for n in names:
+            if not n or n in seen:
+                continue
+            seen.add(n); uniq.append(n)
+        return uniq
+
+    out["molecules_recognized_list"] = out.apply(_union_molecules, axis=1)
+    out["molecules_recognized"] = out["molecules_recognized_list"].map(lambda xs: "|".join(xs) if xs else "")
+
+    out["probable_atc"] = np.where(~out["present_in_pnf"] & out["present_in_who"], out["who_atc_codes"], "")
 
     def classify_combo_reason(row: pd.Series) -> str:
         P = int(row.get("pnf_hits_count") or 0)
@@ -254,7 +303,7 @@ def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_ma
     vm_mask = any_who_codes & any_not_in_pnf
     if vm_mask.any():
         subreason = np.where(
-            vm_mask & (out["pnf_hits_count"] >= 1) & out["looks_combo"],
+            vm_mask & (out["pnf_hits_count"] >= 1) & out["looks_combo_final"],
             "2+ generics but only 1+ in PNF",
             "not in PNF",
         )
@@ -265,13 +314,14 @@ def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_ma
     out["bucket_final"] = final_bucket
     out["why_final"] = final_why.fillna("")
 
-    keep_mask = out["bucket_final"].isin({"Auto-Accept", "Needs review", "Others"})
-    out = out.loc[keep_mask].copy()
-
     out_small = out[[
         "raw_text", "normalized",
-        "atc_code_final", "confidence",
-        "bucket_final", "why_final",
+        "molecules_recognized", "probable_brands", "dose_recognized",
+        "route", "form",
+        "present_in_pnf", "present_in_who", "probable_atc",
+        "pnf_hits_tokens", "who_molecules", "who_atc_codes",
+        "route_evidence", "looks_combo_raw", "looks_combo_final", "combo_reason",
+        "atc_code_final", "confidence", "bucket_final", "why_final",
     ]].copy()
 
     out_small.to_csv(out_csv, index=False, encoding="utf-8")
@@ -306,7 +356,7 @@ def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_ma
 
     print("\n[summary] Distribution")
     aa = grouped[grouped["bucket_final"].eq("Auto-Accept")]["n"].sum()
-    aa_pct = round(aa / float(total) * 100, 2)
+    aa_pct = round(aa / float(total) * 100, 2) if total else 0.0
     print(f"  - Auto-Accept: {aa:,} ({aa_pct}%)")
 
     nr = grouped[grouped["bucket_final"].eq("Needs review")].copy()
@@ -327,7 +377,7 @@ def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_ma
     oth = grouped[grouped["bucket_final"].eq("Others")].copy()
     if not oth.empty:
         total_oth = oth["n"].sum()
-        total_oth_pct = round(total_oth / float(total) * 100, 2)
+        total_oth_pct = round(total_oth / float(total) * 100, 2) if total else 0.0
         print(f"  - Others:")
         for _, row in oth.sort_values("n", ascending=False).iterrows():
             label = row["why_final"] if row["why_final"] else "Combinations"
