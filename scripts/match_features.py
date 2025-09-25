@@ -181,16 +181,6 @@ def build_features(pnf_df: pd.DataFrame, esoa_df: pd.DataFrame) -> pd.DataFrame:
                 found_keys.append(bn); lengths[bn] = max(lengths.get(bn, 0), len(bn))
             for _, bn in B_comp.iter(comp):  # type: ignore
                 found_keys.append(bn); lengths[bn] = max(lengths.get(bn, 0), len(bn))
-            if parens:
-                for p in parens:
-                    pn = _normalize_text_basic(_base_name(p))
-                    pc = re.sub(r"[ \-]", "", pn)
-                    if B_norm is not None:
-                        for _, bn in B_norm.iter(pn):  # type: ignore
-                            found_keys.append(bn); lengths[bn] = max(lengths.get(bn, 0), len(bn))
-                    if B_comp is not None:
-                        for _, bn in B_comp.iter(pc):  # type: ignore
-                            found_keys.append(bn); lengths[bn] = max(lengths.get(bn, 0), len(bn))
             if not found_keys:
                 mb_list.append(norm); swapped.append(False); fda_hits.append(False); continue
             uniq_keys = list(dict.fromkeys(found_keys))
