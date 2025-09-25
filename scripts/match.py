@@ -281,7 +281,7 @@ def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_ma
     
     
     out["bucket_final"] = final_bucket
-    out["why_final"] = final_why.fillna("")
+    out["why_final"] = pd.Series(final_why).fillna("")
 
     keep_mask = out["bucket_final"].isin({"Auto-Accept", "Needs review", "Others"})
     out = out.loc[keep_mask].copy()
