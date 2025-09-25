@@ -33,14 +33,14 @@ def install_requirements(req_path: str):
     if not req_path:
         return
     if not os.path.isfile(req_path):
-        print(f">>> Skipping install: requirements file not found: {req_path}")
+        # print(f">>> Skipping install: requirements file not found: {req_path}")
         return
-    print(f">>> Installing dependencies from: {req_path}")
+    # print(f">>> Installing dependencies from: {req_path}")
     subprocess.check_call(
         [sys.executable, "-m", "pip", "install", "--disable-pip-version-check", "-r", req_path],
         cwd=THIS_DIR,
     )
-    print(">>> Dependencies installed.")
+    # print(">>> Dependencies installed.")
 
 
 def _resolve_input_path(p: str, default_subdir: str = "inputs") -> str:
@@ -108,10 +108,10 @@ def run_r_scripts():
             raise FileNotFoundError(f"Required R script not found: {script_path}")
 
     for script in scripts:
-        print(f">>> Running R script (cwd={atcd_dir}): {script}")
+        # print(f">>> Running R script (cwd={atcd_dir}): {script}")
         subprocess.run([rscript, script], check=True, cwd=atcd_dir)
 
-    print(">>> All R scripts completed successfully.")
+    # print(">>> All R scripts completed successfully.")
 
 def create_master_file(root_dir: str):
     """
@@ -155,7 +155,7 @@ def create_master_file(root_dir: str):
 # END OF REPO FILES
 """
 
-    print(">>> Creating master.py...")
+    # print(">>> Creating master.py...")
     
     with open(output_file_path, "w", encoding="utf-8") as outfile:
         outfile.write(header_text)
@@ -175,7 +175,7 @@ def create_master_file(root_dir: str):
         
         outfile.write(footer_text)
         
-    print(f">>> master.py created successfully at: {output_file_path}")
+    # print(f">>> master.py created successfully at: {output_file_path}")
 
 
 def main_entry():
@@ -224,16 +224,16 @@ def main_entry():
     outdir = _outputs_dir()
     out_path = os.path.join(outdir, os.path.basename(args.out))
 
-    print(">>> Resolved paths:")
-    print(f"    PNF   : {pnf_path}")
-    print(f"    ESOA  : {esoa_path}")
-    print(f"    OUTDIR: {outdir}")
-    print(f"    OUT   : {out_path}")
+    # print(">>> Resolved paths:")
+    # print(f"    PNF   : {pnf_path}")
+    # print(f"    ESOA  : {esoa_path}")
+    # print(f"    OUTDIR: {outdir}")
+    # print(f"    OUT   : {out_path}")
 
     # Run the full pipeline (always writing under ./outputs)
     main.run_all(pnf_path, esoa_path, outdir, out_path)
 
-    print("\n>>> Pipeline complete. Final output:", out_path)
+    # print("\n>>> Pipeline complete. Final output:", out_path)
 
 
 if __name__ == "__main__":

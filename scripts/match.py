@@ -90,9 +90,11 @@ def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_ma
     candidates = glob.glob(os.path.join(who_dir, "who_atc_*_molecules.csv"))
     who_file = max(candidates, key=os.path.getmtime) if candidates else None
 
+    who_name_set = set()
     if who_file and os.path.exists(who_file):
         print(f"[not_in_pnf] Using WHO molecules file: {who_file}")
         codes_by_name, candidate_names = load_who_molecules(who_file)
+        who_name_set = set(codes_by_name.keys())
         regex = re.compile(r"\b(" + "|".join(map(re.escape, candidate_names)) + r")\b")
         who_names_all, who_atc_all = [], []
         for txt in df["norm"].tolist():
@@ -125,6 +127,30 @@ def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_ma
         np.where(df["generic_id"].isna(), "BrandOnly/NoGeneric", "Candidate"),
     )
 
+    # --- Combo segment analysis ---
+    DOSE_OR_UNIT_RX = re.compile(r"(?:(\b\d+(?:[\.,]\d+)?\s*(?:mg|g|mcg|ug|iu|lsu|ml|l|%)(?:\b|/))|(\b\d+(?:[\.,]\d+)?\b))",
+                                 re.IGNORECASE)
+
+    def _segment_norm(seg: str) -> str:
+        s = _normalize_text_basic(_base_name(seg))
+        s = DOSE_OR_UNIT_RX.sub(" ", s)
+        s = re.sub(r"\b(?:per|with|and)\b", " ", s)
+        s = re.sub(r"\s+", " ", s).strip()
+        return s
+
+    def analyze_combo_segments(row: pd.Series):
+        segs = split_combo_segments(row.get("normalized", ""))
+        norms = [_segment_norm(s) for s in segs if s]
+        in_pnf = [n in set(pnf_df["generic_name"].map(_base_name).map(_normalize_text_basic)) for n in norms]
+        in_who = [n in who_name_set for n in norms]
+        id_count = sum(1 for pnff, whof in zip(in_pnf, in_who) if pnff or whof)
+        unk_in_pnf = sum(1 for pnff, whof in zip(in_pnf, in_who) if not pnff and whof)
+        unk_in_who = sum(1 for pnff, whof in zip(in_pnf, in_who) if pnff and not whof)
+        return len(norms), id_count, unk_in_pnf, unk_in_who
+
+    df["combo_segments_total"], df["combo_id_molecules"], df["combo_unknown_in_pnf"], df["combo_unknown_in_who"] =         zip(*df.apply(lambda r: analyze_combo_segments(r) if r.get("looks_combo_final") else (0,0,0,0), axis=1))
+
+    # Candidate subset for dose/route scoring
     df_cand = df.loc[df["bucket"].eq("Candidate"), ["esoa_idx", "generic_id", "route", "form", "dosage_parsed"]].merge(
         pnf_df, on="generic_id", how="left"
     )
@@ -261,22 +287,13 @@ def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_ma
     out["probable_atc"] = np.where(~out["present_in_pnf"] & out["present_in_who"], out["who_atc_codes"], "")
 
     def classify_combo_reason(row: pd.Series) -> str:
-        P = int(row.get("pnf_hits_count") or 0)
-        who_names = row.get("who_molecules_list") or []
-        W = len([n for n in who_names if n and (n not in pnf_basenorm_set)])
-        segs = split_combo_segments(row.get("normalized", ""))
-        total = len(segs) if len(segs) >= 2 else max(2, P + W) if (P + W) >= 2 else (P + W)
-        U = max(0, total - (P + W))
-        if P >= 2 and W == 0 and U == 0:
-            return "Combinations: PNF-only (≥2)"
-        if P >= 1 and W >= 1 and (P + W) >= 2 and U == 0:
-            return "Combinations: PNF+WHO (≥2)"
-        if P == 0 and W >= 2 and U == 0:
-            return "Combinations: WHO-only (≥2)"
-        if (P + W) >= 1 and U >= 1:
-            return "Combinations: Contains Unknown(s)"
-        if P == 0 and W == 0 and total >= 2:
-            return "Combinations: Unknown-only (≥2)"
+        if row.get("combo_segments_total", 0) > 1:
+            return (
+                f"Combinations: Contains Unknown(s) — "
+                f"identified={row['combo_id_molecules']}, "
+                f"unknown_in_pnf={row['combo_unknown_in_pnf']}, "
+                f"unknown_in_who={row['combo_unknown_in_who']}"
+            )
         return "Combinations"
 
     final_bucket = out["bucket"].copy()
