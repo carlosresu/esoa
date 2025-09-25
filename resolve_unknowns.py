@@ -1,49 +1,81 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-resolve_unknowns.py
--------------------
-Reads ./outputs/unknown_words.csv and looks up whether each unknown token
-appears (whole or partial) in any generic name listed in:
-  • PNF: ./inputs/pnf_prepared.csv   (column: generic_name)
-  • FDA brand map: newest of ./inputs/fda_brand_map_*.csv   (column: generic_name)
-  • WHO ATC molecules: newest of ./dependencies/atcd/output/who_atc_*_molecules.csv (column: atc_name)
+resolve_unknowns.py (fast n-gram token-boundary matches with source priority)
+-----------------------------------------------------------------------------
+Ultra-fast matching by pre-indexing UNKNOWN phrases as token n-grams.
+For each reference string, we tokenize and scan all contiguous n-grams whose
+lengths exist in the unknowns index, doing O(tokens) hash lookups.
 
-Outputs ./outputs/missed_generics.csv with columns:
-  unknown_word, source, reference_name, match_kind, reference_path
+Rules:
+- Tokens are sequences of [a-z0-9], splitting on spaces/underscores/hyphens and other non-alphanumerics.
+- NO within-token substring matches.
+- "whole": unknown tokens equal the entire reference tokens.
+- "partial": unknown tokens are a proper contiguous subset of the reference tokens
+             (e.g., "tranexamic" matches "tranexamic acid", "tranexamic_acid", "tranexamic-acid").
+
+Input:
+  ./outputs/unknown_words.csv  (columns: word,count)
+
+Search lists:
+  • PNF: ./inputs/pnf_prepared.csv (generic_name)
+  • FDA brand map: newest of ./inputs/fda_brand_map_*.csv OR ./inputs/brand_map_*.csv (generic_name)
+  • WHO ATC: newest of ./dependencies/atcd/output/who_atc_*_molecules.csv (atc_name)
+
+Output:
+  ./outputs/missed_generics.csv with columns:
+    unknown_word, unknown_count, source, reference_name, match_kind, reference_path
+
+Priority:
+  PNF over WHO over FDA (i.e., if an unknown matches in PNF, ignore WHO/FDA; if not, use WHO; else FDA).
 """
-
 import csv
 import glob
 import os
 import re
 import sys
 from pathlib import Path
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict, Iterable
 
 ROOT = Path(__file__).resolve().parent
 INPUTS = ROOT / "inputs"
 OUTPUTS = ROOT / "outputs"
 WHO_DIR = ROOT / "dependencies" / "atcd" / "output"
 
-def _read_csv_firstcol(path: Path) -> List[str]:
+# -----------------------------
+# Helpers
+# -----------------------------
+_token_re = re.compile(r"[a-z0-9]+")
+
+def _norm(s: str) -> str:
+    return re.sub(r"\s+", " ", s.lower().strip())
+
+def _tokens(s: str) -> List[str]:
+    return _token_re.findall(_norm(s))
+
+def _read_unknowns_with_counts(path: Path) -> Dict[str, int]:
+    """Read unknown_words.csv with header [word,count] -> dict word->count."""
+    out: Dict[str, int] = {}
     if not path.is_file():
-        return []
-    out = []
+        return out
     with path.open("r", encoding="utf-8-sig", newline="") as f:
-        reader = csv.reader(f)
-        try:
-            _header = next(reader)
-        except StopIteration:
+        reader = csv.DictReader(f)
+        if not reader.fieldnames or "word" not in reader.fieldnames:
             return out
-        for row in reader:
-            if not row:
+        for r in reader:
+            w = (r.get("word") or "").strip()
+            c_raw = (r.get("count") or "").strip()
+            if not w:
                 continue
-            out.append((row[0] or "").strip())
-    return [x for x in out if x]
+            try:
+                c = int(c_raw) if c_raw != "" else 0
+            except Exception:
+                c = 0
+            out[w] = c
+    return out
 
 def _read_col(path: Path, colname: str) -> List[str]:
-    if not path.is_file():
+    if not path or not path.is_file():
         return []
     out = []
     with path.open("r", encoding="utf-8-sig", newline="") as f:
@@ -60,41 +92,66 @@ def _pick_newest(pattern: Path) -> Optional[Path]:
     files = sorted(glob.glob(str(pattern)), key=os.path.getmtime, reverse=True)
     return Path(files[0]) if files else None
 
-def _norm(s: str) -> str:
-    return re.sub(r"\s+", " ", s.lower().strip())
+# -----------------------------
+# Index unknowns as token n-grams
+# -----------------------------
+def _build_unknown_index(unknowns: Iterable[str]) -> Tuple[Dict[int, Dict[Tuple[str, ...], List[str]]], set]:
+    """
+    Returns:
+      - index_by_len: { L -> { token_tuple -> [original_unknowns...] } }
+      - lengths: set of L values present
+    """
+    index_by_len: Dict[int, Dict[Tuple[str, ...], List[str]]] = {}
+    lengths: set = set()
+    for u in unknowns:
+        if not u:
+            continue
+        toks = tuple(_tokens(u))
+        if not toks:
+            continue
+        L = len(toks)
+        lengths.add(L)
+        bucket = index_by_len.setdefault(L, {})
+        bucket.setdefault(toks, []).append(u)
+    return index_by_len, lengths
 
-def _variants(s: str) -> List[str]:
-    s = s.strip()
-    if not s:
-        return []
-    v = {_norm(s)}
-    v.add(_norm(s.replace("_", " ")))
-    v.add(_norm(s.replace("-", " ")))
-    return list(v)
-
-def _tokenize(s: str) -> List[str]:
-    return re.findall(r"[a-z0-9]+", _norm(s))
-
-def _match_kind(unknown: str, ref: str) -> Tuple[bool, str]:
-    """Return (is_match, kind) where kind is 'whole' or 'partial'."""
-    u = _norm(unknown)
-    if not u:
-        return (False, "")
-    ref_norm = _norm(ref)
-    if not ref_norm:
-        return (False, "")
-    if u in ref_norm:
-        tokens = _tokenize(ref_norm)
-        if u in tokens:
-            return (True, "whole")
-        return (True, "partial")
-    for uv in _variants(u):
-        if uv and uv in ref_norm:
-            tokens = _tokenize(ref_norm)
-            if uv in tokens:
-                return (True, "whole")
-            return (True, "partial")
-    return (False, "")
+# -----------------------------
+# Scan one source using the index
+# -----------------------------
+def _scan_source(
+    source_name: str,
+    names: List[str],
+    src_path: Optional[Path],
+    index_by_len: Dict[int, Dict[Tuple[str, ...], List[str]]],
+    lengths: set,
+) -> List[List[str]]:
+    results: List[List[str]] = []
+    refpath_str = str(src_path) if src_path else ""
+    for ref in names:
+        ref_tokens = _tokens(ref)
+        if not ref_tokens:
+            continue
+        n = len(ref_tokens)
+        # Whole match: when ref tokens match an unknown exactly
+        if n in index_by_len:
+            lst = index_by_len[n].get(tuple(ref_tokens))
+            if lst:
+                for u in lst:
+                    results.append([u, source_name, ref, "whole", refpath_str])
+        # Partial matches: contiguous subsequences shorter than full length
+        for L in lengths:
+            if L >= n:
+                continue
+            bucket = index_by_len.get(L)
+            if not bucket:
+                continue
+            for i in range(0, n - L + 1):
+                window = tuple(ref_tokens[i:i+L])
+                lst = bucket.get(window)
+                if lst:
+                    for u in lst:
+                        results.append([u, source_name, ref, "partial", refpath_str])
+    return results
 
 def main():
     unknowns_path = OUTPUTS / "unknown_words.csv"
@@ -102,17 +159,23 @@ def main():
         print(f"ERROR: {unknowns_path} not found.", file=sys.stderr)
         sys.exit(1)
 
-    unknown_words = _read_csv_firstcol(unknowns_path)
-    if not unknown_words:
-        print("No unknown words found (empty file)." )
+    unknown_counts = _read_unknowns_with_counts(unknowns_path)
+    if not unknown_counts:
+        print("No unknown words found (empty file).")
         OUTPUTS.mkdir(parents=True, exist_ok=True)
         outpath = OUTPUTS / "missed_generics.csv"
         with outpath.open("w", encoding="utf-8", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(["unknown_word","source","reference_name","match_kind","reference_path"])
+            writer.writerow(["unknown_word","unknown_count","source","reference_name","match_kind","reference_path"])
         print(str(outpath))
         return
 
+    unknown_words = list(unknown_counts.keys())
+
+    # Build fast index of unknown token n-grams
+    index_by_len, lengths = _build_unknown_index(unknown_words)
+
+    # Load sources
     pnf_path = INPUTS / "pnf_prepared.csv"
     pnf_names = _read_col(pnf_path, "generic_name")
 
@@ -125,33 +188,51 @@ def main():
             fda_path = legacy_fda
             fda_names = _read_col(legacy_fda, "generic_name")
 
-    who_path = _pick_newest(ROOT / "dependencies" / "atcd" / "output" / "who_atc_*_molecules.csv")
+    who_path = _pick_newest(WHO_DIR / "who_atc_*_molecules.csv")
     who_names = _read_col(who_path, "atc_name") if who_path else []
 
-    sources = [
-        ("PNF", pnf_names, pnf_path if pnf_path.is_file() else None),
-        ("FDA", fda_names, fda_path if fda_path else None),
-        ("WHO", who_names, who_path if who_path else None),
-    ]
+    # Scan all sources independently
+    all_results: List[List[str]] = []
+    if pnf_names:
+        all_results.extend(_scan_source("PNF", pnf_names, pnf_path if pnf_path.is_file() else None, index_by_len, lengths))
+    if who_names:
+        all_results.extend(_scan_source("WHO", who_names, who_path if who_path else None, index_by_len, lengths))
+    if fda_names:
+        all_results.extend(_scan_source("FDA", fda_names, fda_path if fda_path else None, index_by_len, lengths))
 
-    results = []
-    for uw in unknown_words:
-        if not uw:
+    # Deduplicate rows
+    seen_rows = set()
+    deduped: List[List[str]] = []
+    for row in all_results:
+        t = tuple(row)
+        if t not in seen_rows:
+            seen_rows.add(t)
+            deduped.append(row)
+
+    # Prioritize per unknown: PNF > WHO > FDA
+    priority = {"PNF": 0, "WHO": 1, "FDA": 2}
+    by_unknown: Dict[str, Dict[str, List[List[str]]]] = {}
+    for u, src, ref, kind, rpath in deduped:
+        by_unknown.setdefault(u, {}).setdefault(src, []).append([u, src, ref, kind, rpath])
+
+    filtered_rows: List[List[str]] = []
+    for u, src_map in by_unknown.items():
+        # pick the best available source for this unknown
+        if not src_map:
             continue
-        for src_name, names, src_path in sources:
-            if not names:
-                continue
-            for ref in names:
-                ok, kind = _match_kind(uw, ref)
-                if ok:
-                    results.append([uw, src_name, ref, kind, str(src_path) if src_path else ""])
+        best_src = min(src_map.keys(), key=lambda s: priority.get(s, 99))
+        filtered_rows.extend(src_map[best_src])
+
+    # Add counts column; keep deterministic order: by unknown, then ref
+    filtered_rows.sort(key=lambda r: (r[0], r[1], r[2], r[3]))
 
     OUTPUTS.mkdir(parents=True, exist_ok=True)
     outpath = OUTPUTS / "missed_generics.csv"
     with outpath.open("w", encoding="utf-8", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["unknown_word","source","reference_name","match_kind","reference_path"])
-        writer.writerows(results)
+        writer.writerow(["unknown_word","unknown_count","source","reference_name","match_kind","reference_path"])
+        for u, src, ref, kind, rpath in filtered_rows:
+            writer.writerow([u, unknown_counts.get(u, 0), src, ref, kind, rpath])
 
     print(str(outpath))
 
