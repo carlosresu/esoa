@@ -138,16 +138,17 @@ For each eSOA entry with at least one PNF candidate:
   - selected_form, selected_variant, dose_sim, form_ok, route_ok, atc_code_final
 - Confidence score (for context):  
   +60 if generic found, +15 dose parsed, +10 route evidence, +15 ATC code, +0–10 from dose_sim, +10 bonus for clean brand swap.
-- Auto-Accept policy (conservative):  
-  Auto-Accept only if:
-  - PNF generic identified
-  - ATC code present
-  - match_quality == "OK" (dose_sim ≥ 0.6, form_ok, route_ok)
-
-Everything else is Needs Review, unless WHO/FDA-valid but not in PNF.
+- Auto-Accept policy (relaxed):
+  - Auto-Accept if:
+    - PNF generic identified
+    - ATC code present
+    - form_ok and route_ok
+  - Dose mismatch no longer blocks Auto-Accept, but such rows are flagged for supervisors:
+    - why_final = "OK, dose mismatch" (or "OK, brand->generic swap (dose mismatch)")
+    - reason_final = "no/poor dose match"
 
 Public health/program implications  
-Stricter acceptance reduces false positives but increases review workload.
+Dose mismatches still allow ATC assignment and Auto-Accept, reducing false negatives while keeping supervisor oversight by flagging these cases for review.
 
 Supervisor input needed
 
