@@ -119,15 +119,30 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     out["why_final"] = ""
     out["reason_final"] = ""
 
-    # AUTO-ACCEPT: only when generic is in PNF AND has ATC code AND quality is OK
+    # AUTO-ACCEPT: generic in PNF + has ATC + (form & route OK), regardless of dose mismatch
     is_candidate_like = out["generic_id"].notna()
     has_pnf_atc = out["atc_code_final"].astype(str).str.len().gt(0)
-    ok_quality = out["match_quality"].eq("OK")
-    auto_mask = is_candidate_like & has_pnf_atc & ok_quality
+    form_ok_col = out["form_ok"].astype(bool)
+    route_ok_col = out["route_ok"].astype(bool)
+
+    auto_mask = is_candidate_like & has_pnf_atc & form_ok_col & route_ok_col
     out.loc[auto_mask, "bucket_final"] = "Auto-Accept"
-    out.loc[auto_mask & out["did_brand_swap"], "why_final"] = "OK, brand->generic swap"
-    out.loc[auto_mask & (~out["did_brand_swap"]), "why_final"] = "OK, no changes"
-    out.loc[auto_mask, "reason_final"] = "OK"
+
+    # Within Auto-Accept, separate clean OK vs dose-mismatch tagging for supervisors
+    dose_mismatch_mask = auto_mask & out["match_quality"].eq("no/poor dose match")
+
+    # Clean OK (no dose mismatch)
+    auto_ok_mask = auto_mask & (~dose_mismatch_mask)
+    out.loc[auto_ok_mask & out["did_brand_swap"], "why_final"] = "OK, brand->generic swap"
+    out.loc[auto_ok_mask & (~out["did_brand_swap"]), "why_final"] = "OK, no changes"
+    out.loc[auto_ok_mask, "reason_final"] = "OK"
+
+    # Auto-accept but tag dose mismatch for supervisors
+    auto_dm_brand = dose_mismatch_mask & out["did_brand_swap"]
+    auto_dm_plain = dose_mismatch_mask & (~out["did_brand_swap"])
+    out.loc[auto_dm_brand, "why_final"] = "OK, brand->generic swap (dose mismatch)"
+    out.loc[auto_dm_plain, "why_final"] = "OK, dose mismatch"
+    out.loc[dose_mismatch_mask, "reason_final"] = "no/poor dose match"
 
     # NEEDS REVIEW: remaining candidate-like
     needs_rev_mask = is_candidate_like & (~auto_mask)
