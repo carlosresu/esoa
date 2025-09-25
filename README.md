@@ -153,6 +153,9 @@ Dose mismatches still allow ATC assignment and Auto-Accept, reducing false negat
 Supervisor input needed
 
 - Keep the strict Auto-Accept (~15% auto-accept), or relax back toward confidence-based (~56% auto-accept)?
+- Strict Auto-Accept policies reduce false positives but yield fewer auto-accepted matches (~15%).  
+  Relaxed policies increase coverage (~56% auto-accept) but may require more supervisor review.  
+  Trade-offs include balancing workload vs. completeness and risk tolerance.
 
 ---
 
@@ -170,6 +173,10 @@ Frequent unknowns may mean missing formulary entries, local shorthand, or data q
 Supervisor input needed
 
 - Confirm triage workflow: which unknowns trigger formulary enrichment vs local mapping vs data cleaning?
+- Suggested triage options:
+  - Formulary enrichment (e.g., add missing drugs to PNF)
+  - Local mapping (e.g., create local aliases or shorthand mappings)
+  - Data quality remediation (e.g., fix typos, OCR errors, or inconsistent formats)
 
 ---
 
@@ -251,15 +258,19 @@ Optional flags
 ## ✅ Summary of Items for Supervisor Input
 
 1. Dose tolerance  
-   Is ±10% acceptable? Should some forms/routes be stricter?
+   Is the current ±10% dose similarity tolerance appropriate for the program’s needs? Should we consider stricter dose matching for certain forms or routes, such as inhalation products or oral solutions, where small dose differences might have greater clinical significance? Conversely, are there cases where a looser tolerance might be acceptable? How should we balance sensitivity versus specificity in dose matching to optimize public health surveillance?
+
 2. Route/Form strictness  
-   Require exact matches or allow imputed/fuzzy?
+   Should the pipeline require exact matches between the detected route and form of the eSOA entry and the PNF reference, or allow for imputed or fuzzy matches? For example, should tablets and capsules be considered interchangeable forms (cap ↔ tab), or should we enforce strict form equality? How do we handle missing or ambiguous route information—should imputed routes from known forms be accepted, or flagged for review? What level of route/form flexibility best supports accurate and practical matching?
+
 3. Auto-Accept policy  
-   Keep strict (≈15% auto-accept) or relax toward confidence-based (≈56%)?
+   The current relaxed Auto-Accept policy allows dose mismatches but flags them for supervisor review, increasing auto-accept coverage to about 56%. Alternatively, stricter Auto-Accept policies yield fewer auto-accepted matches (~15%) but reduce false positives. Which approach better fits the program’s risk tolerance and workload capacity? Should we prioritize maximizing automatic matches with some flagged dose mismatches, or prefer fewer but more conservative auto-accepts? How should confidence scores and match criteria be weighted to optimize this trade-off?
+
 4. Salts/esters policy  
-   Treat as distinct actives or same molecule?
+   Should certain salt or ester forms (e.g., hydrochloride, hemisuccinate, palmitate) be treated as distinct active molecules for surveillance and reporting, or considered as the same base molecule? What are the implications for data aggregation, monitoring, and public health interpretation? Are there specific esters or salts that should always be grouped or separated? How do these decisions affect the accuracy and usefulness of the matched dataset?
+
 5. Unknowns triage  
-   Prioritize formulary enrichment, local mapping, or data quality remediation?
+   How should we triage unknown tokens extracted during matching? Which categories of unknowns should trigger formulary enrichment (e.g., adding missing drugs to the PNF), local mapping efforts (e.g., creating local aliases or shorthand mappings), or data quality remediation (e.g., correcting typos, OCR errors, or inconsistent formats)? What workflow or criteria should guide these decisions to efficiently improve coverage and data quality over time? Should some unknowns be prioritized for immediate action based on frequency or impact?
 
 ---
 
