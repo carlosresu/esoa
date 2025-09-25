@@ -1,0 +1,3 @@
+[submodule "dependencies/atcd"]
+	path = dependencies/atcd
+	url = https://github.com/carlosresu/atcd
