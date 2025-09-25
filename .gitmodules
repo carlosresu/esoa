@@ -4,3 +4,6 @@
 [submodule "scripts/fda_ph_drug_scraper"]
 	path = scripts/fda_ph_drug_scraper
 	url = https://github.com/carlosresu/fda_ph_drug_scraper
+[submodule "dependencies/fda_ph_drug_scraper"]
+	path = dependencies/fda_ph_drug_scraper
+	url = https://github.com/carlosresu/fda_ph_drug_scraper
