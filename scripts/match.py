@@ -418,8 +418,11 @@ def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_ma
     aa_pct = round(aa / float(total) * 100, 2) if total else 0.0
     print(f"  - Auto-Accept: {aa:,} ({aa_pct}%)")
 
+    # Needs review total + breakdown
     nr = grouped[grouped["bucket_final"].eq("Needs review")].copy()
     if not nr.empty:
+        nr_total = int(nr["n"].sum())
+        nr_total_pct = round(nr_total / float(total) * 100, 2) if total else 0.0
         def fam_order(s):
             if s.startswith("ValidMoleculeWithATC/NotInPNF:"):
                 return (0, s)
@@ -429,15 +432,16 @@ def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_ma
                 return (2, s)
             return (3, s)
         nr = nr.sort_values(by=["why_final"], key=lambda c: c.map(fam_order))
-        print(f"  - Needs review:")
+        print(f"  - Needs review: {nr_total:,} ({nr_total_pct}%)")
         for _, row in nr.iterrows():
             print(f"      • {row['why_final']}: {row['n']:,} ({row['pct']}%)")
 
+    # Others total + breakdown
     oth = grouped[grouped["bucket_final"].eq("Others")].copy()
     if not oth.empty:
-        total_oth = oth["n"].sum()
+        total_oth = int(oth["n"].sum())
         total_oth_pct = round(total_oth / float(total) * 100, 2) if total else 0.0
-        print(f"  - Others:")
+        print(f"  - Others: {total_oth:,} ({total_oth_pct}%)")
         for _, row in oth.sort_values("n", ascending=False).iterrows():
             label = row["why_final"] if row["why_final"] else "Combinations"
             print(f"      • {label}: {row['n']:,} ({row['pct']}%)")
