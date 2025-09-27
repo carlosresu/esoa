@@ -3,7 +3,7 @@
 from __future__ import annotations
 import sys, time
 import os, pandas as pd
-from typing import Callable
+from typing import Callable, List
 
 # Local lightweight spinner so this module is self-contained
 def _run_with_spinner(label: str, func: Callable[[], None]) -> float:
@@ -53,10 +53,9 @@ OUTPUT_COLUMNS = [
     "bucket_final","why_final","reason_final",
 ]
 
-def _write_summary_text(out_small: pd.DataFrame, out_csv: str) -> None:
+def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
     total = len(out_small)
-    lines = []
-    lines.append("Distribution Summary")
+    lines: List[str] = ["Distribution Summary"]
 
     # Auto-Accept
     aa_rows = out_small.loc[out_small["bucket_final"].eq("Auto-Accept")].copy()
@@ -103,15 +102,37 @@ def _write_summary_text(out_small: pd.DataFrame, out_csv: str) -> None:
     if nr:
         nr_rows["match_molecule(s)"] = nr_rows["match_molecule(s)"].replace({"": "UnspecifiedSource"})
         nr_rows["match_quality"] = nr_rows["match_quality"].replace({"": "unspecified"})
-        grp = (
-            nr_rows.groupby(["match_molecule(s)", "match_quality"], dropna=False)
-            .size()
-            .reset_index(name="n")
-        )
-        grp["pct"] = (grp["n"] / float(total) * 100).round(2) if total else 0.0
-        grp = grp.sort_values(by=["n", "match_molecule(s)", "match_quality"], ascending=[False, True, True])
-        for _, row in grp.iterrows():
-            lines.append(f"  {row['match_molecule(s)']}: {row['match_quality']}: {row['n']:,} ({row['pct']}%)")
+
+        if mode == "default":
+            grp = (
+                nr_rows.groupby(["match_molecule(s)", "match_quality"], dropna=False)
+                .size()
+                .reset_index(name="n")
+            )
+            grp["pct"] = (grp["n"] / float(total) * 100).round(2) if total else 0.0
+            grp = grp.sort_values(by=["n", "match_molecule(s)", "match_quality"], ascending=[False, True, True])
+            for _, row in grp.iterrows():
+                lines.append(f"  {row['match_molecule(s)']}: {row['match_quality']}: {row['n']:,} ({row['pct']}%)")
+        elif mode == "molecule":
+            grp = (
+                nr_rows.groupby(["match_molecule(s)"], dropna=False)
+                .size()
+                .reset_index(name="n")
+            )
+            grp["pct"] = (grp["n"] / float(total) * 100).round(2) if total else 0.0
+            grp = grp.sort_values(by=["n", "match_molecule(s)"], ascending=[False, True])
+            for _, row in grp.iterrows():
+                lines.append(f"  {row['match_molecule(s)']}: {row['n']:,} ({row['pct']}%)")
+        elif mode == "match":
+            grp = (
+                nr_rows.groupby(["match_quality"], dropna=False)
+                .size()
+                .reset_index(name="n")
+            )
+            grp["pct"] = (grp["n"] / float(total) * 100).round(2) if total else 0.0
+            grp = grp.sort_values(by=["n", "match_quality"], ascending=[False, True])
+            for _, row in grp.iterrows():
+                lines.append(f"  {row['match_quality']}: {row['n']:,} ({row['pct']}%)")
 
     # Others
     oth_rows = out_small.loc[out_small["bucket_final"].eq("Others")].copy()
@@ -129,9 +150,22 @@ def _write_summary_text(out_small: pd.DataFrame, out_csv: str) -> None:
         for _, row in grouped_oth.iterrows():
             lines.append(f"  {row['why_final']}: {row['reason_final']}: {row['n']:,} ({row['pct']}%)")
 
-    summary_path = os.path.join(os.path.dirname(out_csv), "summary.txt")
-    with open(summary_path, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines) + "\n")
+    return lines
+
+
+def _write_summary_text(out_small: pd.DataFrame, out_csv: str) -> None:
+    base_dir = os.path.dirname(out_csv)
+    summaries = [
+        ("summary.txt", "default"),
+        ("summary_molecule.txt", "molecule"),
+        ("summary_match.txt", "match"),
+    ]
+
+    for filename, mode in summaries:
+        summary_path = os.path.join(base_dir, filename)
+        lines = _generate_summary_lines(out_small, mode)
+        with open(summary_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
 
 def write_outputs(
     out_df: pd.DataFrame,
