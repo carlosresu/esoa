@@ -29,7 +29,7 @@ def _pick_best(group: pd.DataFrame) -> pd.Series:
     scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
     _, best_sim, best_form_ok, best_route_ok, best_row = scored[0]
     note = "OK"
-    if best_sim < 0.6: note = "no/poor dose match"
+    if best_sim < 1.0: note = "no/poor dose match"  # zero-tolerance: only exact match counts as OK
     if not best_form_ok and (note == "OK"): note = "no/poor form match"
     if not best_route_ok and (note == "OK"): note = "no/poor route match"
     strength = best_row.get("strength"); unit = best_row.get("unit") or ""
@@ -62,7 +62,7 @@ def _score_row(r: pd.Series) -> int:
     if math.isnan(sim): sim = 0.0
     score += int(max(0.0, min(1.0, sim)) * 10)
     try:
-        if r.get("did_brand_swap") and r.get("form_ok") and r.get("route_ok") and float(r.get("dose_sim", 0)) >= 0.6:
+        if r.get("did_brand_swap") and r.get("form_ok") and r.get("route_ok") and float(r.get("dose_sim", 0)) >= 1.0:
             score += 10
     except Exception:
         pass
@@ -191,5 +191,9 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     out.loc[remaining, "bucket_final"] = "Candidate"
     out.loc[remaining, "why_final"] = "Needs review"
     out.loc[remaining, "reason_final"] = _mk_reason(out.loc[remaining, "match_quality"], "no/poor dose/form/route")
+
+    # --- NEW: Set 'dose_recognized' to 'N/A' unless exact match (dose_sim == 1.0) ---
+    if "dose_recognized" in out.columns:
+        out["dose_recognized"] = np.where(out["dose_sim"].astype(float) == 1.0, out["dose_recognized"], "N/A")
 
     return out

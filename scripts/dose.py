@@ -1,11 +1,9 @@
-# ===============================
-# File: scripts/dose.py
-# ===============================
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
 import re
 from typing import Any, Dict, Optional
+from math import isclose
 
 from .text_utils import safe_to_float
 
@@ -135,23 +133,29 @@ def extract_dosage(s_norm: str):
     return None
 
 
+def _eq(a: float, b: float) -> bool:
+    """Exact equality with robust float check. Accept only true equality up to tiny machine epsilon.
+    This enforces zero tolerance logically (e.g., 1 g == 1000 mg), but rejects 450 vs 500 mg.
+    """
+    # Use a very tight tolerance to avoid binary float artifacts while still enforcing exactness.
+    return isclose(a, b, rel_tol=1e-12, abs_tol=1e-9)
+
+
 def dose_similarity(esoa_dose: dict, pnf_row) -> float:
+    """Return 1.0 only for exact equality (after unit conversion); else 0.0.
+    - amount: mg equality must hold exactly after conversion
+    - ratio: mg/mL equality must hold exactly after conversion
+    - percent: equal percentage
+    """
     if not esoa_dose:
         return 0.0
     kind = esoa_dose.get("kind")
     if kind == "amount":
         mg_esoa = to_mg_match(esoa_dose["strength"], esoa_dose["unit"])
         mg_pnf = pnf_row.get("strength_mg")
-        if mg_esoa is None or mg_pnf is None or mg_pnf == 0:
+        if mg_esoa is None or mg_pnf is None:
             return 0.0
-        rel_err = abs(mg_esoa - mg_pnf) / mg_pnf
-        if rel_err < 0.001:
-            return 1.0
-        if rel_err <= 0.05:
-            return 0.8
-        if rel_err <= 0.10:
-            return 0.6
-        return 0.0
+        return 1.0 if _eq(mg_esoa, mg_pnf) else 0.0
     if kind == "ratio":
         if pnf_row.get("dose_kind") != "ratio":
             return 0.0
@@ -162,14 +166,7 @@ def dose_similarity(esoa_dose: dict, pnf_row) -> float:
         ratio_pnf = pnf_row.get("ratio_mg_per_ml")
         if ratio_pnf in (None, 0):
             return 0.0
-        rel_err = abs(ratio_esoa - ratio_pnf) / ratio_pnf
-        if rel_err < 0.001:
-            return 1.0
-        if rel_err <= 0.05:
-            return 0.8
-        if rel_err <= 0.10:
-            return 0.6
-        return 0.0
+        return 1.0 if _eq(ratio_esoa, ratio_pnf) else 0.0
     if kind == "percent":
         if pnf_row.get("dose_kind") != "percent":
             return 0.0
@@ -177,12 +174,5 @@ def dose_similarity(esoa_dose: dict, pnf_row) -> float:
         pct_pnf = pnf_row.get("pct")
         if pct_pnf is None:
             return 0.0
-        rel_err = abs(pct_esoa - pct_pnf) / max(pct_pnf, 1e-9)
-        if rel_err < 0.001:
-            return 1.0
-        if rel_err <= 0.05:
-            return 0.8
-        if rel_err <= 0.10:
-            return 0.6
-        return 0.0
+        return 1.0 if _eq(pct_esoa, float(pct_pnf)) else 0.0
     return 0.0
