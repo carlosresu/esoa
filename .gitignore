@@ -221,3 +221,4 @@ output/*
 **/*.rds
 **/output/*
 dependencies/atcd
+.DS_Store
