@@ -101,14 +101,14 @@ def run_with_spinner(label: str, func: Callable[[], None], start_delay: float = 
     while not done.is_set():
         elapsed = time.perf_counter() - t0
         frame = spinner_frames[idx % len(spinner_frames)]
-        sys.stdout.write(f"\r{frame} {label} … {elapsed:0.1f}s")
+        sys.stdout.write(f"\r{frame} {elapsed:7.2f}s {label}")
         sys.stdout.flush()
         idx += 1
         time.sleep(0.1)
 
     th.join()
     elapsed = time.perf_counter() - t0
-    sys.stdout.write(f"\r✓ {label} — done in {elapsed:0.2f}s\n")
+    sys.stdout.write(f"\r✓ {elapsed:7.2f}s {label}\n")
     sys.stdout.flush()
 
     if err:
@@ -281,7 +281,7 @@ def main_entry() -> None:
         str(out_path),
     )
     t_match = time.perf_counter() - t0
-    print(f"✓ Match & write outputs — done in {t_match:0.2f}s")
+    print(f"✓ {t_match:7.2f}s Match & write outputs")
     timings.append(("Match & write outputs", t_match))
 
     t = run_with_spinner("Resolve unknowns", run_resolve_unknowns)
@@ -291,9 +291,9 @@ def main_entry() -> None:
     print("\n=== Timing Summary ===")
     total = 0.0
     for name, secs in timings:
-        print(f"• {name:<24} {secs:8.2f}s")
+        print(f"• {name:<24} {secs:9.2f}s")
         total += secs
-    print(f"{'-'*38}\n• Total{'':<21} {total:8.2f}s")
+    print(f"{'-'*38}\n• Total{'':<21} {total:9.2f}s")
 
 
 if __name__ == "__main__":

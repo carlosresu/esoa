@@ -1,6 +1,4 @@
 # ===============================
-# File: main.py (top-level wrapper)
-# ===============================
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 

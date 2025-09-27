@@ -1,6 +1,3 @@
-
-# ===============================
-# File: scripts/who_molecules.py
 # ===============================
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-

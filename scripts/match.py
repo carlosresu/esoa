@@ -1,4 +1,3 @@
-# <scripts/match.py>
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 from __future__ import annotations
@@ -26,12 +25,12 @@ def _run_with_spinner(label: str, func: Callable[[], None]) -> float:
     frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"; i = 0
     while not done.is_set():
         elapsed = time.perf_counter() - t0
-        sys.stdout.write(f"\r{frames[i % len(frames)]} {label} … {elapsed:0.1f}s")
+        sys.stdout.write(f"\r{frames[i % len(frames)]} {elapsed:7.2f}s {label}")
         sys.stdout.flush()
         time.sleep(0.1); i += 1
     th.join()
     elapsed = time.perf_counter() - t0
-    sys.stdout.write(f"\r✓ {label} — done in {elapsed:0.2f}s\n")
+    sys.stdout.write(f"\r✓ {elapsed:7.2f}s {label}\n")
     sys.stdout.flush()
     if err:
         raise err[0]
@@ -51,7 +50,7 @@ def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_ma
     # Build features — inner function prints its own sub-spinners; do not show outer spinner
     t0 = time.perf_counter()
     features_df = build_features(pnf_df[0], esoa_df[0])
-    print(f"✓ Build features — done in {time.perf_counter() - t0:0.2f}s")
+    print(f"✓ {(time.perf_counter() - t0):7.2f}s Build features")
 
     # Score & classify
     out_df = [None]
@@ -61,6 +60,6 @@ def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_ma
     out_path = os.path.abspath(out_csv)
     t1 = time.perf_counter()
     write_outputs(out_df[0], out_path)
-    print(f"✓ Write outputs — done in {time.perf_counter() - t1:0.2f}s")
+    print(f"✓ {(time.perf_counter() - t1):7.2f}s Write outputs")
 
     return out_path
