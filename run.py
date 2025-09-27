@@ -281,56 +281,14 @@ def run_r_scripts() -> None:
             subprocess.run([rscript, script], check=True, cwd=str(atcd_dir), stdout=devnull, stderr=devnull)
 
 
-def create_master_file(root_dir: Path) -> None:
-    """Silent; best-effort concatenation for debugging (no console output)."""
-    debug_dir = root_dir / "debug"
-    debug_dir.mkdir(parents=True, exist_ok=True)
-    output_file_path = debug_dir / "master.py"
-
-    files_to_concatenate = [
-        root_dir / "scripts" / "aho.py",
-        root_dir / "scripts" / "combos.py",
-        root_dir / "scripts" / "dose.py",
-        root_dir / "scripts" / "match_features.py",
-        root_dir / "scripts" / "match_scoring.py",
-        root_dir / "scripts" / "match_outputs.py",
-        root_dir / "scripts" / "match.py",
-        root_dir / "scripts" / "prepare.py",
-        root_dir / "scripts" / "routes_forms.py",
-        root_dir / "scripts" / "text_utils.py",
-        root_dir / "scripts" / "who_molecules.py",
-        root_dir / "scripts" / "fda_ph_drug_scraper.py",
-        root_dir / "scripts" / "brand_map.py",
-        root_dir / "main.py",
-        root_dir / "run.py",
-    ]
-
-    header_text = "# START OF REPO FILES"
-    footer_text = "# END OF REPO FILES"
-
-    try:
-        with output_file_path.open("w", encoding="utf-8", newline="\n") as outfile:
-            outfile.write(header_text + "\n")
-            for file_path in files_to_concatenate:
-                if not file_path.is_file():
-                    continue
-                relative_path = file_path.relative_to(root_dir).as_posix()
-                outfile.write(f"# <{relative_path}>\n")
-                outfile.write(file_path.read_text(encoding="utf-8", errors="ignore"))
-                outfile.write("\n")
-            outfile.write(footer_text + "\n")
-    except Exception:
-        pass
-
-
 def build_brand_map(inputs_dir: Path, outfile: Path | None) -> Path:
     date_str = datetime.now().strftime("%Y-%m-%d")
     out_csv = outfile or (inputs_dir / f"fda_brand_map_{date_str}.csv")
     if out_csv.exists():
-        print(
-            f"✓ Using existing FDA brand map for {date_str}: {out_csv.name}",
-            file=sys.stderr,
-        )
+        # print(
+        #     f"✓ Using existing FDA brand map for {date_str}: {out_csv.name}",
+        #     file=sys.stderr,
+        # )
         return out_csv
     existing_maps = sorted(inputs_dir.glob("fda_brand_map_*.csv"), reverse=True)
     with open(os.devnull, "w") as devnull:
@@ -403,9 +361,6 @@ def main_entry() -> None:
     parser.add_argument("--skip-r", action="store_true", help="Skip running ATC R preprocessing scripts")
     parser.add_argument("--skip-brandmap", action="store_true", help="Skip building FDA brand map CSV")
     args = parser.parse_args()
-
-    # Silent helper
-    create_master_file(THIS_DIR)
 
     outdir = _ensure_outputs_dir()
     inputs_dir = _ensure_inputs_dir()
