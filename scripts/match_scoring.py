@@ -143,6 +143,7 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
 
             pnf_records = df_cand[
                 [
+                    "generic_id",
                     "dose_kind",
                     "strength_mg",
                     "ratio_mg_per_ml",
@@ -322,9 +323,22 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     selected_route_str = out["selected_route_allowed"].fillna("").astype(str).str.strip()
 
     form_has_text = form_str != ""
-    form_can_infer = (~form_has_text) & (selected_form_str != "")
+    esoa_dose_objs = out["dosage_parsed"].map(_parse_dose_obj)
+    esoa_dose_kinds = esoa_dose_objs.map(lambda d: d.get("kind") if isinstance(d, dict) else None)
+    selected_dose_kind_str = out["selected_dose_kind"].fillna("").astype(str).str.lower()
+    selected_form_norm = selected_form_str.str.lower()
+    solid_forms = {"tablet", "capsule"}
+    incompatible_form_infer = (
+        esoa_dose_kinds.fillna("").astype(str).str.lower().eq("ratio")
+        & selected_form_norm.isin(solid_forms)
+    )
+    form_can_infer = (~form_has_text) & (selected_form_str != "") & (~incompatible_form_infer)
     route_has_text = route_str != ""
-    route_can_infer = (~route_has_text) & (selected_route_str != "")
+    incompatible_route_infer = (
+        esoa_dose_kinds.fillna("").astype(str).str.lower().eq("ratio")
+        & selected_form_norm.isin(solid_forms)
+    )
+    route_can_infer = (~route_has_text) & (selected_route_str != "") & (~incompatible_route_infer)
 
     out["form_source"] = np.where(form_has_text, "text", np.where(form_can_infer, "pnf", ""))
     out["route_source"] = np.where(route_has_text, "text", np.where(route_can_infer, "pnf", ""))
@@ -366,15 +380,25 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
 
         best_candidate = None
         best_sim = current_sim
+        solid_forms = {"tablet", "capsule"}
         for _, candidate in candidates.iterrows():
             sim = dose_similarity(esoa_dose, candidate)
-            if sim <= best_sim + 1e-9:
-                continue
             route_tokens = _split_route_allowed(candidate.get("route_allowed"))
             if route_norm and route_tokens and route_norm not in route_tokens:
                 continue
             cand_form_norm = _normalize_form_token(candidate.get("form_token"))
-            if form_norm and cand_form_norm and cand_form_norm != form_norm:
+            prefer_current = False
+            if sim > best_sim + 1e-9:
+                prefer_current = True
+            elif best_candidate is None:
+                prefer_current = True
+            elif abs(sim - best_sim) <= 1e-9 and esoa_dose.get("kind") == "ratio":
+                best_form_norm = _normalize_form_token(best_candidate.get("form_token"))
+                best_is_solid = best_form_norm in solid_forms
+                current_is_solid = cand_form_norm in solid_forms
+                if best_is_solid and not current_is_solid:
+                    prefer_current = True
+            if not prefer_current:
                 continue
             best_candidate = candidate
             best_sim = sim
