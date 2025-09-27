@@ -221,4 +221,3 @@ output/*
 **/*.rds
 **/output/*
 dependencies/atcd
-**/debug/*
