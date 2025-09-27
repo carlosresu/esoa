@@ -15,7 +15,10 @@ def _route_ok(row: pd.Series) -> bool:
 
 def _pick_best(group: pd.DataFrame) -> pd.Series:
     if group.empty:
-        return pd.Series({"atc_code_final": None, "dose_sim": 0.0, "form_ok": False, "route_ok": False, "match_quality": "unspecified", "selected_form": None, "selected_variant": None})
+        return pd.Series({
+            "atc_code_final": None, "dose_sim": 0.0, "form_ok": False, "route_ok": False,
+            "match_quality": "unspecified", "selected_form": None, "selected_variant": None
+        })
     esoa_form = group.iloc[0]["form"]; esoa_route = group.iloc[0]["route"]; esoa_dose = group.iloc[0]["dosage_parsed"]
     scored = []
     for _, row in group.iterrows():
@@ -91,7 +94,7 @@ def _union_molecules(row: pd.Series) -> List[str]:
 def _mk_reason(series: pd.Series, default_ok: str) -> pd.Series:
     s = series.astype("string")
     s = s.fillna(default_ok)
-    s = s.replace({"unspecified": default_ok})
+    s = s.replace({"": default_ok, "unspecified": default_ok})
     return s.astype("string")
 
 def _missing_combo(row: pd.Series) -> str:
@@ -135,105 +138,56 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     # Probable ATC if absent in PNF but present in WHO
     out["probable_atc"] = np.where(~out["present_in_pnf"] & out["present_in_who"], out["who_atc_codes"], "")
 
-    # Initialize legacy bucket/why/reason (kept for summary), plus new tags
+    # Initialize tags
     out["bucket_final"] = ""
     out["why_final"] = ""
     out["reason_final"] = ""
-    out["match_quality"] = ""  # NEW
-    out["match_molecules"] = ""  # NEW
+    out["match_quality"] = ""
+    out["match_molecule(s)"] = ""  # precise naming
 
-    # Determine match_molecules (source + single/combo)
-    def _mk_match_molecules(row: pd.Series) -> str:
-        combo = bool(row.get("looks_combo_final"))
-        src = None
-        if bool(row.get("present_in_pnf")) and pd.notna(row.get("generic_id")):
-            src = "PNF"
-        elif bool(row.get("present_in_who")):
-            src = "WHO"
-        elif bool(row.get("present_in_fda_generic")):
-            src = "FDA"
-        if not src:
-            return ""
-        kind = "combo generic" if combo else "single generic"
-        return f"{kind} matched with {src}"
-    out["match_molecules"] = out.apply(_mk_match_molecules, axis=1)
+    # Derive *match_molecule(s)* tags
+    present_in_pnf = out["present_in_pnf"].astype(bool)
+    present_in_who = out["present_in_who"].astype(bool)
+    present_in_fda = out["present_in_fda_generic"].astype(bool)
+    has_atc_in_pnf = out["atc_code_final"].astype(str).str.len().gt(0)
 
-    # AUTO-ACCEPT: generic in PNF + has ATC + (form & route OK), regardless of dose mismatch
+    out.loc[present_in_pnf & has_atc_in_pnf, "match_molecule(s)"] = "ValidMoleculeWithATCinPNF"
+    out.loc[(~present_in_pnf) & present_in_who, "match_molecule(s)"] = "ValidMoleculeWithATCinWHO/NotInPNF"
+    out.loc[(~present_in_pnf) & (~present_in_who) & present_in_fda, "match_molecule(s)"] = "ValidMoleculeNoATCinFDA/NotInPNF"
+
+    # Brand-swapped variants
+    out.loc[out["did_brand_swap"].astype(bool) & present_in_who, "match_molecule(s)"] = "ValidBrandSwappedForMoleculeWithATCinWHO"
+    out.loc[out["did_brand_swap"].astype(bool) & present_in_pnf & has_atc_in_pnf, "match_molecule(s)"] = "ValidBrandSwappedForGenericInPNF"
+
+    # AUTO-ACCEPT
     is_candidate_like = out["generic_id"].notna()
-    has_pnf_atc = out["atc_code_final"].astype(str).str.len().gt(0)
     form_ok_col = out["form_ok"].astype(bool)
     route_ok_col = out["route_ok"].astype(bool)
-
-    auto_mask = is_candidate_like & has_pnf_atc & form_ok_col & route_ok_col
+    auto_mask = is_candidate_like & present_in_pnf & has_atc_in_pnf & form_ok_col & route_ok_col
     out.loc[auto_mask, "bucket_final"] = "Auto-Accept"
 
-    # Within Auto-Accept, separate clean OK vs dose-mismatch tagging
-    dose_mismatch_mask = auto_mask & out["match_quality"].eq("dose mismatch")
-
-    # Clean OK (no dose mismatch)
-    auto_ok_mask = auto_mask & (~dose_mismatch_mask)
-    out.loc[auto_ok_mask & out["did_brand_swap"], "why_final"] = "OK, brand→generic swap"
-    out.loc[auto_ok_mask & (~out["did_brand_swap"]), "why_final"] = "OK, no changes"
-    out.loc[auto_ok_mask, "reason_final"] = "OK"
-
-    # Auto-accept but tag dose mismatch for supervisors
-    auto_dm_brand = dose_mismatch_mask & out["did_brand_swap"]
-    auto_dm_plain = dose_mismatch_mask & (~out["did_brand_swap"])
-    out.loc[auto_dm_brand, "why_final"] = "OK, brand→generic swap (dose mismatch)"
-    out.loc[auto_dm_plain, "why_final"] = "OK, dose mismatch"
-    out.loc[dose_mismatch_mask, "reason_final"] = "dose mismatch"
-
-    # NEEDS REVIEW: remaining candidate-like
-    needs_rev_mask = is_candidate_like & (~auto_mask)
+    # Needs review
+    needs_rev_mask = (out["bucket_final"] == "") & (is_candidate_like | present_in_who | present_in_fda)
     out.loc[needs_rev_mask, "bucket_final"] = "Needs review"
     out.loc[needs_rev_mask, "why_final"] = "Needs review"
 
-    # Build granular match_quality + reason_final for non-auto cases
-    missing_strings = out.apply(_missing_combo, axis=1)
-    has_missing = missing_strings.astype(str).str.len().gt(0)
-
-    # Prefer explicit dose mismatch when a dose was recognized but not equal
+    # Match quality for Needs review
+    missing_strings = out.apply(lambda r: _missing_combo(r), axis=1).astype("string")
     dose_mismatch_general = (out["dose_sim"].astype(float) < 1.0) & out["dosage_parsed"].astype(bool)
-
     out.loc[needs_rev_mask & dose_mismatch_general, "match_quality"] = "dose mismatch"
-    out.loc[needs_rev_mask & dose_mismatch_general, "reason_final"] = "dose mismatch"
+    out.loc[needs_rev_mask & (~dose_mismatch_general) & (missing_strings.str.len() > 0), "match_quality"] = missing_strings
+    out.loc[needs_rev_mask & (out["match_quality"] == ""), "match_quality"] = "unspecified"
 
-    # Missing fields combinations
-    out.loc[needs_rev_mask & (~dose_mismatch_general) & has_missing, "match_quality"] = missing_strings
-    out.loc[needs_rev_mask & (~dose_mismatch_general) & has_missing, "reason_final"] = missing_strings
+    # Keep reason_final populated
+    out.loc[needs_rev_mask, "reason_final"] = out.loc[needs_rev_mask, "match_quality"]
+    out["reason_final"] = _mk_reason(out["reason_final"], "unspecified")
 
-    # Default catch-all for needs review without dose/missing issues
-    default_mask = needs_rev_mask & (~dose_mismatch_general) & (~has_missing)
-    out.loc[default_mask, "match_quality"] = "unspecified"
-    out.loc[default_mask, "reason_final"] = "unspecified"
-
-    # VALID MOLECULE (single) WITH ATC/WHO not in PNF (renamed)
-    single_not_in_pnf = (~out["present_in_pnf"]) & (out["molecules_recognized_count"].ge(1)) & (~out["looks_combo_final"])
-    present_in_who = out["present_in_who"]
-    present_in_fda = out["present_in_fda_generic"]
-
-    mask_who_single = single_not_in_pnf & present_in_who
-    mask_fda_single = single_not_in_pnf & (~present_in_who) & present_in_fda
-    out.loc[mask_who_single, ["bucket_final","why_final"]] = ["Needs review","ValidMoleculeWithATCInWHO/NotInPNF"]
-    out.loc[mask_fda_single, ["bucket_final","why_final"]] = ["Needs review","ValidMoleculeInFDA/NotInPNF"]
-    for m in [mask_who_single, mask_fda_single]:
-        out.loc[m, "reason_final"] = out.loc[m, "reason_final"].mask(out.loc[m, "reason_final"].eq("unspecified"), "OK")
-
-    # VALID COMBINATION with ATC in WHO / in FDA but Not in PNF (renamed)
-    combo = out["looks_combo_final"]
-    mask_who_combo = combo & (~out["present_in_pnf"]) & present_in_who
-    mask_fda_combo = combo & (~out["present_in_pnf"]) & (~present_in_who) & present_in_fda
-    out.loc[mask_who_combo, ["bucket_final","why_final"]] = ["Needs review","ValidMoleculeCombinationWithATCInWHO/NotInPNF"]
-    out.loc[mask_fda_combo, ["bucket_final","why_final"]] = ["Needs review","ValidMoleculeCombinationInFDA/NotInPNF"]
-    for m in [mask_who_combo, mask_fda_combo]:
-        out.loc[m, "reason_final"] = out.loc[m, "reason_final"].mask(out.loc[m, "reason_final"].eq("unspecified"), "OK")
-
-    # OTHERS: UnknownWord (annotate meaning)
+    # Others: Unknowns
     unknown_single = out["unknown_kind"].eq("Single - Unknown")
     unknown_multi_all = out["unknown_kind"].eq("Multiple - All Unknown")
     unknown_multi_some = out["unknown_kind"].eq("Multiple - Some Unknown")
     none_found = out["unknown_kind"].eq("None")
-    fallback_unknown = (~is_candidate_like) & (~present_in_who) & (~present_in_fda) & (~combo) & (~none_found)
+    fallback_unknown = (~is_candidate_like) & (~present_in_who) & (~present_in_fda) & (~none_found)
 
     def _annotate_unknown(s: str) -> str:
         if s == "Single - Unknown": return "Single - Unknown (unknown to PNF, WHO, FDA)"
@@ -251,13 +205,13 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
         out.loc[mask, "why_final"] = "Unknown"
         out.loc[mask, "reason_final"] = _annotate_unknown(reason)
 
-    # Any remaining empties move to Needs review with default string reason
+    # Final safety net
     remaining = out["bucket_final"].eq("")
     out.loc[remaining, "bucket_final"] = "Needs review"
     out.loc[remaining, "why_final"] = "Needs review"
     out.loc[remaining, "reason_final"] = _mk_reason(out.loc[remaining, "match_quality"], "unspecified")
 
-    # Set 'dose_recognized' to 'N/A' unless exact match (dose_sim == 1.0)
+    # Dose recognized: N/A unless exact
     if "dose_recognized" in out.columns:
         out["dose_recognized"] = np.where(out["dose_sim"].astype(float) == 1.0, out["dose_recognized"], "N/A")
 

@@ -47,7 +47,7 @@ OUTPUT_COLUMNS = [
     "did_brand_swap","looks_combo_final","combo_reason","combo_known_generics_count",
     "unknown_kind","unknown_words",
     "atc_code_final","confidence",
-    "match_molecules","match_quality",
+    "match_molecule(s)","match_quality",
     "bucket_final","why_final","reason_final",
 ]
 
@@ -57,19 +57,20 @@ def _write_summary_text(out_small: pd.DataFrame, out_csv: str) -> None:
     lines.append("Distribution Summary")
 
     # Auto-Accept
-    auto_rows = out_small.loc[out_small["bucket_final"].eq("Auto-Accept")].copy()
-    aa = int(len(auto_rows)) if total else 0
+    aa_rows = out_small.loc[out_small["bucket_final"].eq("Auto-Accept")].copy()
+    aa = int(len(aa_rows)) if total else 0
     aa_pct = round(aa / float(total) * 100, 2) if total else 0.0
     lines.append(f"Auto-Accept: {aa:,} ({aa_pct}%)")
     if aa:
-        swaps = int(auto_rows.get("did_brand_swap", False).sum()) if "did_brand_swap" in auto_rows.columns else 0
-        ok_no_change = max(0, aa - swaps)
-        if swaps:
-            pct = round(swaps / float(total) * 100, 2)
-            lines.append(f"  brand→generic swap: {swaps:,} ({pct}%)")
-        if ok_no_change:
-            pct = round(ok_no_change / float(total) * 100, 2)
-            lines.append(f"  OK, no changes: {ok_no_change:,} ({pct}%)")
+        exact_mask = (aa_rows["dose_sim"].astype(float) == 1.0) & aa_rows["route"].astype(str).ne("") & aa_rows["form"].astype(str).ne("")
+        swapped_exact = aa_rows.loc[exact_mask & aa_rows["did_brand_swap"].astype(bool)]
+        clean_exact = aa_rows.loc[exact_mask & (~aa_rows["did_brand_swap"].astype(bool))]
+        if len(swapped_exact):
+            pct = round(len(swapped_exact) / float(total) * 100, 2)
+            lines.append(f"  ValidBrandSwappedForGenericInPNF: exact dose/form/route match: {len(swapped_exact):,} ({pct}%)")
+        if len(clean_exact):
+            pct = round(len(clean_exact) / float(total) * 100, 2)
+            lines.append(f"  ValidGenericInPNF, exact dose/route/form match: {len(clean_exact):,} ({pct}%)")
 
     # Needs review
     nr_rows = out_small.loc[out_small["bucket_final"].eq("Needs review")].copy()
@@ -77,24 +78,22 @@ def _write_summary_text(out_small: pd.DataFrame, out_csv: str) -> None:
     nr_pct = round(nr / float(total) * 100, 2) if total else 0.0
     lines.append(f"Needs review: {nr:,} ({nr_pct}%)")
     if nr:
-        grouped = (
-            nr_rows.groupby(["why_final","reason_final"], dropna=False)
-            .size().reset_index(name="n")
-        )
-        grouped["pct"] = (grouped["n"] / float(total) * 100).round(2) if total else 0.0
-        grouped = grouped.sort_values(by=["why_final","reason_final","n"], ascending=[True, True, False])
-        for _, row in grouped.iterrows():
-            lines.append(f"  {row['why_final']}: {row['reason_final']}: {row['n']:,} ({row['pct']}%)")
+        nr_rows["match_molecule(s)"] = nr_rows["match_molecule(s)"].replace({"": "UnspecifiedSource"})
+        nr_rows["match_quality"] = nr_rows["match_quality"].replace({"": "unspecified"})
+        grp = (nr_rows.groupby(["match_molecule(s)","match_quality"], dropna=False).size().reset_index(name="n"))
+        grp["pct"] = (grp["n"] / float(total) * 100).round(2) if total else 0.0
+        grp = grp.sort_values(by=["match_molecule(s)","match_quality","n"], ascending=[True, True, False])
+        for _, row in grp.iterrows():
+            lines.append(f"  {row['match_molecule(s)']}: {row['match_quality']}: {row['n']:,} ({row['pct']}%)")
 
-    # Others (Unknown)
+    # Others
     oth_rows = out_small.loc[out_small["bucket_final"].eq("Others")].copy()
     oth = int(len(oth_rows))
     oth_pct = round(oth / float(total) * 100, 2) if total else 0.0
     lines.append(f"Others: {oth:,} ({oth_pct}%)")
     if oth:
         grouped_oth = (
-            oth_rows.groupby(["why_final","reason_final"], dropna=False)
-            .size().reset_index(name="n")
+            oth_rows.groupby(["why_final","reason_final"], dropna=False).size().reset_index(name="n")
         )
         grouped_oth["pct"] = (grouped_oth["n"] / float(total) * 100).round(2) if total else 0.0
         grouped_oth = grouped_oth.sort_values(by=["why_final","reason_final","n"], ascending=[True, True, False])
