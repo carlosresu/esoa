@@ -40,26 +40,34 @@ from .match_features import build_features
 from .match_scoring import score_and_classify
 from .match_outputs import write_outputs
 
-def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_matched.csv") -> str:
+def match(
+    pnf_prepared_csv: str,
+    esoa_prepared_csv: str,
+    out_csv: str = "esoa_matched.csv",
+    *,
+    timing_hook: Callable[[str, float], None] | None = None,
+) -> str:
+    def _timed(label: str, func: Callable[[], None]) -> float:
+        elapsed = _run_with_spinner(label, func)
+        if timing_hook:
+            timing_hook(label, elapsed)
+        return elapsed
+
     # Load inputs
     pnf_df = [None]
     esoa_df = [None]
-    _run_with_spinner("Load PNF prepared CSV", lambda: pnf_df.__setitem__(0, pd.read_csv(pnf_prepared_csv)))
-    _run_with_spinner("Load eSOA prepared CSV", lambda: esoa_df.__setitem__(0, pd.read_csv(esoa_prepared_csv)))
+    _timed("Load PNF prepared CSV", lambda: pnf_df.__setitem__(0, pd.read_csv(pnf_prepared_csv)))
+    _timed("Load eSOA prepared CSV", lambda: esoa_df.__setitem__(0, pd.read_csv(esoa_prepared_csv)))
 
     # Build features — inner function prints its own sub-spinners; do not show outer spinner
-    t0 = time.perf_counter()
-    features_df = build_features(pnf_df[0], esoa_df[0])
-    print(f"✓ {(time.perf_counter() - t0):7.2f}s Build features")
+    features_df = build_features(pnf_df[0], esoa_df[0], timing_hook=timing_hook)
 
     # Score & classify
     out_df = [None]
-    _run_with_spinner("Score & classify", lambda: out_df.__setitem__(0, score_and_classify(features_df, pnf_df[0])))
+    _timed("Score & classify", lambda: out_df.__setitem__(0, score_and_classify(features_df, pnf_df[0])))
 
     # Write outputs — inner module prints its own sub-spinners; do not show outer spinner
     out_path = os.path.abspath(out_csv)
-    t1 = time.perf_counter()
-    write_outputs(out_df[0], out_path)
-    print(f"✓ {(time.perf_counter() - t1):7.2f}s Write outputs")
+    write_outputs(out_df[0], out_path, timing_hook=timing_hook)
 
     return out_path

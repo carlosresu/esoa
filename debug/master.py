@@ -389,7 +389,18 @@ def load_latest_who_dir(root_dir: str) -> str | None:
 def _tokenize_unknowns(s_norm: str) -> List[str]:
     return [m.group(0) for m in GENERIC_TOKEN_RX.finditer(s_norm)]
 
-def build_features(pnf_df: pd.DataFrame, esoa_df: pd.DataFrame) -> pd.DataFrame:
+def build_features(
+    pnf_df: pd.DataFrame,
+    esoa_df: pd.DataFrame,
+    *,
+    timing_hook: Callable[[str, float], None] | None = None,
+) -> pd.DataFrame:
+    def _timed(label: str, func: Callable[[], None]) -> float:
+        elapsed = _run_with_spinner(label, func)
+        if timing_hook:
+            timing_hook(label, elapsed)
+        return elapsed
+
     # 1) Validate inputs
     def _validate():
         required_pnf = {
@@ -401,7 +412,7 @@ def build_features(pnf_df: pd.DataFrame, esoa_df: pd.DataFrame) -> pd.DataFrame:
             raise ValueError(f"pnf_prepared.csv missing columns: {missing}")
         if "raw_text" not in esoa_df.columns:
             raise ValueError("esoa_prepared.csv must contain a 'raw_text' column")
-    _run_with_spinner("Validate inputs", _validate)
+    _timed("Validate inputs", _validate)
 
     # 2) Map normalized PNF names to gid + original name
     pnf_name_to_gid: Dict[str, Tuple[str, str]] = {}
@@ -410,7 +421,7 @@ def build_features(pnf_df: pd.DataFrame, esoa_df: pd.DataFrame) -> pd.DataFrame:
             key = _normalize_text_basic(_base_name(str(gname)))
             if key and key not in pnf_name_to_gid:
                 pnf_name_to_gid[key] = (gid, gname)
-    _run_with_spinner("Index PNF names", _pnf_map)
+    _timed("Index PNF names", _pnf_map)
     pnf_name_set: Set[str] = set(pnf_name_to_gid.keys())
 
     # 3) WHO molecules (names + regex)
@@ -426,7 +437,7 @@ def build_features(pnf_df: pd.DataFrame, esoa_df: pd.DataFrame) -> pd.DataFrame:
             candidate_names.extend(cand)
             who_name_set.update(cbn.keys())
             who_regex[0] = re.compile(r"\b(" + "|".join(map(re.escape, candidate_names)) + r")\b") if candidate_names else None
-    _run_with_spinner("Load WHO molecules", _load_who)
+    _timed("Load WHO molecules", _load_who)
     who_regex = who_regex[0]
 
     # 4) Brand map & FDA generics
@@ -435,14 +446,14 @@ def build_features(pnf_df: pd.DataFrame, esoa_df: pd.DataFrame) -> pd.DataFrame:
         project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
         inputs_dir = os.path.join(project_root, "inputs")
         brand_df[0] = load_latest_brandmap(inputs_dir)
-    _run_with_spinner("Load FDA brand map", _load_brand)
+    _timed("Load FDA brand map", _load_brand)
     has_brandmap = brand_df[0] is not None and not brand_df[0].empty
     if has_brandmap:
         B_norm = [None]; B_comp = [None]; brand_lookup = [{}]; fda_gens = [set()]
-        _run_with_spinner("Build brand automata", lambda: (
+        _timed("Build brand automata", lambda: (
             (lambda r: (B_norm.__setitem__(0, r[0]), B_comp.__setitem__(0, r[1]), brand_lookup.__setitem__(0, r[2])))(build_brand_automata(brand_df[0]))
         ))
-        _run_with_spinner("Index FDA generics", lambda: fda_gens.__setitem__(0, fda_generics_set(brand_df[0])))
+        _timed("Index FDA generics", lambda: fda_gens.__setitem__(0, fda_generics_set(brand_df[0])))
         B_norm, B_comp, brand_lookup, fda_gens = B_norm[0], B_comp[0], brand_lookup[0], fda_gens[0]
     else:
         B_norm = B_comp = None
@@ -451,11 +462,11 @@ def build_features(pnf_df: pd.DataFrame, esoa_df: pd.DataFrame) -> pd.DataFrame:
 
     # 5) PNF automata + partial index
     A_norm = [None]; A_comp = [None]
-    _run_with_spinner("Build PNF automata", lambda: (
+    _timed("Build PNF automata", lambda: (
         (lambda r: (A_norm.__setitem__(0, r[0]), A_comp.__setitem__(0, r[1])))(build_molecule_automata(pnf_df))
     ))
     pnf_partial_idx = [None]
-    _run_with_spinner("Build PNF partial index", lambda: pnf_partial_idx.__setitem__(0, PnfTokenIndex().build_from_pnf(pnf_df)))
+    _timed("Build PNF partial index", lambda: pnf_partial_idx.__setitem__(0, PnfTokenIndex().build_from_pnf(pnf_df)))
     A_norm, A_comp, pnf_partial_idx = A_norm[0], A_comp[0], pnf_partial_idx[0]
 
     # 6) Base ESOA frame and text normalization
@@ -467,7 +478,7 @@ def build_features(pnf_df: pd.DataFrame, esoa_df: pd.DataFrame) -> pd.DataFrame:
         tmp["normalized"] = tmp["raw_text"].map(normalize_text)
         tmp["norm_compact"] = tmp["normalized"].map(lambda s: re.sub(r"[ \-]", "", s))
         df.append(tmp)
-    _run_with_spinner("Normalize ESOA text", _mk_base)
+    _timed("Normalize ESOA text", _mk_base)
     df = df[-1]
 
     # 7) Dose/route/form on original normalized text
@@ -476,7 +487,7 @@ def build_features(pnf_df: pd.DataFrame, esoa_df: pd.DataFrame) -> pd.DataFrame:
         df["dosage_parsed_raw"] = df["normalized"].map(_extract_dosage)
         df["dose_recognized"] = df["dosage_parsed_raw"].map(_friendly_dose)
         df["route_raw"], df["form_raw"], df["route_evidence_raw"] = zip(*df["normalized"].map(extract_route_and_form))
-    _run_with_spinner("Parse dose/route/form (raw)", _dose_route_form_raw)
+    _timed("Parse dose/route/form (raw)", _dose_route_form_raw)
 
     # 8) Brand → Generic swap (if brand map available)
     def _brand_swap():
@@ -535,14 +546,15 @@ def build_features(pnf_df: pd.DataFrame, esoa_df: pd.DataFrame) -> pd.DataFrame:
         df["match_basis"] = mb_list
         df["did_brand_swap"] = swapped
         df["fda_dose_corroborated"] = fda_hits
-    _run_with_spinner("Apply brand→generic swaps", _brand_swap)
+    _timed("Apply brand→generic swaps", _brand_swap)
+    df["match_basis_norm_basic"] = df["match_basis"].map(_normalize_text_basic)
 
     # 9) Dose/route/form on match_basis
     def _dose_route_form_basis():
         from .dose import extract_dosage as _extract_dosage
         df["dosage_parsed"] = df["match_basis"].map(_extract_dosage)
         df["route"], df["form"], df["route_evidence"] = zip(*df["match_basis"].map(extract_route_and_form))
-    _run_with_spinner("Parse dose/route/form (basis)", _dose_route_form_basis)
+    _timed("Parse dose/route/form (basis)", _dose_route_form_basis)
 
     # 10) PNF hits (Aho-Corasick) on match_basis
     def _pnf_hits():
@@ -554,7 +566,7 @@ def build_features(pnf_df: pd.DataFrame, esoa_df: pd.DataFrame) -> pd.DataFrame:
             else: primary_gid.append(None); primary_token.append(None)
         df["pnf_hits_gids"] = pnf_hits_gids; df["pnf_hits_tokens"] = pnf_hits_tokens; df["pnf_hits_count"] = pnf_hits_count
         df["generic_id"] = primary_gid; df["molecule_token"] = primary_token
-    _run_with_spinner("Scan PNF hits", _pnf_hits)
+    _timed("Scan PNF hits", _pnf_hits)
 
     # 11) Partial PNF fallback
     def _pnf_partial():
@@ -573,23 +585,26 @@ def build_features(pnf_df: pd.DataFrame, esoa_df: pd.DataFrame) -> pd.DataFrame:
             df.loc[mask_partial, "generic_id"] = [g for g in partial_gids if g is not None]
             df.loc[mask_partial, "molecule_token"] = [t for t in partial_tokens if t is not None]
             df.loc[mask_partial, "pnf_hits_count"] = df.loc[mask_partial, "pnf_hits_count"].fillna(0).astype(int) + 1
-    _run_with_spinner("Partial PNF fallback", _pnf_partial)
+    _timed("Partial PNF fallback", _pnf_partial)
 
     # 12) WHO molecule detection
     def _who_detect():
         if who_regex:
             who_names_all, who_atc_all = [], []
-            for txt in df["match_basis"].tolist():
-                names, codes = detect_all_who_molecules(txt, who_regex, codes_by_name)
-                who_names_all.append(names); who_atc_all.append(sorted(codes))
-            df["who_molecules_list"] = who_names_all; df["who_atc_codes_list"] = who_atc_all
+            for txt, txt_norm in zip(df["match_basis"].tolist(), df["match_basis_norm_basic"].tolist()):
+                names, codes = detect_all_who_molecules(txt, who_regex, codes_by_name, pre_normalized=txt_norm)
+                who_names_all.append(names)
+                who_atc_all.append(sorted(codes))
+            df["who_molecules_list"] = who_names_all
+            df["who_atc_codes_list"] = who_atc_all
             df["who_molecules"] = df["who_molecules_list"].map(lambda xs: "|".join(xs) if xs else "")
             df["who_atc_codes"] = df["who_atc_codes_list"].map(lambda xs: "|".join(xs) if xs else "")
         else:
             df["who_molecules_list"] = [[] for _ in range(len(df))]
             df["who_atc_codes_list"] = [[] for _ in range(len(df))]
-            df["who_molecules"] = ""; df["who_atc_codes"] = ""
-    _run_with_spinner("Detect WHO molecules", _who_detect)
+            df["who_molecules"] = ""
+            df["who_atc_codes"] = ""
+    _timed("Detect WHO molecules", _who_detect)
 
     # 13) Combination detection helpers
     def _combo_feats():
@@ -609,7 +624,7 @@ def build_features(pnf_df: pd.DataFrame, esoa_df: pd.DataFrame) -> pd.DataFrame:
         df["combo_known_generics_count"] = known_counts
         df["looks_combo_final"] = df["combo_known_generics_count"].ge(2)
         df["combo_reason"] = np.where(df["looks_combo_final"], "combo/known-generics>=2", "single/heuristic")
-    _run_with_spinner("Compute combo features", _combo_feats)
+    _timed("Compute combo features", _combo_feats)
 
     # 14) Unknown tokens extraction
     def _unknowns():
@@ -640,14 +655,14 @@ def build_features(pnf_df: pd.DataFrame, esoa_df: pd.DataFrame) -> pd.DataFrame:
         df["unknown_kind"] = kinds
         df["unknown_words_list"] = lists_
         df["unknown_words"] = df["unknown_words_list"].map(lambda xs: "|".join(xs) if xs else "")
-    _run_with_spinner("Extract unknown tokens", _unknowns)
+    _timed("Extract unknown tokens", _unknowns)
 
     # 15) Presence flags
     def _presence_flags():
         df["present_in_pnf"] = df["pnf_hits_count"].astype(int).gt(0)
         df["present_in_who"] = df["who_atc_codes"].astype(str).str.len().gt(0)
         df["present_in_fda_generic"] = df["match_basis"].map(lambda s: any(tok in fda_gens for tok in _tokenize_unknowns(_segment_norm(s))))
-    _run_with_spinner("Compute presence flags", _presence_flags)
+    _timed("Compute presence flags", _presence_flags)
 
     return df
 
@@ -655,95 +670,13 @@ def build_features(pnf_df: pd.DataFrame, esoa_df: pd.DataFrame) -> pd.DataFrame:
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-import math
-from typing import List
-import numpy as np, pandas as pd
+
+import numpy as np
+import pandas as pd
+
 from .dose import dose_similarity
 from .text_utils import _base_name, _normalize_text_basic
 
-def _route_ok(row: pd.Series) -> bool:
-    r = row["route"]; allowed = row.get("route_allowed")
-    if pd.isna(r) or not r: return True
-    if isinstance(allowed, str) and allowed: return r in allowed.split("|")
-    return True
-
-def _pick_best(group: pd.DataFrame) -> pd.Series:
-    if group.empty:
-        return pd.Series({
-            "atc_code_final": None, "dose_sim": 0.0, "form_ok": False, "route_ok": False,
-            "match_quality": "unspecified", "selected_form": None, "selected_variant": None
-        })
-    esoa_form = group.iloc[0]["form"]; esoa_route = group.iloc[0]["route"]; esoa_dose = group.iloc[0]["dosage_parsed"]
-    scored = []
-    for _, row in group.iterrows():
-        score = 0.0
-        form_ok = bool(esoa_form and row.get("form_token") and esoa_form == row["form_token"])
-        route_ok = bool(esoa_route and row.get("route_allowed") and esoa_route == row["route_allowed"])
-        if form_ok: score += 40
-        if route_ok: score += 30
-        sim = dose_similarity(esoa_dose, row); score += sim * 30
-        scored.append((score, sim, form_ok, route_ok, row))
-    scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
-    _, best_sim, best_form_ok, best_route_ok, best_row = scored[0]
-
-    note = "OK"
-    if best_sim < 1.0:
-        note = "dose mismatch"
-    if not best_form_ok and (note == "OK"):
-        note = "no/poor form match"
-    if not best_route_ok and (note == "OK"):
-        note = "no/poor route match"
-
-    strength = best_row.get("strength"); unit = best_row.get("unit") or ""
-    per_val = best_row.get("per_val"); per_unit = best_row.get("per_unit") or ""; pct = best_row.get("pct")
-    variant = f"{best_row.get('dose_kind')}:{strength}{unit}" if pd.notna(strength) else str(best_row.get("dose_kind"))
-    if pd.notna(per_val):
-        try: pv_int = int(per_val)
-        except Exception: pv_int = per_val
-        variant += f"/{pv_int}{per_unit}"
-    if pd.notna(pct): variant += f" {pct}%"
-
-    return pd.Series({
-        "atc_code_final": best_row["atc_code"] if isinstance(best_row["atc_code"], str) and best_row["atc_code"] else None,
-        "dose_sim": float(best_sim),
-        "form_ok": bool(best_form_ok),
-        "route_ok": bool(best_route_ok),
-        "match_quality": note,
-        "selected_form": best_row.get("form_token"),
-        "selected_variant": variant,
-    })
-
-def _score_row(r: pd.Series) -> int:
-    score = 0
-    if pd.notna(r.get("generic_id")): score += 60
-    if r.get("dosage_parsed"): score += 15
-    if r.get("route_evidence"): score += 10
-    if pd.notna(r.get("atc_code_final")): score += 15
-    sim = r.get("dose_sim")
-    try: sim = float(sim)
-    except Exception: sim = 0.0
-    if math.isnan(sim): sim = 0.0
-    score += int(max(0.0, min(1.0, sim)) * 10)
-    try:
-        if r.get("did_brand_swap") and r.get("form_ok") and r.get("route_ok") and float(r.get("dose_sim", 0)) >= 1.0:
-            score += 10
-    except Exception:
-        pass
-    return score
-
-def _union_molecules(row: pd.Series) -> List[str]:
-    names = []
-    for t in (row.get("pnf_hits_tokens") or []):
-        if not isinstance(t, str): continue
-        names.append(_normalize_text_basic(_base_name(t)))
-    for t in (row.get("who_molecules_list") or []):
-        if not isinstance(t, str): continue
-        names.append(_normalize_text_basic(_base_name(t)))
-    seen = set(); uniq = []
-    for n in names:
-        if not n or n in seen: continue
-        seen.add(n); uniq.append(n)
-    return uniq
 
 def _mk_reason(series: pd.Series, default_ok: str) -> pd.Series:
     s = series.astype("string")
@@ -751,103 +684,270 @@ def _mk_reason(series: pd.Series, default_ok: str) -> pd.Series:
     s = s.replace({"": default_ok, "unspecified": default_ok})
     return s.astype("string")
 
-def _missing_combo(row: pd.Series) -> str:
-    missing = []
-    if not bool(row.get("dosage_parsed")):
-        missing.append("dose")
-    if not bool(row.get("form")):
-        missing.append("form")
-    if not bool(row.get("route")):
-        missing.append("route")
-    if not missing:
-        return ""
-    if len(missing) == 1:
-        return f"no {missing[0]} available"
-    if len(missing) == 2:
-        return f"no {missing[0]} and {missing[1]} available"
-    return "no dose, form, and route available"
+
+def _annotate_unknown(s: str) -> str:
+    if s == "Single - Unknown":
+        return "Single - Unknown (unknown to PNF, WHO, FDA)"
+    if s == "Multiple - All Unknown":
+        return "Multiple - All Unknown (unknown to PNF, WHO, FDA)"
+    if s == "Multiple - Some Unknown":
+        return "Multiple - Some Unknown (some unknown to PNF, WHO, FDA)"
+    return s
+
 
 def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.DataFrame:
     df = features_df.copy()
 
-    # Candidate rows that have PNF generic_id
-    df_cand = df.loc[df["generic_id"].notna(), ["esoa_idx","generic_id","route","form","dosage_parsed"]].merge(pnf_df, on="generic_id", how="left")
+    df_cand = df.loc[df["generic_id"].notna(), ["esoa_idx", "generic_id", "route", "form", "dosage_parsed"]].merge(
+        pnf_df, on="generic_id", how="left"
+    )
+    best_by_idx = pd.DataFrame()
+
     if not df_cand.empty:
-        df_cand = df_cand[df_cand.apply(_route_ok, axis=1)]
-        df_cand["dose_sim"] = df_cand.apply(lambda r: dose_similarity(r["dosage_parsed"], r), axis=1)
-        df_cand["dose_sim"] = pd.to_numeric(df_cand["dose_sim"], errors="coerce").fillna(0.0)
-        best_by_idx = df_cand.groupby("esoa_idx", sort=False).apply(_pick_best, include_groups=False)
-        out = df.merge(best_by_idx, left_on="esoa_idx", right_index=True, how="left")
-    else:
+        route_ok_mask: list[bool] = []
+        route_exact_flags: list[bool] = []
+        allowed_cache: dict[str, tuple[str, ...]] = {}
+        for route_val, allowed_val in zip(df_cand["route"], df_cand["route_allowed"]):
+            if pd.isna(route_val) or not route_val:
+                route_ok_mask.append(True)
+                route_exact_flags.append(False)
+                continue
+            if isinstance(allowed_val, str) and allowed_val:
+                cached = allowed_cache.get(allowed_val)
+                if cached is None:
+                    cached = tuple(part.strip() for part in allowed_val.split("|") if part.strip())
+                    allowed_cache[allowed_val] = cached
+                route_ok = route_val in cached if cached else False
+                route_ok_mask.append(route_ok)
+                route_exact_flags.append(route_val == allowed_val)
+            else:
+                route_ok_mask.append(True)
+                route_exact_flags.append(False)
+        route_ok_series = pd.Series(route_ok_mask, index=df_cand.index)
+        route_exact_series = pd.Series(route_exact_flags, index=df_cand.index)
+        df_cand = df_cand.loc[route_ok_series].copy()
+
+        if not df_cand.empty:
+            route_exact_series = route_exact_series.loc[df_cand.index]
+            form_series = df_cand["form"].fillna("").astype(str)
+            form_token_series = df_cand["form_token"].fillna("").astype(str)
+            form_ok_series = (form_series != "") & (form_token_series != "") & (form_series == form_token_series)
+
+            pnf_records = df_cand[
+                [
+                    "dose_kind",
+                    "strength_mg",
+                    "ratio_mg_per_ml",
+                    "pct",
+                    "per_val",
+                    "per_unit",
+                    "strength",
+                    "unit",
+                ]
+            ].to_dict("records")
+            dose_sims = [
+                dose_similarity(esoa_dose, pnf_row)
+                for esoa_dose, pnf_row in zip(df_cand["dosage_parsed"], pnf_records)
+            ]
+            df_cand["dose_sim"] = pd.to_numeric(pd.Series(dose_sims), errors="coerce").fillna(0.0)
+
+            df_cand["_form_ok"] = form_ok_series.to_numpy(dtype=bool)
+            df_cand["_route_ok"] = route_exact_series.to_numpy(dtype=bool)
+            df_cand["_score"] = (
+                df_cand["_form_ok"].astype(int) * 40
+                + df_cand["_route_ok"].astype(int) * 30
+                + df_cand["dose_sim"].astype(float) * 30.0
+            )
+
+            best_rows = (
+                df_cand.sort_values(["esoa_idx", "_score", "dose_sim"], ascending=[True, False, False])
+                .drop_duplicates(subset=["esoa_idx"], keep="first")
+                .set_index("esoa_idx")
+            )
+
+            if not best_rows.empty:
+                match_quality = np.where(best_rows["dose_sim"] < 1.0, "dose mismatch", "OK")
+                match_quality = np.where((match_quality == "OK") & (~best_rows["_form_ok"]), "no/poor form match", match_quality)
+                match_quality = np.where((match_quality == "OK") & (~best_rows["_route_ok"]), "no/poor route match", match_quality)
+
+                variants: list[str] = []
+                for dose_kind, strength, unit, per_val, per_unit, pct in zip(
+                    best_rows["dose_kind"],
+                    best_rows["strength"],
+                    best_rows["unit"],
+                    best_rows["per_val"],
+                    best_rows["per_unit"],
+                    best_rows["pct"],
+                ):
+                    unit_val = unit if isinstance(unit, str) else ""
+                    variant = str(dose_kind)
+                    if pd.notna(strength):
+                        variant = f"{dose_kind}:{strength}{unit_val}"
+                    if pd.notna(per_val):
+                        pv_display = per_val
+                        try:
+                            pv_display = int(per_val)
+                        except Exception:
+                            try:
+                                pv_float = float(per_val)
+                                if float(pv_float).is_integer():
+                                    pv_display = int(pv_float)
+                            except Exception:
+                                pv_display = per_val
+                        per_unit_val = per_unit if isinstance(per_unit, str) else ""
+                        variant += f"/{pv_display}{per_unit_val}"
+                    if pd.notna(pct):
+                        variant += f" {pct}%"
+                    variants.append(variant)
+
+                atc_values = [
+                    val if isinstance(val, str) and val else None
+                    for val in best_rows["atc_code"]
+                ]
+
+                best_by_idx = pd.DataFrame(
+                    {
+                        "atc_code_final": atc_values,
+                        "dose_sim": best_rows["dose_sim"].astype(float),
+                        "form_ok": best_rows["_form_ok"].astype(bool),
+                        "route_ok": best_rows["_route_ok"].astype(bool),
+                        "match_quality": pd.Series(match_quality, index=best_rows.index),
+                        "selected_form": best_rows["form_token"],
+                        "selected_variant": variants,
+                    },
+                    index=best_rows.index,
+                )
+
+    if best_by_idx.empty:
         out = df.copy()
-        out[["atc_code_final","dose_sim","form_ok","route_ok","match_quality","selected_form","selected_variant"]] = [None, 0.0, False, False, "unspecified", None, None]
+        out["atc_code_final"] = None
+        out["dose_sim"] = 0.0
+        out["form_ok"] = False
+        out["route_ok"] = False
+        out["match_quality"] = "unspecified"
+        out["selected_form"] = None
+        out["selected_variant"] = None
+    else:
+        out = df.merge(best_by_idx, left_on="esoa_idx", right_index=True, how="left")
+        out["atc_code_final"] = out["atc_code_final"].where(out["atc_code_final"].notna(), None)
+        out["dose_sim"] = out["dose_sim"].fillna(0.0)
+        # Avoid FutureWarning on object-dtype downcasting by using pandas BooleanDtype
+        out["form_ok"] = out["form_ok"].astype("boolean").fillna(False).astype(bool)
+        out["route_ok"] = out["route_ok"].astype("boolean").fillna(False).astype(bool)
+        out["match_quality"] = out["match_quality"].fillna("unspecified")
+        out["selected_form"] = out["selected_form"].where(out["selected_form"].notna(), None)
+        out["selected_variant"] = out["selected_variant"].where(out["selected_variant"].notna(), None)
 
-    # Confidence and molecules recognized
-    out["confidence"] = out.apply(_score_row, axis=1)
-    out["molecules_recognized_list"] = out.apply(_union_molecules, axis=1)
-    out["molecules_recognized"] = out["molecules_recognized_list"].map(lambda xs: "|".join(xs) if xs else "")
-    out["molecules_recognized_count"] = out["molecules_recognized_list"].map(lambda xs: len(xs or []))
-    out["who_atc_count"] = out["who_atc_codes_list"].map(lambda xs: len(xs or []))
+    out["form_ok"] = out["form_ok"].astype(bool)
+    out["route_ok"] = out["route_ok"].astype(bool)
 
-    # Probable ATC if absent in PNF but present in WHO
+    dose_present = pd.Series([bool(x) for x in out["dosage_parsed"]], index=out.index)
+    form_present = pd.Series([bool(x) for x in out["form"]], index=out.index)
+    route_present = pd.Series([bool(x) for x in out["route"]], index=out.index)
+    route_evidence_present = pd.Series([bool(x) for x in out["route_evidence"]], index=out.index)
+    generic_present = out["generic_id"].notna()
+    atc_present = pd.Series([isinstance(x, str) and len(x) > 0 for x in out["atc_code_final"]], index=out.index)
+    dose_sim_clipped = out["dose_sim"].fillna(0.0).astype(float).clip(0.0, 1.0)
+
+    score_series = (
+        generic_present.astype(int) * 60
+        + dose_present.astype(int) * 15
+        + route_evidence_present.astype(int) * 10
+        + atc_present.astype(int) * 15
+        + (dose_sim_clipped * 10).astype(int)
+    )
+    bonus_mask = (
+        out["did_brand_swap"].astype(bool)
+        & out["form_ok"]
+        & out["route_ok"]
+        & (out["dose_sim"].fillna(0.0).astype(float) >= 1.0)
+    )
+    score_series += bonus_mask.astype(int) * 10
+    out["confidence"] = score_series.astype(int)
+
+    union_lists: list[list[str]] = []
+    for pnf_tokens, who_tokens in zip(out["pnf_hits_tokens"], out["who_molecules_list"]):
+        names: list[str] = []
+        if isinstance(pnf_tokens, list):
+            for tok in pnf_tokens:
+                if isinstance(tok, str):
+                    names.append(_normalize_text_basic(_base_name(tok)))
+        if isinstance(who_tokens, list):
+            for tok in who_tokens:
+                if isinstance(tok, str):
+                    names.append(_normalize_text_basic(_base_name(tok)))
+        seen: set[str] = set()
+        uniq: list[str] = []
+        for name in names:
+            if name and name not in seen:
+                seen.add(name)
+                uniq.append(name)
+        union_lists.append(uniq)
+    out["molecules_recognized_list"] = union_lists
+    out["molecules_recognized"] = ["|".join(xs) if xs else "" for xs in union_lists]
+    out["molecules_recognized_count"] = [len(xs) for xs in union_lists]
+    out["who_atc_count"] = [len(xs) if isinstance(xs, list) else 0 for xs in out["who_atc_codes_list"]]
+
     out["probable_atc"] = np.where(~out["present_in_pnf"] & out["present_in_who"], out["who_atc_codes"], "")
 
-    # Initialize tags
     out["bucket_final"] = ""
     out["why_final"] = ""
     out["reason_final"] = ""
     out["match_quality"] = ""
-    out["match_molecule(s)"] = ""  # precise naming
+    out["match_molecule(s)"] = ""
 
-    # Derive *match_molecule(s)* tags
+    missing_strings: list[str] = []
+    for has_dose, has_form, has_route in zip(dose_present, form_present, route_present):
+        missing: list[str] = []
+        if not has_dose:
+            missing.append("dose")
+        if not has_form:
+            missing.append("form")
+        if not has_route:
+            missing.append("route")
+        if not missing:
+            missing_strings.append("")
+        elif len(missing) == 1:
+            missing_strings.append(f"no {missing[0]} available")
+        elif len(missing) == 2:
+            missing_strings.append(f"no {missing[0]} and {missing[1]} available")
+        else:
+            missing_strings.append("no dose, form, and route available")
+    missing_series = pd.Series(missing_strings, index=out.index, dtype="string")
+
     present_in_pnf = out["present_in_pnf"].astype(bool)
     present_in_who = out["present_in_who"].astype(bool)
     present_in_fda = out["present_in_fda_generic"].astype(bool)
-    has_atc_in_pnf = out["atc_code_final"].astype(str).str.len().gt(0)
+    has_atc_in_pnf = atc_present
 
     out.loc[present_in_pnf & has_atc_in_pnf, "match_molecule(s)"] = "ValidMoleculeWithATCinPNF"
     out.loc[(~present_in_pnf) & present_in_who, "match_molecule(s)"] = "ValidMoleculeWithATCinWHO/NotInPNF"
     out.loc[(~present_in_pnf) & (~present_in_who) & present_in_fda, "match_molecule(s)"] = "ValidMoleculeNoATCinFDA/NotInPNF"
 
-    # Brand-swapped variants
     out.loc[out["did_brand_swap"].astype(bool) & present_in_who, "match_molecule(s)"] = "ValidBrandSwappedForMoleculeWithATCinWHO"
     out.loc[out["did_brand_swap"].astype(bool) & present_in_pnf & has_atc_in_pnf, "match_molecule(s)"] = "ValidBrandSwappedForGenericInPNF"
 
-    # AUTO-ACCEPT
     is_candidate_like = out["generic_id"].notna()
-    form_ok_col = out["form_ok"].astype(bool)
-    route_ok_col = out["route_ok"].astype(bool)
-    auto_mask = is_candidate_like & present_in_pnf & has_atc_in_pnf & form_ok_col & route_ok_col
+    auto_mask = is_candidate_like & present_in_pnf & has_atc_in_pnf & out["form_ok"] & out["route_ok"]
     out.loc[auto_mask, "bucket_final"] = "Auto-Accept"
 
-    # Needs review
     needs_rev_mask = (out["bucket_final"] == "") & (is_candidate_like | present_in_who | present_in_fda)
     out.loc[needs_rev_mask, "bucket_final"] = "Needs review"
     out.loc[needs_rev_mask, "why_final"] = "Needs review"
 
-    # Match quality for Needs review
-    missing_strings = out.apply(lambda r: _missing_combo(r), axis=1).astype("string")
-    dose_mismatch_general = (out["dose_sim"].astype(float) < 1.0) & out["dosage_parsed"].astype(bool)
+    dose_mismatch_general = (out["dose_sim"].astype(float) < 1.0) & dose_present
     out.loc[needs_rev_mask & dose_mismatch_general, "match_quality"] = "dose mismatch"
-    out.loc[needs_rev_mask & (~dose_mismatch_general) & (missing_strings.str.len() > 0), "match_quality"] = missing_strings
+    out.loc[needs_rev_mask & (~dose_mismatch_general) & (missing_series.str.len() > 0), "match_quality"] = missing_series
     out.loc[needs_rev_mask & (out["match_quality"] == ""), "match_quality"] = "unspecified"
 
-    # Keep reason_final populated
     out.loc[needs_rev_mask, "reason_final"] = out.loc[needs_rev_mask, "match_quality"]
     out["reason_final"] = _mk_reason(out["reason_final"], "unspecified")
 
-    # Others: Unknowns
     unknown_single = out["unknown_kind"].eq("Single - Unknown")
     unknown_multi_all = out["unknown_kind"].eq("Multiple - All Unknown")
     unknown_multi_some = out["unknown_kind"].eq("Multiple - Some Unknown")
     none_found = out["unknown_kind"].eq("None")
     fallback_unknown = (~is_candidate_like) & (~present_in_who) & (~present_in_fda) & (~none_found)
-
-    def _annotate_unknown(s: str) -> str:
-        if s == "Single - Unknown": return "Single - Unknown (unknown to PNF, WHO, FDA)"
-        if s == "Multiple - All Unknown": return "Multiple - All Unknown (unknown to PNF, WHO, FDA)"
-        if s == "Multiple - Some Unknown": return "Multiple - Some Unknown (some unknown to PNF, WHO, FDA)"
-        return s
 
     for cond, reason in [
         (unknown_single | (fallback_unknown & unknown_single), "Single - Unknown"),
@@ -859,13 +959,11 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
         out.loc[mask, "why_final"] = "Unknown"
         out.loc[mask, "reason_final"] = _annotate_unknown(reason)
 
-    # Final safety net
     remaining = out["bucket_final"].eq("")
     out.loc[remaining, "bucket_final"] = "Needs review"
     out.loc[remaining, "why_final"] = "Needs review"
     out.loc[remaining, "reason_final"] = _mk_reason(out.loc[remaining, "match_quality"], "unspecified")
 
-    # Dose recognized: N/A unless exact
     if "dose_recognized" in out.columns:
         out["dose_recognized"] = np.where(out["dose_sim"].astype(float) == 1.0, out["dose_recognized"], "N/A")
 
@@ -978,13 +1076,24 @@ def _write_summary_text(out_small: pd.DataFrame, out_csv: str) -> None:
     with open(summary_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
 
-def write_outputs(out_df: pd.DataFrame, out_csv: str) -> str:
+def write_outputs(
+    out_df: pd.DataFrame,
+    out_csv: str,
+    *,
+    timing_hook: Callable[[str, float], None] | None = None,
+) -> str:
+    def _timed(label: str, func: Callable[[], None]) -> float:
+        elapsed = _run_with_spinner(label, func)
+        if timing_hook:
+            timing_hook(label, elapsed)
+        return elapsed
+
     out_small = out_df.copy()
     if "match_basis" not in out_small.columns:
         out_small["match_basis"] = out_small.get("normalized", "")
     out_small = out_small[[c for c in OUTPUT_COLUMNS if c in out_small.columns]].copy()
 
-    _run_with_spinner("Write matched CSV", lambda: out_small.to_csv(out_csv, index=False, encoding="utf-8"))
+    _timed("Write matched CSV", lambda: out_small.to_csv(out_csv, index=False, encoding="utf-8"))
 
     xlsx_out = os.path.splitext(out_csv)[0] + ".xlsx"
     def _to_excel():
@@ -1004,7 +1113,7 @@ def write_outputs(out_df: pd.DataFrame, out_csv: str) -> str:
                     ws.auto_filter.ref = ws.dimensions
                 except Exception:
                     pass
-    _run_with_spinner("Write Excel", _to_excel)
+    _timed("Write Excel", _to_excel)
 
     def _write_unknowns():
         unknown = out_small.loc[
@@ -1021,9 +1130,9 @@ def write_outputs(out_df: pd.DataFrame, out_csv: str) -> str:
             unk_df = unk_df.groupby("word").size().reset_index(name="count").sort_values("count", ascending=False)
             unk_path = os.path.join(os.path.dirname(out_csv), "unknown_words.csv")
             unk_df.to_csv(unk_path, index=False, encoding="utf-8")
-    _run_with_spinner("Write unknown words CSV", _write_unknowns)
+    _timed("Write unknown words CSV", _write_unknowns)
 
-    _run_with_spinner("Write summary.txt", lambda: _write_summary_text(out_small, out_csv))
+    _timed("Write summary.txt", lambda: _write_summary_text(out_small, out_csv))
 
     return out_csv
 
@@ -1070,27 +1179,35 @@ from .match_features import build_features
 from .match_scoring import score_and_classify
 from .match_outputs import write_outputs
 
-def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_matched.csv") -> str:
+def match(
+    pnf_prepared_csv: str,
+    esoa_prepared_csv: str,
+    out_csv: str = "esoa_matched.csv",
+    *,
+    timing_hook: Callable[[str, float], None] | None = None,
+) -> str:
+    def _timed(label: str, func: Callable[[], None]) -> float:
+        elapsed = _run_with_spinner(label, func)
+        if timing_hook:
+            timing_hook(label, elapsed)
+        return elapsed
+
     # Load inputs
     pnf_df = [None]
     esoa_df = [None]
-    _run_with_spinner("Load PNF prepared CSV", lambda: pnf_df.__setitem__(0, pd.read_csv(pnf_prepared_csv)))
-    _run_with_spinner("Load eSOA prepared CSV", lambda: esoa_df.__setitem__(0, pd.read_csv(esoa_prepared_csv)))
+    _timed("Load PNF prepared CSV", lambda: pnf_df.__setitem__(0, pd.read_csv(pnf_prepared_csv)))
+    _timed("Load eSOA prepared CSV", lambda: esoa_df.__setitem__(0, pd.read_csv(esoa_prepared_csv)))
 
     # Build features — inner function prints its own sub-spinners; do not show outer spinner
-    t0 = time.perf_counter()
-    features_df = build_features(pnf_df[0], esoa_df[0])
-    print(f"✓ {(time.perf_counter() - t0):7.2f}s Build features")
+    features_df = build_features(pnf_df[0], esoa_df[0], timing_hook=timing_hook)
 
     # Score & classify
     out_df = [None]
-    _run_with_spinner("Score & classify", lambda: out_df.__setitem__(0, score_and_classify(features_df, pnf_df[0])))
+    _timed("Score & classify", lambda: out_df.__setitem__(0, score_and_classify(features_df, pnf_df[0])))
 
     # Write outputs — inner module prints its own sub-spinners; do not show outer spinner
     out_path = os.path.abspath(out_csv)
-    t1 = time.perf_counter()
-    write_outputs(out_df[0], out_path)
-    print(f"✓ {(time.perf_counter() - t1):7.2f}s Write outputs")
+    write_outputs(out_df[0], out_path, timing_hook=timing_hook)
 
     return out_path
 
@@ -1376,6 +1493,7 @@ STOPWORD_TOKENS = (
 # ===============================
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+from __future__ import annotations
 
 import re
 from collections import defaultdict
@@ -1405,10 +1523,16 @@ def load_who_molecules(who_csv: str) -> Tuple[Dict[str, set], List[str]]:
     return codes_by_name, candidate_names
 
 
-def detect_all_who_molecules(text: str, regex, codes_by_name) -> Tuple[List[str], List[str]]:
+def detect_all_who_molecules(
+    text: str,
+    regex,
+    codes_by_name,
+    *,
+    pre_normalized: str | None = None,
+) -> Tuple[List[str], List[str]]:
     if not isinstance(text, str):
         return [], []
-    nt = _normalize_text_basic(text)
+    nt = pre_normalized if pre_normalized is not None else _normalize_text_basic(text)
     names = []
     for m in regex.finditer(nt):
         detected = m.group(1)
@@ -1823,6 +1947,137 @@ def run_with_spinner(label: str, func: Callable[[], None], start_delay: float = 
 
 
 # ----------------------------
+# Timing aggregation
+# ----------------------------
+GROUP_DEFINITIONS: list[tuple[str, tuple[str, ...]]] = [
+    (
+        "Setup & Prerequisites",
+        (
+            "Install requirements",
+            "ATC R preprocessing",
+            "Build FDA brand map",
+            "Prepare inputs",
+        ),
+    ),
+    (
+        "Data Loading & Validation",
+        (
+            "Load PNF prepared CSV",
+            "Load eSOA prepared CSV",
+            "Validate inputs",
+        ),
+    ),
+    (
+        "Reference Indexes",
+        (
+            "Index PNF names",
+            "Load WHO molecules",
+            "Load FDA brand map",
+            "Build brand automata",
+            "Index FDA generics",
+            "Build PNF automata",
+            "Build PNF partial index",
+        ),
+    ),
+    (
+        "Text Normalization",
+        (
+            "Normalize ESOA text",
+            "Parse dose/route/form (raw)",
+            "Apply brand→generic swaps",
+            "Parse dose/route/form (basis)",
+        ),
+    ),
+    (
+        "Matching & Detection",
+        (
+            "Scan PNF hits",
+            "Partial PNF fallback",
+            "Detect WHO molecules",
+        ),
+    ),
+    (
+        "Feature Enrichment",
+        (
+            "Compute combo features",
+            "Extract unknown tokens",
+            "Compute presence flags",
+        ),
+    ),
+    (
+        "Scoring & Outputs",
+        (
+            "Score & classify",
+            "Write matched CSV",
+            "Write Excel",
+            "Write unknown words CSV",
+            "Write summary.txt",
+        ),
+    ),
+    (
+        "Post-processing",
+        (
+            "Resolve unknowns",
+        ),
+    ),
+]
+
+STEP_TO_GROUP: dict[str, str] = {}
+GROUP_ORDER: list[str] = []
+for group_name, step_names in GROUP_DEFINITIONS:
+    GROUP_ORDER.append(group_name)
+    for step in step_names:
+        STEP_TO_GROUP[step] = group_name
+
+DEFAULT_GROUP = "Other"
+
+
+class TimingCollector:
+    def __init__(self) -> None:
+        self._entries: list[tuple[str, float]] = []
+
+    def add(self, label: str, seconds: float) -> None:
+        self._entries.append((label, seconds))
+
+    @property
+    def entries(self) -> list[tuple[str, float]]:
+        return list(self._entries)
+
+    def grouped_totals(self) -> dict[str, float]:
+        totals: dict[str, float] = {group: 0.0 for group in GROUP_ORDER}
+        other_total = 0.0
+        for label, seconds in self._entries:
+            group = STEP_TO_GROUP.get(label)
+            if group:
+                totals[group] += seconds
+            else:
+                other_total += seconds
+        if other_total > 0.0:
+            totals[DEFAULT_GROUP] = totals.get(DEFAULT_GROUP, 0.0) + other_total
+        return totals
+
+    def total(self) -> float:
+        return sum(seconds for _, seconds in self._entries)
+
+
+def _print_grouped_summary(timings: TimingCollector) -> None:
+    totals = timings.grouped_totals()
+    non_zero = [(group, secs) for group, secs in totals.items() if secs > 0.0]
+    if not non_zero:
+        return
+    label_width = max(len(group) for group, _ in non_zero)
+    print("\n=== Timing Summary ===")
+    total = 0.0
+    for group, secs in non_zero:
+        print(f"• {group:<{label_width}} {secs:9.2f}s")
+        total += secs
+    dash_count = label_width + 16
+    print("-" * dash_count)
+    padding = max(label_width - len("Total"), 0)
+    print(f"• Total{'':<{padding}} {total:9.2f}s")
+
+
+# ----------------------------
 # Steps (silent)
 # ----------------------------
 def install_requirements(req_path: str | os.PathLike[str]) -> None:
@@ -1901,14 +2156,37 @@ def create_master_file(root_dir: Path) -> None:
 def build_brand_map(inputs_dir: Path, outfile: Path | None) -> Path:
     date_str = datetime.now().strftime("%Y-%m-%d")
     out_csv = outfile or (inputs_dir / f"fda_brand_map_{date_str}.csv")
+    existing_maps = sorted(inputs_dir.glob("fda_brand_map_*.csv"), reverse=True)
     with open(os.devnull, "w") as devnull:
-        subprocess.run(
-            [sys.executable, "-m", "scripts.fda_ph_drug_scraper", "--outdir", str(inputs_dir), "--outfile", str(out_csv)],
-            check=True,
-            cwd=str(THIS_DIR),
-            stdout=devnull,
-            stderr=devnull,
-        )
+        try:
+            subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "scripts.fda_ph_drug_scraper",
+                    "--outdir",
+                    str(inputs_dir),
+                    "--outfile",
+                    str(out_csv),
+                ],
+                check=True,
+                cwd=str(THIS_DIR),
+                stdout=devnull,
+                stderr=devnull,
+            )
+        except subprocess.CalledProcessError as exc:
+            if existing_maps:
+                fallback = existing_maps[0]
+                print(
+                    "! Build FDA brand map failed; reusing existing file "
+                    f"{fallback.name}. Run with --skip-brandmap to avoid this step when offline.",
+                    file=sys.stderr,
+                )
+                return fallback
+            raise RuntimeError(
+                "Building FDA brand map failed and no prior map is available. "
+                "Re-run with --skip-brandmap if the FDA site is unreachable."
+            ) from exc
     return out_csv
 
 
@@ -1962,44 +2240,36 @@ def main_entry() -> None:
     from scripts.prepare import prepare as _prepare
     from scripts.match import match as _match
 
-    timings: list[tuple[str, float]] = []
+    timings = TimingCollector()
 
     if not args.skip_install and args.requirements:
         t = run_with_spinner("Install requirements", lambda: install_requirements(args.requirements))
-        timings.append(("Install requirements", t))
+        timings.add("Install requirements", t)
 
     if not args.skip_r:
         t = run_with_spinner("ATC R preprocessing", run_r_scripts)
-        timings.append(("ATC R preprocessing", t))
+        timings.add("ATC R preprocessing", t)
 
     if not args.skip_brandmap:
         t = run_with_spinner("Build FDA brand map", lambda: build_brand_map(inputs_dir, outfile=None))
-        timings.append(("Build FDA brand map", t))
+        timings.add("Build FDA brand map", t)
 
     t = run_with_spinner("Prepare inputs", lambda: _prepare(str(pnf_path), str(esoa_path), str(inputs_dir)))
-    timings.append(("Prepare inputs", t))
+    timings.add("Prepare inputs", t)
 
     # Let tqdm own the console for matching; no outer spinner here.
-    t0 = time.perf_counter()
     _match(
         str(inputs_dir / "pnf_prepared.csv"),
         str(inputs_dir / "esoa_prepared.csv"),
         str(out_path),
+        timing_hook=timings.add,
     )
-    t_match = time.perf_counter() - t0
-    print(f"✓ {t_match:7.2f}s Match & write outputs")
-    timings.append(("Match & write outputs", t_match))
 
     t = run_with_spinner("Resolve unknowns", run_resolve_unknowns)
-    timings.append(("Resolve unknowns", t))
+    timings.add("Resolve unknowns", t)
 
     # Final timing summary (console only)
-    print("\n=== Timing Summary ===")
-    total = 0.0
-    for name, secs in timings:
-        print(f"• {name:<24} {secs:9.2f}s")
-        total += secs
-    print(f"{'-'*38}\n• Total{'':<21} {total:9.2f}s")
+    _print_grouped_summary(timings)
 
 
 if __name__ == "__main__":

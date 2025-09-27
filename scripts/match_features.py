@@ -73,7 +73,18 @@ def load_latest_who_dir(root_dir: str) -> str | None:
 def _tokenize_unknowns(s_norm: str) -> List[str]:
     return [m.group(0) for m in GENERIC_TOKEN_RX.finditer(s_norm)]
 
-def build_features(pnf_df: pd.DataFrame, esoa_df: pd.DataFrame) -> pd.DataFrame:
+def build_features(
+    pnf_df: pd.DataFrame,
+    esoa_df: pd.DataFrame,
+    *,
+    timing_hook: Callable[[str, float], None] | None = None,
+) -> pd.DataFrame:
+    def _timed(label: str, func: Callable[[], None]) -> float:
+        elapsed = _run_with_spinner(label, func)
+        if timing_hook:
+            timing_hook(label, elapsed)
+        return elapsed
+
     # 1) Validate inputs
     def _validate():
         required_pnf = {
@@ -85,7 +96,7 @@ def build_features(pnf_df: pd.DataFrame, esoa_df: pd.DataFrame) -> pd.DataFrame:
             raise ValueError(f"pnf_prepared.csv missing columns: {missing}")
         if "raw_text" not in esoa_df.columns:
             raise ValueError("esoa_prepared.csv must contain a 'raw_text' column")
-    _run_with_spinner("Validate inputs", _validate)
+    _timed("Validate inputs", _validate)
 
     # 2) Map normalized PNF names to gid + original name
     pnf_name_to_gid: Dict[str, Tuple[str, str]] = {}
@@ -94,7 +105,7 @@ def build_features(pnf_df: pd.DataFrame, esoa_df: pd.DataFrame) -> pd.DataFrame:
             key = _normalize_text_basic(_base_name(str(gname)))
             if key and key not in pnf_name_to_gid:
                 pnf_name_to_gid[key] = (gid, gname)
-    _run_with_spinner("Index PNF names", _pnf_map)
+    _timed("Index PNF names", _pnf_map)
     pnf_name_set: Set[str] = set(pnf_name_to_gid.keys())
 
     # 3) WHO molecules (names + regex)
@@ -110,7 +121,7 @@ def build_features(pnf_df: pd.DataFrame, esoa_df: pd.DataFrame) -> pd.DataFrame:
             candidate_names.extend(cand)
             who_name_set.update(cbn.keys())
             who_regex[0] = re.compile(r"\b(" + "|".join(map(re.escape, candidate_names)) + r")\b") if candidate_names else None
-    _run_with_spinner("Load WHO molecules", _load_who)
+    _timed("Load WHO molecules", _load_who)
     who_regex = who_regex[0]
 
     # 4) Brand map & FDA generics
@@ -119,14 +130,14 @@ def build_features(pnf_df: pd.DataFrame, esoa_df: pd.DataFrame) -> pd.DataFrame:
         project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
         inputs_dir = os.path.join(project_root, "inputs")
         brand_df[0] = load_latest_brandmap(inputs_dir)
-    _run_with_spinner("Load FDA brand map", _load_brand)
+    _timed("Load FDA brand map", _load_brand)
     has_brandmap = brand_df[0] is not None and not brand_df[0].empty
     if has_brandmap:
         B_norm = [None]; B_comp = [None]; brand_lookup = [{}]; fda_gens = [set()]
-        _run_with_spinner("Build brand automata", lambda: (
+        _timed("Build brand automata", lambda: (
             (lambda r: (B_norm.__setitem__(0, r[0]), B_comp.__setitem__(0, r[1]), brand_lookup.__setitem__(0, r[2])))(build_brand_automata(brand_df[0]))
         ))
-        _run_with_spinner("Index FDA generics", lambda: fda_gens.__setitem__(0, fda_generics_set(brand_df[0])))
+        _timed("Index FDA generics", lambda: fda_gens.__setitem__(0, fda_generics_set(brand_df[0])))
         B_norm, B_comp, brand_lookup, fda_gens = B_norm[0], B_comp[0], brand_lookup[0], fda_gens[0]
     else:
         B_norm = B_comp = None
@@ -135,11 +146,11 @@ def build_features(pnf_df: pd.DataFrame, esoa_df: pd.DataFrame) -> pd.DataFrame:
 
     # 5) PNF automata + partial index
     A_norm = [None]; A_comp = [None]
-    _run_with_spinner("Build PNF automata", lambda: (
+    _timed("Build PNF automata", lambda: (
         (lambda r: (A_norm.__setitem__(0, r[0]), A_comp.__setitem__(0, r[1])))(build_molecule_automata(pnf_df))
     ))
     pnf_partial_idx = [None]
-    _run_with_spinner("Build PNF partial index", lambda: pnf_partial_idx.__setitem__(0, PnfTokenIndex().build_from_pnf(pnf_df)))
+    _timed("Build PNF partial index", lambda: pnf_partial_idx.__setitem__(0, PnfTokenIndex().build_from_pnf(pnf_df)))
     A_norm, A_comp, pnf_partial_idx = A_norm[0], A_comp[0], pnf_partial_idx[0]
 
     # 6) Base ESOA frame and text normalization
@@ -151,7 +162,7 @@ def build_features(pnf_df: pd.DataFrame, esoa_df: pd.DataFrame) -> pd.DataFrame:
         tmp["normalized"] = tmp["raw_text"].map(normalize_text)
         tmp["norm_compact"] = tmp["normalized"].map(lambda s: re.sub(r"[ \-]", "", s))
         df.append(tmp)
-    _run_with_spinner("Normalize ESOA text", _mk_base)
+    _timed("Normalize ESOA text", _mk_base)
     df = df[-1]
 
     # 7) Dose/route/form on original normalized text
@@ -160,7 +171,7 @@ def build_features(pnf_df: pd.DataFrame, esoa_df: pd.DataFrame) -> pd.DataFrame:
         df["dosage_parsed_raw"] = df["normalized"].map(_extract_dosage)
         df["dose_recognized"] = df["dosage_parsed_raw"].map(_friendly_dose)
         df["route_raw"], df["form_raw"], df["route_evidence_raw"] = zip(*df["normalized"].map(extract_route_and_form))
-    _run_with_spinner("Parse dose/route/form (raw)", _dose_route_form_raw)
+    _timed("Parse dose/route/form (raw)", _dose_route_form_raw)
 
     # 8) Brand → Generic swap (if brand map available)
     def _brand_swap():
@@ -219,14 +230,15 @@ def build_features(pnf_df: pd.DataFrame, esoa_df: pd.DataFrame) -> pd.DataFrame:
         df["match_basis"] = mb_list
         df["did_brand_swap"] = swapped
         df["fda_dose_corroborated"] = fda_hits
-    _run_with_spinner("Apply brand→generic swaps", _brand_swap)
+    _timed("Apply brand→generic swaps", _brand_swap)
+    df["match_basis_norm_basic"] = df["match_basis"].map(_normalize_text_basic)
 
     # 9) Dose/route/form on match_basis
     def _dose_route_form_basis():
         from .dose import extract_dosage as _extract_dosage
         df["dosage_parsed"] = df["match_basis"].map(_extract_dosage)
         df["route"], df["form"], df["route_evidence"] = zip(*df["match_basis"].map(extract_route_and_form))
-    _run_with_spinner("Parse dose/route/form (basis)", _dose_route_form_basis)
+    _timed("Parse dose/route/form (basis)", _dose_route_form_basis)
 
     # 10) PNF hits (Aho-Corasick) on match_basis
     def _pnf_hits():
@@ -238,7 +250,7 @@ def build_features(pnf_df: pd.DataFrame, esoa_df: pd.DataFrame) -> pd.DataFrame:
             else: primary_gid.append(None); primary_token.append(None)
         df["pnf_hits_gids"] = pnf_hits_gids; df["pnf_hits_tokens"] = pnf_hits_tokens; df["pnf_hits_count"] = pnf_hits_count
         df["generic_id"] = primary_gid; df["molecule_token"] = primary_token
-    _run_with_spinner("Scan PNF hits", _pnf_hits)
+    _timed("Scan PNF hits", _pnf_hits)
 
     # 11) Partial PNF fallback
     def _pnf_partial():
@@ -257,23 +269,26 @@ def build_features(pnf_df: pd.DataFrame, esoa_df: pd.DataFrame) -> pd.DataFrame:
             df.loc[mask_partial, "generic_id"] = [g for g in partial_gids if g is not None]
             df.loc[mask_partial, "molecule_token"] = [t for t in partial_tokens if t is not None]
             df.loc[mask_partial, "pnf_hits_count"] = df.loc[mask_partial, "pnf_hits_count"].fillna(0).astype(int) + 1
-    _run_with_spinner("Partial PNF fallback", _pnf_partial)
+    _timed("Partial PNF fallback", _pnf_partial)
 
     # 12) WHO molecule detection
     def _who_detect():
         if who_regex:
             who_names_all, who_atc_all = [], []
-            for txt in df["match_basis"].tolist():
-                names, codes = detect_all_who_molecules(txt, who_regex, codes_by_name)
-                who_names_all.append(names); who_atc_all.append(sorted(codes))
-            df["who_molecules_list"] = who_names_all; df["who_atc_codes_list"] = who_atc_all
+            for txt, txt_norm in zip(df["match_basis"].tolist(), df["match_basis_norm_basic"].tolist()):
+                names, codes = detect_all_who_molecules(txt, who_regex, codes_by_name, pre_normalized=txt_norm)
+                who_names_all.append(names)
+                who_atc_all.append(sorted(codes))
+            df["who_molecules_list"] = who_names_all
+            df["who_atc_codes_list"] = who_atc_all
             df["who_molecules"] = df["who_molecules_list"].map(lambda xs: "|".join(xs) if xs else "")
             df["who_atc_codes"] = df["who_atc_codes_list"].map(lambda xs: "|".join(xs) if xs else "")
         else:
             df["who_molecules_list"] = [[] for _ in range(len(df))]
             df["who_atc_codes_list"] = [[] for _ in range(len(df))]
-            df["who_molecules"] = ""; df["who_atc_codes"] = ""
-    _run_with_spinner("Detect WHO molecules", _who_detect)
+            df["who_molecules"] = ""
+            df["who_atc_codes"] = ""
+    _timed("Detect WHO molecules", _who_detect)
 
     # 13) Combination detection helpers
     def _combo_feats():
@@ -293,7 +308,7 @@ def build_features(pnf_df: pd.DataFrame, esoa_df: pd.DataFrame) -> pd.DataFrame:
         df["combo_known_generics_count"] = known_counts
         df["looks_combo_final"] = df["combo_known_generics_count"].ge(2)
         df["combo_reason"] = np.where(df["looks_combo_final"], "combo/known-generics>=2", "single/heuristic")
-    _run_with_spinner("Compute combo features", _combo_feats)
+    _timed("Compute combo features", _combo_feats)
 
     # 14) Unknown tokens extraction
     def _unknowns():
@@ -324,13 +339,13 @@ def build_features(pnf_df: pd.DataFrame, esoa_df: pd.DataFrame) -> pd.DataFrame:
         df["unknown_kind"] = kinds
         df["unknown_words_list"] = lists_
         df["unknown_words"] = df["unknown_words_list"].map(lambda xs: "|".join(xs) if xs else "")
-    _run_with_spinner("Extract unknown tokens", _unknowns)
+    _timed("Extract unknown tokens", _unknowns)
 
     # 15) Presence flags
     def _presence_flags():
         df["present_in_pnf"] = df["pnf_hits_count"].astype(int).gt(0)
         df["present_in_who"] = df["who_atc_codes"].astype(str).str.len().gt(0)
         df["present_in_fda_generic"] = df["match_basis"].map(lambda s: any(tok in fda_gens for tok in _tokenize_unknowns(_segment_norm(s))))
-    _run_with_spinner("Compute presence flags", _presence_flags)
+    _timed("Compute presence flags", _presence_flags)
 
     return df
