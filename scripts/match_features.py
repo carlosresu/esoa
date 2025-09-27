@@ -5,7 +5,7 @@ import sys, time, glob, os, re
 from typing import Tuple, Optional, List, Dict, Set, Callable
 import numpy as np, pandas as pd
 from .aho import build_molecule_automata, scan_pnf_all
-from .combos import looks_like_combination, split_combo_segments
+from .combos import SALT_TOKENS, looks_like_combination, split_combo_segments
 from .routes_forms import extract_route_and_form
 from .text_utils import _base_name, _normalize_text_basic, normalize_text, extract_parenthetical_phrases, STOPWORD_TOKENS
 from .who_molecules import detect_all_who_molecules, load_who_molecules
@@ -245,6 +245,15 @@ def build_features(
         primary_gid, primary_token, pnf_hits_gids, pnf_hits_tokens, pnf_hits_count = [], [], [], [], []
         for s_norm, s_comp in zip(df["match_basis"], df["norm_compact"]):
             gids, tokens = scan_pnf_all(s_norm, s_comp, A_norm, A_comp)
+            if tokens:
+                salt_flags = []
+                for tok in tokens:
+                    base_tok = _normalize_text_basic(_base_name(tok))
+                    words = base_tok.split()
+                    salt_flags.append(bool(words) and all(word in SALT_TOKENS for word in words))
+                if any(not flag for flag in salt_flags):
+                    gids = [g for g, is_salt in zip(gids, salt_flags) if not is_salt]
+                    tokens = [t for t, is_salt in zip(tokens, salt_flags) if not is_salt]
             pnf_hits_gids.append(gids); pnf_hits_tokens.append(tokens); pnf_hits_count.append(len(gids))
             if gids: primary_gid.append(gids[0]); primary_token.append(tokens[0])
             else: primary_gid.append(None); primary_token.append(None)
