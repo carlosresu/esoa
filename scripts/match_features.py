@@ -32,12 +32,12 @@ def _run_with_spinner(label: str, func: Callable[[], None]) -> float:
     frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"; i = 0
     while not done.is_set():
         elapsed = time.perf_counter() - t0
-        sys.stdout.write(f"\r{frames[i % len(frames)]} {label} … {elapsed:0.1f}s")
+        sys.stdout.write(f"\r{frames[i % len(frames)]} {elapsed:7.2f}s {label}")
         sys.stdout.flush()
         time.sleep(0.1); i += 1
     th.join()
     elapsed = time.perf_counter() - t0
-    sys.stdout.write(f"\r✓ {label} — done in {elapsed:0.2f}s\n")
+    sys.stdout.write(f"\r✓ {elapsed:7.2f}s {label}\n")
     sys.stdout.flush()
     if err:
         raise err[0]
