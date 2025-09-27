@@ -110,19 +110,22 @@ def build_features(
 
     # 3) WHO molecules (names + regex)
     codes_by_name, candidate_names = ({}, [])
+    who_details_by_code: Dict[str, List[dict]] = {}
     who_name_set: Set[str] = set()
-    who_regex = [None]
+    who_regex_box = [None]
     def _load_who():
         root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
         who_file = load_latest_who_dir(root_dir)
         if who_file and os.path.exists(who_file):
-            cbn, cand = load_who_molecules(who_file)
+            cbn, cand, details = load_who_molecules(who_file)
             codes_by_name.update(cbn)
             candidate_names.extend(cand)
             who_name_set.update(cbn.keys())
-            who_regex[0] = re.compile(r"\b(" + "|".join(map(re.escape, candidate_names)) + r")\b") if candidate_names else None
+            who_details_by_code.update(details)
+            if candidate_names:
+                who_regex_box[0] = re.compile(r"\b(" + "|".join(map(re.escape, candidate_names)) + r")\b")
     _timed("Load WHO molecules", _load_who)
-    who_regex = who_regex[0]
+    who_regex = who_regex_box[0]
 
     # 4) Brand map & FDA generics
     brand_df = [None]
@@ -282,21 +285,48 @@ def build_features(
 
     # 12) WHO molecule detection
     def _who_detect():
-        if who_regex:
+        if who_regex is not None:
             who_names_all, who_atc_all = [], []
+            who_ddd_flags: List[bool] = []
+            who_adm_r_cols: List[str] = []
             for txt, txt_norm in zip(df["match_basis"].tolist(), df["match_basis_norm_basic"].tolist()):
                 names, codes = detect_all_who_molecules(txt, who_regex, codes_by_name, pre_normalized=txt_norm)
                 who_names_all.append(names)
-                who_atc_all.append(sorted(codes))
+                sorted_codes = sorted(codes)
+                who_atc_all.append(sorted_codes)
+
+                has_ddd = False
+                adm_r_values: set[str] = set()
+                for code in sorted_codes:
+                    for detail in who_details_by_code.get(code, []):
+                        ddd_val = detail.get("ddd")
+                        if pd.notna(ddd_val) and str(ddd_val).strip():
+                            has_ddd = True
+                        uom_val = detail.get("uom")
+                        if pd.isna(ddd_val) and pd.notna(uom_val):
+                            # conserve future compatibility; no-op currently
+                            pass
+                        adm_r_val = detail.get("adm_r")
+                        if pd.notna(adm_r_val):
+                            adm_r_text = str(adm_r_val).strip()
+                            if adm_r_text:
+                                adm_r_values.add(adm_r_text.lower())
+                who_ddd_flags.append(has_ddd)
+                who_adm_r_cols.append("|".join(sorted(adm_r_values)) if adm_r_values else "")
+
             df["who_molecules_list"] = who_names_all
             df["who_atc_codes_list"] = who_atc_all
             df["who_molecules"] = df["who_molecules_list"].map(lambda xs: "|".join(xs) if xs else "")
             df["who_atc_codes"] = df["who_atc_codes_list"].map(lambda xs: "|".join(xs) if xs else "")
+            df["who_atc_has_ddd"] = who_ddd_flags
+            df["who_atc_adm_r"] = who_adm_r_cols
         else:
             df["who_molecules_list"] = [[] for _ in range(len(df))]
             df["who_atc_codes_list"] = [[] for _ in range(len(df))]
             df["who_molecules"] = ""
             df["who_atc_codes"] = ""
+            df["who_atc_has_ddd"] = False
+            df["who_atc_adm_r"] = ""
     _timed("Detect WHO molecules", _who_detect)
 
     # 13) Combination detection helpers
