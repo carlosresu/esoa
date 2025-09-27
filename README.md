@@ -59,36 +59,37 @@ Normalization:
 
 - Converts g↦mg, µg/μg↦mcg, L↦1000 mL
 - Computes mg per mL for ratio doses when possible
+- Dose alignment (dose_sim):
 
-Dose similarity (dose_sim):
-
-- ≤0.1% error → 1.0
-- ≤5% error → 0.8
-- ≤10% error → 0.6
-- 10% → 0.0
+  - Returns 1.0 only when the eSOA dose equals the PNF payload exactly after unit conversion. Anything else scores 0.0, keeping auto-accepts precise.
+  - Ratio doses require the same mg/mL (or equivalent) and percent strengths must match exactly.
+  - Special equivalence: modified-release trimetazidine capsules (55–90 mg) are still accepted against the 35 mg base strength in the PNF.
 
 Public health/program implications  
-These thresholds affect how many items are deemed adequate matches automatically vs. flagged for review.
+Exact matching maximizes precision but increases manual review load when facilities document rounded strengths. Program choices determine whether more therapeutic equivalence rules should be added.
 
 Supervisor input needed
 
-- Is ±10% a suitable tolerance for dose match in this program?
-- Should different forms (e.g., inhalation vs. oral solutions) have stricter or looser tolerance?
+- Should we introduce configurable tolerances or extend `_SPECIAL_AMOUNT_EQUIVALENCE` to other molecules with consistent packaging differences?
+- For which clinical areas (e.g., pediatric dilutions) would a near-match rule still be acceptable without compromising safety?
 
 ---
 
-2. Route & Form Detection (scripts/routes_forms.py)
+2. Route & Form Detection (scripts/routes_forms.py + scripts/match_scoring.py)
 
-- Recognizes forms (tablet, cap, MDI, DPI, susp, soln, spray, supp, etc.) and maps to canonical routes (oral, inhalation, nasal, rectal, etc.)
-- Expands aliases (PO, per os, intranasal, SL, IM, IV, etc.)
-- If route is missing but form is known, imputes route from form
+- Recognizes forms (tablet, cap, MDI, DPI, susp, soln, spray, supp, etc.) and maps them to canonical routes (oral, inhalation, nasal, rectal, etc.), expanding common aliases (PO, per os, SL, IM, IV, etc.).
+- When an eSOA entry is missing the route but the form is present, the PNF-derived route is imputed and logged in `route_evidence`.
+- The scorer keeps a per-route interchange whitelist (`APPROVED_ROUTE_FORMS`) so, for example, tablets and capsules under the oral route both satisfy `form_ok`. Accepted substitutions are surfaced in `route_form_imputations`.
+- Suspicious but historically observed combinations (e.g., oral vials) live in `FLAGGED_ROUTE_FORM_EXCEPTIONS`; they remain valid yet receive a `flagged:` annotation so reviewers know why the match passed.
+- Solid oral forms are not auto-imputed when the detected dose is a ratio (mg/mL) to avoid creating impossible solid/liquid pairings.
 
 Public health/program implications  
-Strict route equality may over-flag valid cases when PNF route lists are incomplete.
+This policy controls where the system treats forms as interchangeable. Expanding the whitelist reduces manual review but risks masking clinically important distinctions (e.g., sachet vs suspension).
 
 Supervisor input needed
 
-- Should we require exact route alignment, or allow imputed/fuzzy matches?
+- Does the current `APPROVED_ROUTE_FORMS` mapping reflect program policy—for instance, should syrups, suspensions, and sachets all count as interchangeable oral forms?
+- Are there additional flagged route/form exceptions that should always require human review, or conversely, any that can be safely promoted into the approved list?
 
 ---
 
@@ -129,33 +130,22 @@ Supervisor input needed
 
 For each eSOA entry with at least one PNF candidate:
 
-- Scoring
-- Form match: +40
-- Route match: +30
-- Dose similarity (dose_sim × 30)
-- Picks the highest-scoring candidate as the best variant and reports:
-  - match_quality ∈ {OK, no/poor dose, no/poor form, no/poor route}
-  - selected_form, selected_variant, dose_sim, form_ok, route_ok, atc_code_final
-- Confidence score (for context):  
-  +60 if generic found, +15 dose parsed, +10 route evidence, +15 ATC code, +0–10 from dose_sim, +10 bonus for clean brand swap.
-- Auto-Accept policy (relaxed):
-  - Auto-Accept if:
-    - PNF generic identified
-    - ATC code present
-    - form_ok and route_ok
-  - Dose mismatch no longer blocks Auto-Accept, but such rows are flagged for supervisors:
-    - why_final = "OK, dose mismatch" (or "OK, brand->generic swap (dose mismatch)")
-    - reason_final = "no/poor dose match"
+- Filters out PNF variants whose `route_allowed` does not contain the detected route.
+- Recomputes `dose_sim` against the selected PNF row (exact equality as described above) and prefers liquid formulations when the source dose is a ratio.
+- Normalizes route/form pairs against the `APPROVED_ROUTE_FORMS` whitelist, marking accepted substitutions or flagged exceptions in `route_form_imputations`.
+- Safely imputes missing form/route (`form_source`/`route_source`) from the chosen PNF variant when the text is silent and the inferred form would be coherent.
+- Emits `selected_form`, `selected_variant`, detailed dose fields, and `dose_recognized` when the dose matches exactly.
+- `match_quality` covers `dose mismatch`, `form mismatch`, `route mismatch`, `route/form_mismatch`, or notes about missing contextual data; unresolved cases fall back to `unspecified`.
+- Confidence scoring: +60 generic present, +15 dose parsed, +10 route evidence, +15 ATC, +⌊dose_sim×10⌋, +10 extra when a clean brand swap aligns on dose/form/route.
+- Auto-Accept when a PNF generic with ATC is present and both `form_ok` and `route_ok` are true. Dose mismatches therefore become visible through `dose_sim`/`match_quality` (and optional flagged notes) but do not block Auto-Accept.
 
 Public health/program implications  
-Dose mismatches still allow ATC assignment and Auto-Accept, reducing false negatives while keeping supervisor oversight by flagging these cases for review.
+The acceptance criteria balance reviewer workload against the risk of approving near-but-not-exact matches. Requiring dose equality keeps the column transparent, but the Auto-Accept gate still needs policy oversight.
 
 Supervisor input needed
 
-- Keep the strict Auto-Accept (~15% auto-accept), or relax back toward confidence-based (~56% auto-accept)?
-- Strict Auto-Accept policies reduce false positives but yield fewer auto-accepted matches (~15%).  
-  Relaxed policies increase coverage (~56% auto-accept) but may require more supervisor review.  
-  Trade-offs include balancing workload vs. completeness and risk tolerance.
+- Should Auto-Accept additionally require `dose_sim == 1.0`, or remain tolerant provided route/form are aligned?
+- Are the confidence-score weights (60/15/10/15/±10 + bonus) appropriate for triaging review queues, or should brand swaps/dose corroboration carry different weight?
 
 ---
 
@@ -166,6 +156,7 @@ Supervisor input needed
   - Single - Unknown
   - Multiple - All Unknown
   - Multiple - Some Unknown
+- Post-processing via `resolve_unknowns.py` scans those tokens against PNF/WHO/FDA catalogues (token n-grams) and writes `missed_generics.csv` with suggested reference hits.
 
 Public health/program implications  
 Frequent unknowns may mean missing formulary entries, local shorthand, or data quality issues.
@@ -182,12 +173,13 @@ Supervisor input needed
 
 ## 📊 Outputs
 
-- outputs/esoa_matched.csv — Main matched dataset
-- outputs/esoa_matched.xlsx — Excel version
-- outputs/summary.txt — Classification distribution
-- outputs/unknown_words.csv — Frequency of unmatched tokens
+- outputs/esoa_matched.csv — Main matched dataset (includes `route_form_imputations`, `dose_sim`, `confidence`, etc.)
+- outputs/esoa_matched.xlsx — Filterable Excel view of the same records
+- outputs/summary.txt — Default bucket breakdown; `summary_molecule.txt` and `summary_match.txt` provide molecule- and reason-focused pivots
+- outputs/unknown_words.csv — Frequency of unmatched tokens (fed into post-processing)
+- outputs/missed_generics.csv — Suggestions from `resolve_unknowns.py` that map unknown tokens back to PNF/WHO/FDA references (whole or partial n-gram matches)
 
-Example summary:
+Example summary (values from a historical run; your counts will vary):
 
 Distribution Summary  
 Auto-Accept: 17,089 (15.16%)  
@@ -257,20 +249,20 @@ Optional flags
 
 ## ✅ Summary of Items for Supervisor Input
 
-1. Dose tolerance  
-   Is the current ±10% dose similarity tolerance appropriate for the program’s needs? Should we consider stricter dose matching for certain forms or routes, such as inhalation products or oral solutions, where small dose differences might have greater clinical significance? Conversely, are there cases where a looser tolerance might be acceptable? How should we balance sensitivity versus specificity in dose matching to optimize public health surveillance?
+1. Dose equivalence rules  
+   Dose scoring now demands exact equality (aside from explicit overrides such as modified-release trimetazidine). Do we need more equivalence rules for other molecules, or is strict equality still the desired policy?
 
-2. Route/Form strictness  
-   Should the pipeline require exact matches between the detected route and form of the eSOA entry and the PNF reference, or allow for imputed or fuzzy matches? For example, should tablets and capsules be considered interchangeable forms (cap ↔ tab), or should we enforce strict form equality? How do we handle missing or ambiguous route information—should imputed routes from known forms be accepted, or flagged for review? What level of route/form flexibility best supports accurate and practical matching?
+2. Route/Form interchange list  
+   The `APPROVED_ROUTE_FORMS` whitelist defines which forms are interchangeable within a route, and `FLAGGED_ROUTE_FORM_EXCEPTIONS` document tolerated but suspicious pairings. Does this match clinical policy, and are there additions/removals required before deployment?
 
-3. Auto-Accept policy  
-   The current relaxed Auto-Accept policy allows dose mismatches but flags them for supervisor review, increasing auto-accept coverage to about 56%. Alternatively, stricter Auto-Accept policies yield fewer auto-accepted matches (~15%) but reduce false positives. Which approach better fits the program’s risk tolerance and workload capacity? Should we prioritize maximizing automatic matches with some flagged dose mismatches, or prefer fewer but more conservative auto-accepts? How should confidence scores and match criteria be weighted to optimize this trade-off?
+3. Auto-Accept gate  
+   Auto-Accept currently ignores dose mismatches as long as a PNF+ATC match with aligned route/form is present. Should we tighten this (e.g., require `dose_sim == 1.0`, brand corroboration, or a higher confidence score) to reduce downstream review risk?
 
 4. Salts/esters policy  
-   Should certain salt or ester forms (e.g., hydrochloride, hemisuccinate, palmitate) be treated as distinct active molecules for surveillance and reporting, or considered as the same base molecule? What are the implications for data aggregation, monitoring, and public health interpretation? Are there specific esters or salts that should always be grouped or separated? How do these decisions affect the accuracy and usefulness of the matched dataset?
+   Should certain salt or ester forms (e.g., hydrochloride, hemisuccinate, palmitate) be treated as distinct actives for surveillance, or grouped with the base molecule as the current salt-list logic does? Clarifying this determines how combination detection and aggregation behave.
 
 5. Unknowns triage  
-   How should we triage unknown tokens extracted during matching? Which categories of unknowns should trigger formulary enrichment (e.g., adding missing drugs to the PNF), local mapping efforts (e.g., creating local aliases or shorthand mappings), or data quality remediation (e.g., correcting typos, OCR errors, or inconsistent formats)? What workflow or criteria should guide these decisions to efficiently improve coverage and data quality over time? Should some unknowns be prioritized for immediate action based on frequency or impact?
+   `unknown_words.csv` plus `missed_generics.csv` flag candidate additions for the PNF/WHO/FDA dictionaries. Which buckets trigger formulary enrichment, local alias mapping, or data-quality remediation, and who owns each follow-up loop?
 
 ---
 
