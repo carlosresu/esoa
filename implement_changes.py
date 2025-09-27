@@ -97,16 +97,47 @@ def parse_master(master_path: Path) -> Dict[Path, str]:
     # Normalize to single trailing newline
     return {p: ("\n".join(buf).rstrip("\n") + "\n") for p, buf in files.items()}
 
+
+def _normalize_text(s: str) -> str:
+    """
+    Normalize text for reliable comparisons across platforms:
+    - Convert CRLF/CR to LF
+    - Ensure exactly one trailing newline
+    """
+    s = s.replace("\r\n", "\n").replace("\r", "\n")
+    return s.rstrip("\n") + "\n"
+
 def write_outputs(mapping: Dict[Path, str], repo_root: Path) -> List[Tuple[Path, int]]:
+    """
+    Write only files whose content differs from what's already on disk.
+    Returns a list of (absolute_path, bytes_written) for files actually modified.
+    """
     written: List[Tuple[Path, int]] = []
     for rel, content in mapping.items():
         target = (repo_root / rel).resolve()
         if not str(target).startswith(str(repo_root.resolve())):
             raise RuntimeError(f"Unsafe path resolved outside repo: {target}")
+
+        # Make sure parent exists before potential write
         target.parent.mkdir(parents=True, exist_ok=True)
+
+        # Normalize new content once
+        new_norm = _normalize_text(content)
+
+        # If file exists, compare normalized contents to avoid unnecessary writes
+        if target.exists():
+            try:
+                existing = target.read_text(encoding="utf-8", errors="replace")
+                if _normalize_text(existing) == new_norm:
+                    # Identical; skip touching the file
+                    continue
+            except Exception:
+                # If reading fails for any reason, fall back to writing
+                pass
+
         with open(target, "w", encoding="utf-8", newline="\n") as f:
-            f.write(content)
-        written.append((target, len(content.encode("utf-8"))))
+            f.write(new_norm)
+        written.append((target, len(new_norm.encode("utf-8"))))
     return written
 
 def main() -> int:
