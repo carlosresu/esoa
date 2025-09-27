@@ -1,3 +1,4 @@
+# <scripts/match.py>
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 from __future__ import annotations
@@ -47,16 +48,19 @@ def match(pnf_prepared_csv: str, esoa_prepared_csv: str, out_csv: str = "esoa_ma
     _run_with_spinner("Load PNF prepared CSV", lambda: pnf_df.__setitem__(0, pd.read_csv(pnf_prepared_csv)))
     _run_with_spinner("Load eSOA prepared CSV", lambda: esoa_df.__setitem__(0, pd.read_csv(esoa_prepared_csv)))
 
-    # Build features (internally split into many sub-spinners)
-    features_df = [None]
-    _run_with_spinner("Build features", lambda: features_df.__setitem__(0, build_features(pnf_df[0], esoa_df[0])))
+    # Build features — inner function prints its own sub-spinners; do not show outer spinner
+    t0 = time.perf_counter()
+    features_df = build_features(pnf_df[0], esoa_df[0])
+    print(f"✓ Build features — done in {time.perf_counter() - t0:0.2f}s")
 
     # Score & classify
     out_df = [None]
-    _run_with_spinner("Score & classify", lambda: out_df.__setitem__(0, score_and_classify(features_df[0], pnf_df[0])))
+    _run_with_spinner("Score & classify", lambda: out_df.__setitem__(0, score_and_classify(features_df, pnf_df[0])))
 
-    # Write outputs (internally split into sub-spinners)
+    # Write outputs — inner module prints its own sub-spinners; do not show outer spinner
     out_path = os.path.abspath(out_csv)
-    _run_with_spinner("Write outputs", lambda: write_outputs(out_df[0], out_path))
+    t1 = time.perf_counter()
+    write_outputs(out_df[0], out_path)
+    print(f"✓ Write outputs — done in {time.perf_counter() - t1:0.2f}s")
 
     return out_path
