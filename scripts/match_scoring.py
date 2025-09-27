@@ -7,6 +7,34 @@ import ast
 import numpy as np
 import pandas as pd
 
+APPROVED_ROUTE_FORMS: dict[str, set[str]] = {
+    "oral": {"tablet", "capsule", "sachet", "suspension", "solution", "syrup", "suppository"},
+    "nasal": {"solution"},
+    "inhalation": {"solution", "dpi", "mdi"},
+    "intravenous": {"solution", "ampule", "vial", "injection", "suspension"},
+    "intramuscular": {"solution", "ampule", "vial", "injection", "suspension"},
+    "subcutaneous": {"solution", "ampule", "vial", "injection", "suspension"},
+    "rectal": {"suppository", "solution"},
+    "ophthalmic": {"solution", "suspension", "ointment", "gel"},
+    "topical": {"solution", "ointment", "gel", "lotion", "cream", "sachet"},
+    "vaginal": {"cream", "suppository", "tablet"},
+    "otic": {"solution"},
+    "sublingual": {"tablet"},
+    "transdermal": {"patch"},
+}
+
+FLAGGED_ROUTE_FORM_EXCEPTIONS: set[tuple[str, str]] = {
+    ("oral", "vial"),
+    ("oral", "ampule"),
+    ("intravenous", "syrup"),
+    ("intramuscular", "syrup"),
+    ("subcutaneous", "syrup"),
+    ("intravenous", "tablet"),
+    ("intramuscular", "tablet"),
+    ("subcutaneous", "tablet"),
+    ("ophthalmic", "injection"),
+}
+
 from .dose import dose_similarity
 from .text_utils import _base_name, _normalize_text_basic
 
@@ -76,7 +104,32 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
             "cap": "capsule",
             "caps": "capsule",
             "capsule": "capsule",
+            "capsulee": "capsule",
             "susp": "suspension",
+            "suspension": "suspension",
+            "syr": "syrup",
+            "syrup": "syrup",
+            "sol": "solution",
+            "soln": "solution",
+            "solution": "solution",
+            "ointment": "ointment",
+            "oint": "ointment",
+            "gel": "gel",
+            "cream": "cream",
+            "lotion": "lotion",
+            "patch": "patch",
+            "supp": "suppository",
+            "suppository": "suppository",
+            "dpi": "dpi",
+            "mdi": "mdi",
+            "ampu": "ampule",
+            "ampul": "ampule",
+            "ampule": "ampule",
+            "ampoule": "ampule",
+            "amp": "ampule",
+            "vial": "vial",
+            "inj": "injection",
+            "injection": "injection",
         }.get(value, value)
 
     def _split_route_allowed(value: object) -> set[str]:
@@ -444,6 +497,74 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     out = out.apply(_maybe_improve_selection, axis=1, result_type="expand")
     out["dose_sim"] = pd.to_numeric(out["dose_sim"], errors="coerce").fillna(0.0)
 
+    form_values = out["form"].fillna("").astype(str).str.strip()
+    selected_form_values = out["selected_form"].fillna("").astype(str).str.strip()
+    route_values = out["route"].fillna("").astype(str).str.strip()
+
+    form_ok_array = out["form_ok"].astype(bool).to_numpy()
+    route_form_flags: list[str] = []
+    route_form_invalid_flags: list[bool] = []
+
+    for idx, route_raw, text_form_raw, pnf_form_raw in zip(
+        range(len(out)), route_values, form_values, selected_form_values
+    ):
+        route_norm = _normalize_route(route_raw)
+        text_form_norm = _normalize_form_token(text_form_raw)
+        pnf_form_norm = _normalize_form_token(pnf_form_raw)
+        approved_forms = APPROVED_ROUTE_FORMS.get(route_norm)
+        invalid = False
+        flag_message = ""
+
+        def _is_allowed(form_norm: str) -> tuple[bool, bool]:
+            if not form_norm:
+                return True, False
+            if approved_forms is None:
+                return True, False
+            if form_norm in approved_forms:
+                return True, False
+            if (route_norm, form_norm) in FLAGGED_ROUTE_FORM_EXCEPTIONS:
+                return True, True
+            return False, False
+
+        text_allowed, text_flagged = _is_allowed(text_form_norm)
+        pnf_allowed, pnf_flagged = _is_allowed(pnf_form_norm)
+
+        invalid = bool(approved_forms) and ((text_form_norm and not text_allowed) or (pnf_form_norm and not pnf_allowed))
+
+        if invalid:
+            form_ok_array[idx] = False
+            offending = text_form_norm if text_form_norm and not text_allowed else pnf_form_norm
+            offending_display = offending or "unspecified"
+            if route_norm:
+                flag_message = f"invalid: {route_norm}={offending_display}"
+            else:
+                flag_message = f"invalid: {offending_display}"
+        else:
+            route_has_rules = approved_forms is not None
+            if route_has_rules:
+                if text_form_norm and pnf_form_norm and text_form_norm in approved_forms and pnf_form_norm in approved_forms:
+                    form_ok_array[idx] = True
+                    if text_form_norm != pnf_form_norm:
+                        flag_message = f"accepted: {text_form_norm}={pnf_form_norm}"
+                elif text_form_norm and text_form_norm in approved_forms and not pnf_form_norm:
+                    form_ok_array[idx] = True
+                elif pnf_form_norm and pnf_form_norm in approved_forms and not text_form_norm:
+                    form_ok_array[idx] = True
+
+            if (text_flagged or pnf_flagged):
+                form_ok_array[idx] = True
+            if (text_flagged or pnf_flagged) and not flag_message:
+                flagged_form = text_form_norm if text_flagged else pnf_form_norm
+                flagged_form_disp = flagged_form or "unspecified"
+                flag_message = f"flagged: {route_norm}={flagged_form_disp}" if route_norm else f"flagged: {flagged_form_disp}"
+
+        route_form_flags.append(flag_message)
+        route_form_invalid_flags.append(invalid)
+
+    out["form_ok"] = pd.Series(form_ok_array, index=out.index)
+    out["route_form_imputations"] = pd.Series(route_form_flags, index=out.index)
+    route_form_invalid_mask = pd.Series(route_form_invalid_flags, index=out.index)
+
     dose_present = pd.Series([bool(x) for x in out["dosage_parsed"]], index=out.index)
     form_present = pd.Series([bool(x) for x in out["form"]], index=out.index)
     route_present = pd.Series([bool(x) for x in out["route"]], index=out.index)
@@ -567,6 +688,7 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
 
     unresolved = needs_rev_mask & (out["match_quality"] == "")
     out.loc[unresolved & (route_conflict | route_unreliable), "match_quality"] = "route mismatch"
+    out.loc[needs_rev_mask & route_form_invalid_mask, "match_quality"] = "route/form_mismatch"
     out.loc[needs_rev_mask & (out["match_quality"] == ""), "match_quality"] = "unspecified"
 
     out.loc[needs_rev_mask, "reason_final"] = out.loc[needs_rev_mask, "match_quality"]
