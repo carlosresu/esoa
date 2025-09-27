@@ -660,6 +660,21 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     out.loc[needs_rev_mask, "why_final"] = "Needs review"
 
     dose_mismatch_general = (out["dose_sim"].astype(float) < 1.0) & dose_present
+    if "selected_variant" in out.columns:
+        selected_variant_series = out["selected_variant"]
+    else:
+        selected_variant_series = pd.Series([None] * len(out), index=out.index)
+    selected_variant_present = (
+        selected_variant_series.fillna("").astype(str).str.strip().ne("")
+    )
+    if "who_atc_has_ddd" in out.columns:
+        who_has_ddd = out["who_atc_has_ddd"].fillna(False).astype(bool)
+    else:
+        who_has_ddd = pd.Series(False, index=out.index)
+    who_brand_swap = out["match_molecule(s)"].eq("ValidBrandSwappedForMoleculeWithATCinWHO")
+    dose_mismatch_general = dose_mismatch_general & (
+        selected_variant_present | (who_brand_swap & who_has_ddd)
+    )
     out.loc[needs_rev_mask & dose_mismatch_general, "match_quality"] = "dose mismatch"
     out.loc[needs_rev_mask & (~dose_mismatch_general) & (missing_series.str.len() > 0), "match_quality"] = missing_series
 

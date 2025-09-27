@@ -12,23 +12,34 @@ import pandas as pd
 from .text_utils import _base_name, _normalize_text_basic
 
 
-def load_who_molecules(who_csv: str) -> Tuple[Dict[str, set], List[str]]:
+def load_who_molecules(who_csv: str) -> Tuple[Dict[str, set], List[str], Dict[str, List[dict]]]:
     who = pd.read_csv(who_csv)
     who["name_base"] = who["atc_name"].fillna("").map(_base_name)
     who["name_norm"] = who["atc_name"].fillna("").map(_normalize_text_basic)
     who["name_base_norm"] = who["name_base"].map(_normalize_text_basic)
 
     codes_by_name = defaultdict(set)
+    details_by_code: Dict[str, List[dict]] = defaultdict(list)
     for _, r in who.iterrows():
         codes_by_name[r["name_base_norm"]].add(r["atc_code"])
         codes_by_name[r["name_norm"]].add(r["atc_code"])
+
+        details_by_code[r["atc_code"]].append(
+            {
+                "atc_name": r.get("atc_name"),
+                "ddd": r.get("ddd"),
+                "uom": r.get("uom"),
+                "adm_r": r.get("adm_r"),
+                "note": r.get("note"),
+            }
+        )
 
     candidate_names = sorted(
         set(list(who["name_norm"]) + list(who["name_base_norm"])),
         key=len, reverse=True
     )
     candidate_names = [n for n in candidate_names if len(n) > 2]
-    return codes_by_name, candidate_names
+    return codes_by_name, candidate_names, details_by_code
 
 
 def detect_all_who_molecules(

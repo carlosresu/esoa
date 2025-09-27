@@ -42,7 +42,7 @@ OUTPUT_COLUMNS = [
     "dose_recognized","dose_kind_detected","route","route_source","route_text","form","form_source","form_text",
     "present_in_pnf","present_in_who","present_in_fda_generic","probable_atc",
     "generic_id","molecule_token","pnf_hits_count","pnf_hits_tokens",
-    "who_molecules","who_atc_codes","who_atc_count",
+    "who_molecules","who_atc_codes","who_atc_count","who_atc_has_ddd","who_atc_adm_r",
     "route_evidence","route_form_imputations","dosage_parsed","selected_form","selected_route_allowed","selected_variant",
     "selected_dose_kind","selected_strength","selected_unit","selected_strength_mg",
     "selected_per_val","selected_per_unit","selected_ratio_mg_per_ml","selected_pct","dose_sim",
