@@ -185,6 +185,14 @@ def build_features(
             return
         mb_list, swapped = [], []
         fda_hits = []
+
+        def _clean_generic_for_swap(name: str) -> str:
+            base = _base_name(name)
+            base = re.sub(r"\(.*?\)", " ", base)
+            base = re.split(r"\bas\b", base, 1)[0]
+            base = re.sub(r"\s+", " ", base).strip()
+            return base or _base_name(name)
+
         for norm, comp, form, friendly, parens in zip(
             df["normalized"], df["norm_compact"], df["form_raw"], df["dose_recognized"], df["parentheticals"]
         ):
@@ -201,6 +209,7 @@ def build_features(
             uniq_keys.sort(key=lambda k: (-lengths.get(k, len(k)), k))
 
             out = norm; replaced_any = False
+            primary_option = None
             for bn in uniq_keys:
                 options = brand_lookup.get(bn, [])
                 chosen_generic = None
@@ -214,10 +223,36 @@ def build_features(
                         if gen_base in pnf_name_to_gid: sc += 3
                         return sc
                     options = sorted(options, key=_score, reverse=True)
-                    chosen_generic = options[0].generic if options else None
+                    if options:
+                        primary_option = options[0]
+                        chosen_generic = primary_option.generic
                 if not chosen_generic:
                     continue
-                gd_norm = normalize_text(chosen_generic)
+                clean_generic = _clean_generic_for_swap(chosen_generic)
+                gd_norm = normalize_text(clean_generic)
+                if not gd_norm:
+                    gd_norm = normalize_text(chosen_generic)
+
+                norm_basic_current = _normalize_text_basic(out)
+                generic_basic = _normalize_text_basic(clean_generic)
+                root_token = generic_basic.split()[0] if generic_basic else ""
+                tokens_set = set(norm_basic_current.split())
+                has_generic_already = False
+                if root_token and root_token in tokens_set:
+                    has_generic_already = True
+                elif generic_basic and generic_basic in norm_basic_current:
+                    has_generic_already = True
+                elif generic_basic in pnf_name_set and generic_basic in tokens_set:
+                    has_generic_already = True
+
+                if has_generic_already:
+                    new_out = re.sub(rf"\b{re.escape(bn)}\b", "", out)
+                    new_out = re.sub(r"\s+", " ", new_out).strip()
+                    if new_out != out:
+                        replaced_any = True
+                        out = new_out
+                    continue
+
                 new_out = re.sub(rf"\b{re.escape(bn)}\b", gd_norm, out)
                 if new_out != out:
                     replaced_any = True
@@ -225,8 +260,8 @@ def build_features(
             out = re.sub(r"\s+", " ", out).strip()
             # FDA dose corroboration
             fda_hit = False
-            if options and friendly:
-                ds = getattr(options[0], "dosage_strength", "") or ""
+            if primary_option and friendly:
+                ds = getattr(primary_option, "dosage_strength", "") or ""
                 if ds and friendly.lower() in ds.lower():
                     fda_hit = True
             mb_list.append(out); swapped.append(replaced_any); fda_hits.append(fda_hit)
