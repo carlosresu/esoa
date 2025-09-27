@@ -46,23 +46,23 @@ OUTPUT_COLUMNS = [
     "route_evidence","dosage_parsed","selected_form","selected_variant","dose_sim",
     "did_brand_swap","looks_combo_final","combo_reason","combo_known_generics_count",
     "unknown_kind","unknown_words",
-    "atc_code_final","confidence","bucket_final","why_final","reason_final",
+    "atc_code_final","confidence",
+    "match_molecules","match_quality",
+    "bucket_final","why_final","reason_final",
 ]
 
 def _write_summary_text(out_small: pd.DataFrame, out_csv: str) -> None:
     total = len(out_small)
-    grouped = (out_small.groupby(["bucket_final","why_final","reason_final"], dropna=False).size().reset_index(name="n"))
-    grouped["pct"] = (grouped["n"] / float(total) * 100).round(2) if total else 0.0
-
     lines = []
-    aa = int(grouped.loc[grouped["bucket_final"].eq("Auto-Accept"), "n"].sum()) if total else 0
-    aa_pct = round(aa / float(total) * 100, 2) if total else 0.0
     lines.append("Distribution Summary")
-    lines.append(f"Auto-Accept: {aa:,} ({aa_pct}%)")
 
+    # Auto-Accept
+    auto_rows = out_small.loc[out_small["bucket_final"].eq("Auto-Accept")].copy()
+    aa = int(len(auto_rows)) if total else 0
+    aa_pct = round(aa / float(total) * 100, 2) if total else 0.0
+    lines.append(f"Auto-Accept: {aa:,} ({aa_pct}%)")
     if aa:
-        aa_rows = out_small.loc[out_small["bucket_final"].eq("Auto-Accept")].copy()
-        swaps = int(aa_rows.get("did_brand_swap", False).sum()) if "did_brand_swap" in aa_rows.columns else 0
+        swaps = int(auto_rows.get("did_brand_swap", False).sum()) if "did_brand_swap" in auto_rows.columns else 0
         ok_no_change = max(0, aa - swaps)
         if swaps:
             pct = round(swaps / float(total) * 100, 2)
@@ -71,26 +71,35 @@ def _write_summary_text(out_small: pd.DataFrame, out_csv: str) -> None:
             pct = round(ok_no_change / float(total) * 100, 2)
             lines.append(f"  OK, no changes: {ok_no_change:,} ({pct}%)")
 
-    nr = grouped[grouped["bucket_final"].eq("Candidate")].copy()
-    if not nr.empty:
-        nr_total = int(nr["n"].sum())
-        nr_total_pct = round(nr_total / float(total) * 100, 2) if total else 0.0
-        lines.append(f"Needs review: {nr_total:,} ({nr_total_pct}%)")
-        nr = nr.sort_values(by=["why_final","reason_final","n"], ascending=[True, True, False])
-        for _, row in nr.iterrows():
+    # Needs review
+    nr_rows = out_small.loc[out_small["bucket_final"].eq("Needs review")].copy()
+    nr = int(len(nr_rows))
+    nr_pct = round(nr / float(total) * 100, 2) if total else 0.0
+    lines.append(f"Needs review: {nr:,} ({nr_pct}%)")
+    if nr:
+        grouped = (
+            nr_rows.groupby(["why_final","reason_final"], dropna=False)
+            .size().reset_index(name="n")
+        )
+        grouped["pct"] = (grouped["n"] / float(total) * 100).round(2) if total else 0.0
+        grouped = grouped.sort_values(by=["why_final","reason_final","n"], ascending=[True, True, False])
+        for _, row in grouped.iterrows():
             lines.append(f"  {row['why_final']}: {row['reason_final']}: {row['n']:,} ({row['pct']}%)")
-    else:
-        lines.append("Needs review: 0 (0.00%)")
 
-    oth = grouped[grouped["bucket_final"].eq("Others")].copy()
-    if not oth.empty:
-        total_oth = int(oth["n"].sum()); total_oth_pct = round(total_oth / float(total) * 100, 2) if total else 0.0
-        lines.append(f"Others: {total_oth:,} ({total_oth_pct}%)")
-        oth = oth.sort_values(by=["why_final","reason_final","n"], ascending=[True, True, False])
-        for _, row in oth.iterrows():
+    # Others (Unknown)
+    oth_rows = out_small.loc[out_small["bucket_final"].eq("Others")].copy()
+    oth = int(len(oth_rows))
+    oth_pct = round(oth / float(total) * 100, 2) if total else 0.0
+    lines.append(f"Others: {oth:,} ({oth_pct}%)")
+    if oth:
+        grouped_oth = (
+            oth_rows.groupby(["why_final","reason_final"], dropna=False)
+            .size().reset_index(name="n")
+        )
+        grouped_oth["pct"] = (grouped_oth["n"] / float(total) * 100).round(2) if total else 0.0
+        grouped_oth = grouped_oth.sort_values(by=["why_final","reason_final","n"], ascending=[True, True, False])
+        for _, row in grouped_oth.iterrows():
             lines.append(f"  {row['why_final']}: {row['reason_final']}: {row['n']:,} ({row['pct']}%)")
-    else:
-        lines.append("Others: 0 (0.00%)")
 
     summary_path = os.path.join(os.path.dirname(out_csv), "summary.txt")
     with open(summary_path, "w", encoding="utf-8") as f:
