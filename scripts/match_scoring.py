@@ -541,6 +541,32 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     dose_mismatch_general = (out["dose_sim"].astype(float) < 1.0) & dose_present
     out.loc[needs_rev_mask & dose_mismatch_general, "match_quality"] = "dose mismatch"
     out.loc[needs_rev_mask & (~dose_mismatch_general) & (missing_series.str.len() > 0), "match_quality"] = missing_series
+
+    form_norm = out["form"].map(_normalize_form_token)
+    sel_form_norm = out["selected_form"].map(_normalize_form_token)
+    form_source = out["form_source"].fillna("").astype(str).str.lower()
+    form_conflict = (
+        form_norm.ne("")
+        & sel_form_norm.ne("")
+        & (form_norm != sel_form_norm)
+    )
+    form_unreliable = form_source.ne("text") & sel_form_norm.ne("")
+
+    route_norm = out["route"].map(_normalize_route)
+    route_source = out["route_source"].fillna("").astype(str).str.lower()
+    allowed_sets = out["selected_route_allowed"].map(_split_route_allowed)
+    route_conflict = [
+        bool(r) and ((not allowed) or (r not in allowed))
+        for r, allowed in zip(route_norm, allowed_sets)
+    ]
+    route_conflict = pd.Series(route_conflict, index=out.index)
+    route_unreliable = route_source.ne("text") & (route_norm != "")
+
+    unresolved = needs_rev_mask & (out["match_quality"] == "")
+    out.loc[unresolved & (form_conflict | form_unreliable), "match_quality"] = "form mismatch"
+
+    unresolved = needs_rev_mask & (out["match_quality"] == "")
+    out.loc[unresolved & (route_conflict | route_unreliable), "match_quality"] = "route mismatch"
     out.loc[needs_rev_mask & (out["match_quality"] == ""), "match_quality"] = "unspecified"
 
     out.loc[needs_rev_mask, "reason_final"] = out.loc[needs_rev_mask, "match_quality"]
@@ -552,6 +578,31 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     none_found = out["unknown_kind"].eq("None")
     fallback_unknown = (~is_candidate_like) & (~present_in_who) & (~present_in_fda) & (~none_found)
 
+    def _annotate_unknown_with_presence(base_reason: str, idx: pd.Index) -> pd.Series:
+        canonical = _annotate_unknown(base_reason)
+        if "(" in canonical and canonical.endswith(")"):
+            head, tail = canonical.split("(", 1)
+            base_text = head.strip()
+            default_detail = tail.rsplit(")", 1)[0].strip()
+        else:
+            base_text = canonical
+            default_detail = "unknown to PNF, WHO, FDA"
+        labels = []
+        for i in idx:
+            sources = []
+            if present_in_pnf[i]:
+                sources.append("PNF")
+            if present_in_who[i]:
+                sources.append("WHO")
+            if present_in_fda[i]:
+                sources.append("FDA")
+            if sources:
+                detail = f"known in {'/'.join(sources)}; remaining tokens unknown"
+            else:
+                detail = default_detail
+            labels.append(f"{base_text} ({detail})")
+        return pd.Series(labels, index=idx)
+
     for cond, reason in [
         (unknown_single | (fallback_unknown & unknown_single), "Single - Unknown"),
         (unknown_multi_all | (fallback_unknown & unknown_multi_all), "Multiple - All Unknown"),
@@ -560,7 +611,8 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
         mask = cond & (out["bucket_final"] == "")
         out.loc[mask, "bucket_final"] = "Others"
         out.loc[mask, "why_final"] = "Unknown"
-        out.loc[mask, "reason_final"] = _annotate_unknown(reason)
+        if mask.any():
+            out.loc[mask, "reason_final"] = _annotate_unknown_with_presence(reason, out.loc[mask].index)
 
     remaining = out["bucket_final"].eq("")
     out.loc[remaining, "bucket_final"] = "Needs review"
