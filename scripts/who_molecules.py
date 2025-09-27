@@ -1,6 +1,7 @@
 # ===============================
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+from __future__ import annotations
 
 import re
 from collections import defaultdict
@@ -30,10 +31,16 @@ def load_who_molecules(who_csv: str) -> Tuple[Dict[str, set], List[str]]:
     return codes_by_name, candidate_names
 
 
-def detect_all_who_molecules(text: str, regex, codes_by_name) -> Tuple[List[str], List[str]]:
+def detect_all_who_molecules(
+    text: str,
+    regex,
+    codes_by_name,
+    *,
+    pre_normalized: str | None = None,
+) -> Tuple[List[str], List[str]]:
     if not isinstance(text, str):
         return [], []
-    nt = _normalize_text_basic(text)
+    nt = pre_normalized if pre_normalized is not None else _normalize_text_basic(text)
     names = []
     for m in regex.finditer(nt):
         detected = m.group(1)

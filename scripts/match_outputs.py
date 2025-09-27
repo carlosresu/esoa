@@ -104,13 +104,24 @@ def _write_summary_text(out_small: pd.DataFrame, out_csv: str) -> None:
     with open(summary_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
 
-def write_outputs(out_df: pd.DataFrame, out_csv: str) -> str:
+def write_outputs(
+    out_df: pd.DataFrame,
+    out_csv: str,
+    *,
+    timing_hook: Callable[[str, float], None] | None = None,
+) -> str:
+    def _timed(label: str, func: Callable[[], None]) -> float:
+        elapsed = _run_with_spinner(label, func)
+        if timing_hook:
+            timing_hook(label, elapsed)
+        return elapsed
+
     out_small = out_df.copy()
     if "match_basis" not in out_small.columns:
         out_small["match_basis"] = out_small.get("normalized", "")
     out_small = out_small[[c for c in OUTPUT_COLUMNS if c in out_small.columns]].copy()
 
-    _run_with_spinner("Write matched CSV", lambda: out_small.to_csv(out_csv, index=False, encoding="utf-8"))
+    _timed("Write matched CSV", lambda: out_small.to_csv(out_csv, index=False, encoding="utf-8"))
 
     xlsx_out = os.path.splitext(out_csv)[0] + ".xlsx"
     def _to_excel():
@@ -130,7 +141,7 @@ def write_outputs(out_df: pd.DataFrame, out_csv: str) -> str:
                     ws.auto_filter.ref = ws.dimensions
                 except Exception:
                     pass
-    _run_with_spinner("Write Excel", _to_excel)
+    _timed("Write Excel", _to_excel)
 
     def _write_unknowns():
         unknown = out_small.loc[
@@ -147,8 +158,8 @@ def write_outputs(out_df: pd.DataFrame, out_csv: str) -> str:
             unk_df = unk_df.groupby("word").size().reset_index(name="count").sort_values("count", ascending=False)
             unk_path = os.path.join(os.path.dirname(out_csv), "unknown_words.csv")
             unk_df.to_csv(unk_path, index=False, encoding="utf-8")
-    _run_with_spinner("Write unknown words CSV", _write_unknowns)
+    _timed("Write unknown words CSV", _write_unknowns)
 
-    _run_with_spinner("Write summary.txt", lambda: _write_summary_text(out_small, out_csv))
+    _timed("Write summary.txt", lambda: _write_summary_text(out_small, out_csv))
 
     return out_csv

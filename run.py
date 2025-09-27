@@ -117,6 +117,137 @@ def run_with_spinner(label: str, func: Callable[[], None], start_delay: float = 
 
 
 # ----------------------------
+# Timing aggregation
+# ----------------------------
+GROUP_DEFINITIONS: list[tuple[str, tuple[str, ...]]] = [
+    (
+        "Setup & Prerequisites",
+        (
+            "Install requirements",
+            "ATC R preprocessing",
+            "Build FDA brand map",
+            "Prepare inputs",
+        ),
+    ),
+    (
+        "Data Loading & Validation",
+        (
+            "Load PNF prepared CSV",
+            "Load eSOA prepared CSV",
+            "Validate inputs",
+        ),
+    ),
+    (
+        "Reference Indexes",
+        (
+            "Index PNF names",
+            "Load WHO molecules",
+            "Load FDA brand map",
+            "Build brand automata",
+            "Index FDA generics",
+            "Build PNF automata",
+            "Build PNF partial index",
+        ),
+    ),
+    (
+        "Text Normalization",
+        (
+            "Normalize ESOA text",
+            "Parse dose/route/form (raw)",
+            "Apply brand→generic swaps",
+            "Parse dose/route/form (basis)",
+        ),
+    ),
+    (
+        "Matching & Detection",
+        (
+            "Scan PNF hits",
+            "Partial PNF fallback",
+            "Detect WHO molecules",
+        ),
+    ),
+    (
+        "Feature Enrichment",
+        (
+            "Compute combo features",
+            "Extract unknown tokens",
+            "Compute presence flags",
+        ),
+    ),
+    (
+        "Scoring & Outputs",
+        (
+            "Score & classify",
+            "Write matched CSV",
+            "Write Excel",
+            "Write unknown words CSV",
+            "Write summary.txt",
+        ),
+    ),
+    (
+        "Post-processing",
+        (
+            "Resolve unknowns",
+        ),
+    ),
+]
+
+STEP_TO_GROUP: dict[str, str] = {}
+GROUP_ORDER: list[str] = []
+for group_name, step_names in GROUP_DEFINITIONS:
+    GROUP_ORDER.append(group_name)
+    for step in step_names:
+        STEP_TO_GROUP[step] = group_name
+
+DEFAULT_GROUP = "Other"
+
+
+class TimingCollector:
+    def __init__(self) -> None:
+        self._entries: list[tuple[str, float]] = []
+
+    def add(self, label: str, seconds: float) -> None:
+        self._entries.append((label, seconds))
+
+    @property
+    def entries(self) -> list[tuple[str, float]]:
+        return list(self._entries)
+
+    def grouped_totals(self) -> dict[str, float]:
+        totals: dict[str, float] = {group: 0.0 for group in GROUP_ORDER}
+        other_total = 0.0
+        for label, seconds in self._entries:
+            group = STEP_TO_GROUP.get(label)
+            if group:
+                totals[group] += seconds
+            else:
+                other_total += seconds
+        if other_total > 0.0:
+            totals[DEFAULT_GROUP] = totals.get(DEFAULT_GROUP, 0.0) + other_total
+        return totals
+
+    def total(self) -> float:
+        return sum(seconds for _, seconds in self._entries)
+
+
+def _print_grouped_summary(timings: TimingCollector) -> None:
+    totals = timings.grouped_totals()
+    non_zero = [(group, secs) for group, secs in totals.items() if secs > 0.0]
+    if not non_zero:
+        return
+    label_width = max(len(group) for group, _ in non_zero)
+    print("\n=== Timing Summary ===")
+    total = 0.0
+    for group, secs in non_zero:
+        print(f"• {group:<{label_width}} {secs:9.2f}s")
+        total += secs
+    dash_count = label_width + 16
+    print("-" * dash_count)
+    padding = max(label_width - len("Total"), 0)
+    print(f"• Total{'':<{padding}} {total:9.2f}s")
+
+
+# ----------------------------
 # Steps (silent)
 # ----------------------------
 def install_requirements(req_path: str | os.PathLike[str]) -> None:
@@ -195,14 +326,43 @@ def create_master_file(root_dir: Path) -> None:
 def build_brand_map(inputs_dir: Path, outfile: Path | None) -> Path:
     date_str = datetime.now().strftime("%Y-%m-%d")
     out_csv = outfile or (inputs_dir / f"fda_brand_map_{date_str}.csv")
-    with open(os.devnull, "w") as devnull:
-        subprocess.run(
-            [sys.executable, "-m", "scripts.fda_ph_drug_scraper", "--outdir", str(inputs_dir), "--outfile", str(out_csv)],
-            check=True,
-            cwd=str(THIS_DIR),
-            stdout=devnull,
-            stderr=devnull,
+    if out_csv.exists():
+        print(
+            f"✓ Using existing FDA brand map for {date_str}: {out_csv.name}",
+            file=sys.stderr,
         )
+        return out_csv
+    existing_maps = sorted(inputs_dir.glob("fda_brand_map_*.csv"), reverse=True)
+    with open(os.devnull, "w") as devnull:
+        try:
+            subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "scripts.fda_ph_drug_scraper",
+                    "--outdir",
+                    str(inputs_dir),
+                    "--outfile",
+                    str(out_csv),
+                ],
+                check=True,
+                cwd=str(THIS_DIR),
+                stdout=devnull,
+                stderr=devnull,
+            )
+        except subprocess.CalledProcessError as exc:
+            if existing_maps:
+                fallback = existing_maps[0]
+                print(
+                    "! Build FDA brand map failed; reusing existing file "
+                    f"{fallback.name}. Run with --skip-brandmap to avoid this step when offline.",
+                    file=sys.stderr,
+                )
+                return fallback
+            raise RuntimeError(
+                "Building FDA brand map failed and no prior map is available. "
+                "Re-run with --skip-brandmap if the FDA site is unreachable."
+            ) from exc
     return out_csv
 
 
@@ -256,44 +416,36 @@ def main_entry() -> None:
     from scripts.prepare import prepare as _prepare
     from scripts.match import match as _match
 
-    timings: list[tuple[str, float]] = []
+    timings = TimingCollector()
 
     if not args.skip_install and args.requirements:
         t = run_with_spinner("Install requirements", lambda: install_requirements(args.requirements))
-        timings.append(("Install requirements", t))
+        timings.add("Install requirements", t)
 
     if not args.skip_r:
         t = run_with_spinner("ATC R preprocessing", run_r_scripts)
-        timings.append(("ATC R preprocessing", t))
+        timings.add("ATC R preprocessing", t)
 
     if not args.skip_brandmap:
         t = run_with_spinner("Build FDA brand map", lambda: build_brand_map(inputs_dir, outfile=None))
-        timings.append(("Build FDA brand map", t))
+        timings.add("Build FDA brand map", t)
 
     t = run_with_spinner("Prepare inputs", lambda: _prepare(str(pnf_path), str(esoa_path), str(inputs_dir)))
-    timings.append(("Prepare inputs", t))
+    timings.add("Prepare inputs", t)
 
     # Let tqdm own the console for matching; no outer spinner here.
-    t0 = time.perf_counter()
     _match(
         str(inputs_dir / "pnf_prepared.csv"),
         str(inputs_dir / "esoa_prepared.csv"),
         str(out_path),
+        timing_hook=timings.add,
     )
-    t_match = time.perf_counter() - t0
-    print(f"✓ {t_match:7.2f}s Match & write outputs")
-    timings.append(("Match & write outputs", t_match))
 
     t = run_with_spinner("Resolve unknowns", run_resolve_unknowns)
-    timings.append(("Resolve unknowns", t))
+    timings.add("Resolve unknowns", t)
 
     # Final timing summary (console only)
-    print("\n=== Timing Summary ===")
-    total = 0.0
-    for name, secs in timings:
-        print(f"• {name:<24} {secs:9.2f}s")
-        total += secs
-    print(f"{'-'*38}\n• Total{'':<21} {total:9.2f}s")
+    _print_grouped_summary(timings)
 
 
 if __name__ == "__main__":
