@@ -2,6 +2,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import ast
+
 import numpy as np
 import pandas as pd
 
@@ -136,18 +138,42 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
                     for val in best_rows["atc_code"]
                 ]
 
-                best_by_idx = pd.DataFrame(
-                    {
-                        "atc_code_final": atc_values,
-                        "dose_sim": best_rows["dose_sim"].astype(float),
-                        "form_ok": best_rows["_form_ok"].astype(bool),
-                        "route_ok": best_rows["_route_ok"].astype(bool),
-                        "match_quality": pd.Series(match_quality, index=best_rows.index),
-                        "selected_form": best_rows["form_token"],
-                        "selected_variant": variants,
-                    },
-                    index=best_rows.index,
+                best_rows = best_rows.assign(
+                    atc_code_final=atc_values,
+                    match_quality=pd.Series(match_quality, index=best_rows.index),
+                    selected_form=best_rows["form_token"],
+                    selected_variant=variants,
+                    selected_route_allowed=best_rows["route_allowed"],
+                    selected_dose_kind=best_rows["dose_kind"],
+                    selected_strength_mg=best_rows["strength_mg"],
+                    selected_strength=best_rows["strength"],
+                    selected_unit=best_rows["unit"],
+                    selected_per_val=best_rows["per_val"],
+                    selected_per_unit=best_rows["per_unit"],
+                    selected_ratio_mg_per_ml=best_rows["ratio_mg_per_ml"],
+                    selected_pct=best_rows["pct"],
                 )
+
+                best_by_idx = best_rows[
+                    [
+                        "atc_code_final",
+                        "dose_sim",
+                        "_form_ok",
+                        "_route_ok",
+                        "match_quality",
+                        "selected_form",
+                        "selected_variant",
+                        "selected_route_allowed",
+                        "selected_dose_kind",
+                        "selected_strength_mg",
+                        "selected_strength",
+                        "selected_unit",
+                        "selected_per_val",
+                        "selected_per_unit",
+                        "selected_ratio_mg_per_ml",
+                        "selected_pct",
+                    ]
+                ].rename(columns={"_form_ok": "form_ok", "_route_ok": "route_ok"})
 
     if best_by_idx.empty:
         out = df.copy()
@@ -158,6 +184,15 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
         out["match_quality"] = "unspecified"
         out["selected_form"] = None
         out["selected_variant"] = None
+        out["selected_route_allowed"] = None
+        out["selected_dose_kind"] = None
+        out["selected_strength_mg"] = None
+        out["selected_strength"] = None
+        out["selected_unit"] = None
+        out["selected_per_val"] = None
+        out["selected_per_unit"] = None
+        out["selected_ratio_mg_per_ml"] = None
+        out["selected_pct"] = None
     else:
         out = df.merge(best_by_idx, left_on="esoa_idx", right_index=True, how="left")
         out["atc_code_final"] = out["atc_code_final"].where(out["atc_code_final"].notna(), None)
@@ -168,9 +203,92 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
         out["match_quality"] = out["match_quality"].fillna("unspecified")
         out["selected_form"] = out["selected_form"].where(out["selected_form"].notna(), None)
         out["selected_variant"] = out["selected_variant"].where(out["selected_variant"].notna(), None)
+        out["selected_route_allowed"] = out["selected_route_allowed"].where(out["selected_route_allowed"].notna(), None)
+        out["selected_dose_kind"] = out["selected_dose_kind"].where(out["selected_dose_kind"].notna(), None)
+        out["selected_strength_mg"] = out["selected_strength_mg"].where(out["selected_strength_mg"].notna(), None)
+        out["selected_strength"] = out["selected_strength"].where(out["selected_strength"].notna(), None)
+        out["selected_unit"] = out["selected_unit"].where(out["selected_unit"].notna(), None)
+        out["selected_per_val"] = out["selected_per_val"].where(out["selected_per_val"].notna(), None)
+        out["selected_per_unit"] = out["selected_per_unit"].where(out["selected_per_unit"].notna(), None)
+        out["selected_ratio_mg_per_ml"] = out["selected_ratio_mg_per_ml"].where(out["selected_ratio_mg_per_ml"].notna(), None)
+        out["selected_pct"] = out["selected_pct"].where(out["selected_pct"].notna(), None)
 
     out["form_ok"] = out["form_ok"].astype(bool)
     out["route_ok"] = out["route_ok"].astype(bool)
+
+    def _parse_dose_obj(value):
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, str):
+            try:
+                parsed = ast.literal_eval(value)
+            except (SyntaxError, ValueError):  # pragma: no cover - defensive
+                return None
+            if isinstance(parsed, dict):
+                return parsed
+        return None
+
+    def _normalize_pnf_value(value):
+        if pd.isna(value):
+            return None
+        return value
+
+    def _recompute_dose(row):
+        esoa_dose = _parse_dose_obj(row.get("dosage_parsed"))
+        if not isinstance(esoa_dose, dict) or not esoa_dose:
+            return row.get("dose_sim", 0.0)
+        pnf_payload = {
+            "dose_kind": _normalize_pnf_value(row.get("selected_dose_kind")),
+            "strength_mg": _normalize_pnf_value(row.get("selected_strength_mg")),
+            "ratio_mg_per_ml": _normalize_pnf_value(row.get("selected_ratio_mg_per_ml")),
+            "pct": _normalize_pnf_value(row.get("selected_pct")),
+            "per_val": _normalize_pnf_value(row.get("selected_per_val")),
+            "per_unit": _normalize_pnf_value(row.get("selected_per_unit")),
+            "strength": _normalize_pnf_value(row.get("selected_strength")),
+            "unit": _normalize_pnf_value(row.get("selected_unit")),
+        }
+        try:
+            return dose_similarity(esoa_dose, pnf_payload)
+        except Exception:  # pragma: no cover - defensive fallback
+            return row.get("dose_sim", 0.0)
+
+    out["dose_sim"] = pd.to_numeric(out.apply(_recompute_dose, axis=1), errors="coerce").fillna(0.0)
+
+    form_text = out["form"].copy()
+    route_text = out["route"].copy()
+
+    form_str = form_text.fillna("").astype(str).str.strip()
+    route_str = route_text.fillna("").astype(str).str.strip()
+    selected_form_str = out["selected_form"].fillna("").astype(str).str.strip()
+    selected_route_str = out["selected_route_allowed"].fillna("").astype(str).str.strip()
+
+    form_has_text = form_str != ""
+    form_can_infer = (~form_has_text) & (selected_form_str != "")
+    route_has_text = route_str != ""
+    route_can_infer = (~route_has_text) & (selected_route_str != "")
+
+    out["form_source"] = np.where(form_has_text, "text", np.where(form_can_infer, "pnf", ""))
+    out["route_source"] = np.where(route_has_text, "text", np.where(route_can_infer, "pnf", ""))
+
+    out["form_text"] = form_text
+    out["route_text"] = route_text
+
+    if form_can_infer.any():
+        out.loc[form_can_infer, "form"] = selected_form_str[form_can_infer]
+
+    if route_can_infer.any():
+        out.loc[route_can_infer, "route"] = selected_route_str[route_can_infer]
+        evidence_prefill = out["route_evidence"].fillna("").astype(str)
+        inferred_evidence = [
+            (f"pnf:{val}" if val else "")
+            for val in selected_route_str[route_can_infer]
+        ]
+        out.loc[route_can_infer, "route_evidence"] = [
+            "".join(filter(None, [orig, ";" if orig and add else "", add]))
+            for orig, add in zip(evidence_prefill[route_can_infer], inferred_evidence)
+        ]
+
+    out["route_evidence"] = out["route_evidence"].fillna("")
 
     dose_present = pd.Series([bool(x) for x in out["dosage_parsed"]], index=out.index)
     form_present = pd.Series([bool(x) for x in out["form"]], index=out.index)

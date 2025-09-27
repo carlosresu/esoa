@@ -312,32 +312,66 @@ def build_features(
 
     # 14) Unknown tokens extraction
     def _unknowns():
-        def _unknown_kind_and_list(text_norm: str) -> Tuple[str, List[str]]:
+        def _token_set_from_phrase_list(values: object) -> set[str]:
+            tokens: set[str] = set()
+            if isinstance(values, list):
+                for phrase in values:
+                    if isinstance(phrase, str) and phrase:
+                        tokens.update(_tokenize_unknowns(_segment_norm(phrase)))
+            elif isinstance(values, str) and values:
+                tokens.update(_tokenize_unknowns(_segment_norm(values)))
+            return tokens
+
+        pnf_token_lookup: set[str] = set()
+        for name in pnf_name_set:
+            pnf_token_lookup.update(_tokenize_unknowns(name))
+
+        who_token_lookup: set[str] = set()
+        for name in who_name_set:
+            who_token_lookup.update(_tokenize_unknowns(name))
+
+        fda_token_lookup: set[str] = set()
+        for name in fda_gens:
+            fda_token_lookup.update(_tokenize_unknowns(name))
+
+        def _unknown_kind_and_list(text_norm: str, matched_tokens: set[str]) -> Tuple[str, List[str]]:
             s = _segment_norm(text_norm)
             all_toks = _tokenize_unknowns(s)
-            unknowns = []
+            unknowns: list[str] = []
             for t in all_toks:
                 if (
-                    (t not in pnf_name_set)
-                    and (t not in who_name_set)
-                    and (t not in fda_gens)
-                    and (t not in STOPWORD_TOKENS)
+                    t not in matched_tokens
+                    and t not in pnf_token_lookup
+                    and t not in who_token_lookup
+                    and t not in fda_token_lookup
+                    and t not in STOPWORD_TOKENS
                 ):
                     unknowns.append(t)
-            seen=set(); unknowns_uniq=[]
+            seen: set[str] = set()
+            unknowns_uniq: list[str] = []
             for t in unknowns:
                 if t not in seen:
-                    seen.add(t); unknowns_uniq.append(t)
+                    seen.add(t)
+                    unknowns_uniq.append(t)
             if not unknowns_uniq:
                 return "None", []
             if len(unknowns_uniq) == len(all_toks):
                 if len(unknowns_uniq) == 1:
                     return "Single - Unknown", unknowns_uniq
                 return "Multiple - All Unknown", unknowns_uniq
-            return ("Multiple - Some Unknown", unknowns_uniq)
-        kinds, lists_ = zip(*df["match_basis"].map(_unknown_kind_and_list))
-        df["unknown_kind"] = kinds
-        df["unknown_words_list"] = lists_
+            return "Multiple - Some Unknown", unknowns_uniq
+
+        results: list[Tuple[str, List[str]]] = []
+        for text_norm, p_hits, who_hits in zip(df["match_basis"], df["pnf_hits_tokens"], df["who_molecules_list"]):
+            matched_tokens = _token_set_from_phrase_list(p_hits) | _token_set_from_phrase_list(who_hits)
+            results.append(_unknown_kind_and_list(text_norm, matched_tokens))
+
+        if results:
+            kinds, lists_ = zip(*results)
+        else:
+            kinds, lists_ = (), ()
+        df["unknown_kind"] = list(kinds)
+        df["unknown_words_list"] = list(lists_)
         df["unknown_words"] = df["unknown_words_list"].map(lambda xs: "|".join(xs) if xs else "")
     _timed("Extract unknown tokens", _unknowns)
 
