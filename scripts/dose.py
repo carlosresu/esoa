@@ -14,8 +14,8 @@ PER_UNIT_WORDS = r"(?:tab(?:let)?s?|cap(?:sule)?s?|sachet(?:s)?|drop(?:s)?|gtt|a
 DOSAGE_PATTERNS = [
     # amount-only (e.g., 500 mg)
     r"(?P<strength>\d+(?:[.,]\d+)?)\s?(?P<unit>mg|g|mcg|ug|iu)\b",
-    # amount per mL or L (e.g., 5 mg/5 mL, 1 g/100 L)
-    r"(?P<strength>\d+(?:[.,]\d+)?)\s?(?P<unit>mg|g|mcg|ug|iu)\s?(?:/| per )\s?(?P<per_val>\d+(?:[.,]\d+)?)\s*(?P<per_unit>ml|l)\b",
+    # amount per mL or L (e.g., 5 mg/5 mL, 1 g/100 L, 150 mg/mL)
+    r"(?P<strength>\d+(?:[.,]\d+)?)\s?(?P<unit>mg|g|mcg|ug|iu)\s?(?:/| per )\s?(?:(?P<per_val>\d+(?:[.,]\d+)?)\s*)?(?P<per_unit>ml|l)\b",
     # amount per unit-dose nouns (tab/cap/sachet/drop/actuation/spray/puff)
     rf"(?P<strength>\d+(?:[.,]\d+)?)\s?(?P<unit>mg|g|mcg|ug|iu)\s?(?:/| per )\s?(?P<per_val>1)?\s*(?P<per_unit>{PER_UNIT_WORDS})\b",
     # compact noun suffix (e.g., mg/tab, mg/cap)
@@ -24,6 +24,16 @@ DOSAGE_PATTERNS = [
     r"(?P<pct>\d+(?:[.,]\d+)?)\s?%(?:\s?(?:w/v|w/w))?",
 ]
 DOSAGE_REGEXES = [re.compile(p, flags=re.I) for p in DOSAGE_PATTERNS]
+
+_SPECIAL_AMOUNT_EQUIVALENCE = {
+    # Extended/modified-release trimetazidine marketed as 60–80 mg capsules still correspond to
+    # the 35 mg (base) strength present in the PNF. Accept values in that modified-release band.
+    "trimetazidine": {
+        "target_strength_mg": 35.0,
+        "min_strength_mg": 55.0,
+        "max_strength_mg": 90.0,
+    },
+}
 
 
 def _unmask_pack_strength(s_norm: str) -> str:
@@ -45,12 +55,30 @@ def parse_dose_struct_from_text(s_norm: str) -> Dict[str, Any]:
             d = {k: (v.replace(",", ".") if isinstance(v, str) else v) for k, v in m.groupdict().items()}
             matches.append(d)
     for d in matches:
-        if d.get("strength") and d.get("per_unit") in ("ml", "l"):
-            per_val = float(d["per_val"]) if d.get("per_val") else 1.0
-            if d.get("per_unit", "").lower() == "l":
+        strength = d.get("strength")
+        unit = d.get("unit")
+        per_unit = d.get("per_unit")
+        if strength and per_unit in ("ml", "l") and unit:
+            try:
+                strength_val = float(strength)
+            except (TypeError, ValueError):
+                continue
+            try:
+                per_val_raw = d.get("per_val")
+                per_val = float(per_val_raw) if per_val_raw not in (None, "") else 1.0
+            except (TypeError, ValueError):
+                per_val = 1.0
+            per_unit_norm = str(per_unit).lower()
+            if per_unit_norm == "l":
                 per_val *= 1000.0
-            return {"dose_kind": "ratio", "strength": float(d["strength"]), "unit": d["unit"].lower(),
-                    "per_val": per_val, "per_unit": "ml"}
+                per_unit_norm = "ml"
+            return {
+                "dose_kind": "ratio",
+                "strength": strength_val,
+                "unit": str(unit).lower(),
+                "per_val": per_val,
+                "per_unit": per_unit_norm,
+            }
     for d in matches:
         if d.get("strength"):
             return {"dose_kind": "amount", "strength": float(d["strength"]), "unit": d["unit"].lower()}
@@ -110,12 +138,30 @@ def extract_dosage(s_norm: str):
             d = {k: (v.replace(",", ".") if isinstance(v, str) else v) for k, v in m.groupdict().items()}
             matches.append(d)
     for d in matches:
-        if d.get("strength") and d.get("per_unit") in ("ml", "l"):
-            per_val = float(d["per_val"]) if d.get("per_val") else 1.0
-            if d.get("per_unit", "").lower() == "l":
+        strength = d.get("strength")
+        unit = d.get("unit")
+        per_unit = d.get("per_unit")
+        if strength and per_unit in ("ml", "l") and unit:
+            try:
+                strength_val = float(strength)
+            except (TypeError, ValueError):
+                continue
+            try:
+                per_val_raw = d.get("per_val")
+                per_val = float(per_val_raw) if per_val_raw not in (None, "") else 1.0
+            except (TypeError, ValueError):
+                per_val = 1.0
+            per_unit_norm = str(per_unit).lower()
+            if per_unit_norm == "l":
                 per_val *= 1000.0
-            return {"kind": "ratio", "strength": float(d["strength"]), "unit": d["unit"].lower(),
-                    "per_val": per_val, "per_unit": "ml"}
+                per_unit_norm = "ml"
+            return {
+                "kind": "ratio",
+                "strength": strength_val,
+                "unit": str(unit).lower(),
+                "per_val": per_val,
+                "per_unit": per_unit_norm,
+            }
     for d in matches:
         if d.get("strength"):
             return {"kind": "amount", "strength": float(d["strength"]), "unit": d["unit"].lower()}
@@ -155,7 +201,24 @@ def dose_similarity(esoa_dose: dict, pnf_row) -> float:
         mg_pnf = pnf_row.get("strength_mg")
         if mg_esoa is None or mg_pnf is None:
             return 0.0
-        return 1.0 if _eq(mg_esoa, mg_pnf) else 0.0
+        if _eq(mg_esoa, mg_pnf):
+            return 1.0
+        generic_id = pnf_row.get("generic_id")
+        if isinstance(generic_id, str):
+            special = _SPECIAL_AMOUNT_EQUIVALENCE.get(generic_id.strip().lower())
+            if special and pnf_row.get("dose_kind") == "amount":
+                target = special.get("target_strength_mg")
+                min_val = special.get("min_strength_mg")
+                max_val = special.get("max_strength_mg")
+                if (
+                    target is not None
+                    and _eq(float(mg_pnf), float(target))
+                    and min_val is not None
+                    and max_val is not None
+                    and min_val <= float(mg_esoa) <= max_val
+                ):
+                    return 1.0
+        return 0.0
     if kind == "ratio":
         if pnf_row.get("dose_kind") != "ratio":
             return 0.0
