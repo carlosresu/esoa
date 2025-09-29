@@ -398,6 +398,7 @@ def main_entry() -> None:
     parser.add_argument("--skip-install", action="store_true", help="Skip pip install of requirements")
     parser.add_argument("--skip-r", action="store_true", help="Skip running ATC R preprocessing scripts")
     parser.add_argument("--skip-brandmap", action="store_true", help="Skip building FDA brand map CSV")
+    parser.add_argument("--skip-excel", action="store_true", help="Skip writing XLSX output (CSV and summaries still produced)")
     args = parser.parse_args()
 
     outdir = _ensure_outputs_dir()
@@ -437,6 +438,7 @@ def main_entry() -> None:
         str(inputs_dir / "esoa_prepared.csv"),
         str(out_path),
         timing_hook=timings.add,
+        skip_excel=args.skip_excel,
     )
 
     # Run the follow-up enrichment step to analyze unknown tokens.

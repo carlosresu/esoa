@@ -28,6 +28,7 @@ def main(argv: list[str] | None = None) -> None:
         "--skip-install",
         "--skip-r",
         "--skip-brandmap",
+        "--skip-excel",
     ]
 
     original_argv = sys.argv
@@ -36,12 +37,6 @@ def main(argv: list[str] | None = None) -> None:
         run.main_entry()
     finally:
         sys.argv = original_argv
-
-    outputs_dir = Path(run.THIS_DIR) / run.OUTPUTS_DIR
-    excel_path = outputs_dir / (Path(args.out).stem + ".xlsx")
-    if excel_path.exists():
-        excel_path.unlink()
-        print(f"Removed Excel export: {excel_path}")
 
 
 if __name__ == "__main__":
