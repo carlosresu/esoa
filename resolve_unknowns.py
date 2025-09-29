@@ -167,7 +167,7 @@ def _scan_source(
     return results
 
 def main():
-    """CLI entry point orchestrating unknown-word enrichment across reference vocabularies."""
+    """CLI entry point orchestrating unknown-word enrichment across reference vocabularies, producing the `missed_generics.csv` cues highlighted in README's unknown-handling section."""
     unknowns_path = OUTPUTS / "unknown_words.csv"
     if not unknowns_path.is_file():
         print(f"ERROR: {unknowns_path} not found.", file=sys.stderr)

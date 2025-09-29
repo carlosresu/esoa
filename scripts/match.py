@@ -48,7 +48,7 @@ def match(
     *,
     timing_hook: Callable[[str, float], None] | None = None,
 ) -> str:
-    """Run the feature build, scoring, and output-writing stages on prepared inputs."""
+    """Run the feature build, scoring, and output-writing stages on prepared inputs exactly as outlined in pipeline.md steps 6–15."""
     def _timed(label: str, func: Callable[[], None]) -> float:
         elapsed = _run_with_spinner(label, func)
         if timing_hook:

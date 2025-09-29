@@ -93,7 +93,7 @@ def parse_form_from_text(s_norm: str) -> Optional[str]:
     return None
 
 def extract_route_and_form(s_norm: str) -> Tuple[Optional[str], Optional[str], str]:
-    """Simultaneously infer route, form, and evidence strings from normalized text."""
+    """Simultaneously infer route, form, and evidence strings from normalized text, honoring the alias/whitelist logic described in README (route evidences plus imputed route from form when allowed)."""
     route_found = None
     form_found = None
     evidence = []

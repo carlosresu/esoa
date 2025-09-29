@@ -55,7 +55,7 @@ def load_latest_brandmap(inputs_dir: str) -> Optional[pd.DataFrame]:
 
 
 def build_brand_automata(brand_df: pd.DataFrame) -> Tuple[ahocorasick.Automaton, ahocorasick.Automaton, Dict[str, List[BrandMatch]]]:
-    """Compile Aho–Corasick automatons and lookup tables for brand→generic substitutions."""
+    """Compile Aho–Corasick automatons and lookup tables for brand→generic substitutions, enabling the dose/form-aware scoring and swap policy described in README."""
     A_norm = ahocorasick.Automaton()
     A_comp = ahocorasick.Automaton()
     mapping: Dict[str, List[BrandMatch]] = {}

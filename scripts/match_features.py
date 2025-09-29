@@ -84,7 +84,7 @@ def build_features(
     *,
     timing_hook: Callable[[str, float], None] | None = None,
 ) -> pd.DataFrame:
-    """Derive the expansive feature frame used downstream for scoring and auditing."""
+    """Derive the expansive feature frame used downstream for scoring: validation, vocabulary indexing, brand swaps, re-parsed dose/route/form, molecule detection, combo flags, and unknown token extraction."""
     def _timed(label: str, func: Callable[[], None]) -> float:
         elapsed = _run_with_spinner(label, func)
         if timing_hook:
@@ -202,6 +202,7 @@ def build_features(
             base = re.sub(r"\(.*?\)", " ", base)
             base = re.split(r"\bas\b", base, 1)[0]
             base = re.sub(r"\s+", " ", base).strip()
+            # Strips parenthetical brand annotations so swaps don't rewrite contextual notes (README: avoid touching parentheses when generic already present).
             return base or _base_name(name)
 
         for norm, comp, form, friendly, parens in zip(
