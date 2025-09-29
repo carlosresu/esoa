@@ -35,8 +35,7 @@ def _profiled_main() -> None:
         outputs_dir.mkdir(parents=True, exist_ok=True)
         html_path = outputs_dir / f"pyinstrument_profile_{timestamp}.html"
         text_path = outputs_dir / f"pyinstrument_profile_{timestamp}.txt"
-        with html_path.open("w", encoding="utf-8") as fh:
-            profiler.write_html(fh)
+        html_path.write_text(profiler.output_html(), encoding="utf-8")
         text_path.write_text(
             profiler.output_text(unicode=True, color=False),
             encoding="utf-8",
