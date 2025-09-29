@@ -24,26 +24,26 @@ Detailed end-to-end view of `run.py` → `scripts/match.py` execution for genera
    - Extract parenthetical phrases for later brand heuristics and store normalized / compact (no spaces/hyphen) variants (`scripts/match_features.py:162-167`).
 
 6. **Initial dose / route / form parsing**
-   - Parse dosage structures from `normalized` text using `scripts/dose.py` and render `dose_recognized` strings (`scripts/match_features.py:172-175`).
-   - Detect route/form tokens and log evidence strings before any substitutions (`scripts/match_features.py:176-177`).
+   - Parse dosage structures from `normalized` text using `scripts/dose.py`; store the raw dictionary in `dosage_parsed_raw` and render `dose_recognized` strings (`scripts/match_features.py:172-175`).
+   - Detect route/form tokens (`route_raw`, `form_raw`) and capture supporting evidence in `route_evidence_raw` before any substitutions (`scripts/match_features.py:176-177`).
 
 7. **Apply FDA brand → generic substitutions**
-   - For each row, scan normalized text with brand automatons to identify candidates (`scripts/match_features.py:196-205`).
+   - For each row, scan normalized text with brand automatons to identify candidate brands (`scripts/match_features.py:196-205`).
    - Score competing generics using dose/form corroboration and PNF-name presence to pick the best replacement (`scripts/match_features.py:206-227`).
-   - Replace brand mentions with the chosen normalized generic, scrub duplicates when the text already contains the generic, and mark `did_brand_swap` / `fda_dose_corroborated` (`scripts/match_features.py:228-270`).
+   - Replace brand mentions with the chosen normalized generic, scrub duplicates when the text already contains the generic, and populate `probable_brands`, `did_brand_swap`, and `fda_dose_corroborated` flags (`scripts/match_features.py:228-270`).
    - Recompute `match_basis_norm_basic` for downstream detectors (`scripts/match_features.py:271-272`).
 
 8. **Re-parse dose / route / form on `match_basis`**
    - Run dose extraction, route/form detection, and evidence capture on the substituted text (`scripts/match_features.py:274-279`).
 
 9. **Detect molecules across references**
-   - Execute Aho–Corasick scans to gather PNF hits, filtering out salt-only matches, and assign `generic_id`/`molecule_token` (`scripts/match_features.py:281-299`).
+   - Execute Aho–Corasick scans to gather PNF hits, filtering out salt-only matches, and assign `generic_id`/`molecule_token`; retain the full `pnf_hits_gids` / `pnf_hits_tokens` payload for auditing (`scripts/match_features.py:281-299`).
    - Use the partial token index to recover best-effort matches when full hits are absent (`scripts/match_features.py:302-319`).
    - Apply WHO regex detection to produce molecule lists, ATC codes, DDD flags, and administration-route tags (`scripts/match_features.py:321-365`).
 
 10. **Classify combinations and unknown tokens**
     - Count known generic tokens (PNF/WHO/FDA) to label likely combination products (`scripts/match_features.py:368-385`).
-    - Extract residual tokens not covered by the vocabularies to populate `unknown_kind` / `unknown_words` (`scripts/match_features.py:387-449`).
+    - Extract residual tokens not covered by the vocabularies to populate `unknown_kind`, `unknown_words_list`, and `unknown_words` (`scripts/match_features.py:387-449`).
     - Derive presence flags (`present_in_pnf`, `present_in_who`, `present_in_fda_generic`) (`scripts/match_features.py:452-457`).
 
 11. **Score candidates and pick best PNF variant**
@@ -59,9 +59,9 @@ Detailed end-to-end view of `run.py` → `scripts/match.py` execution for genera
     - Validate route/form combinations against the curated whitelist, logging acceptances, flags, or violations in `route_form_imputations` (`scripts/match_scoring.py:500-566`).
 
 13. **Aggregate scoring attributes**
-    - Compute presence booleans for dose, route, form, and route evidence; clip `dose_sim` to [0,1] (`scripts/match_scoring.py:568-575`).
+    - Compute presence booleans for dose, route, form, and route evidence; expose `form_ok`/`route_ok` compatibility flags and clip `dose_sim` to [0,1] (`scripts/match_scoring.py:568-575`).
     - Generate the 0–100 `confidence` score with brand-swap bonus handling (`scripts/match_scoring.py:576-590`).
-    - Collate recognized molecule unions, WHO ATC counts, and probable ATC fallbacks (`scripts/match_scoring.py:592-616`).
+    - Collate recognized molecule unions — including the canonical `molecules_recognized` pipe-delimited generics string alongside `molecules_recognized_list` — WHO ATC counts, and probable ATC fallbacks (`scripts/match_scoring.py:592-616`).
 
 14. **Bucketize and annotate outcomes**
     - Initialize `bucket_final`, `match_molecule(s)`, and `match_quality` then populate source-based labels (PNF/WHO/FDA) (`scripts/match_scoring.py:617-652`).
@@ -78,4 +78,3 @@ Detailed end-to-end view of `run.py` → `scripts/match.py` execution for genera
 16. **Post-processing (optional)**
     - Invoke `resolve_unknowns.py` to analyze `unknown_words.csv` and suggest possible reference matches (`run.py:112-122`).
     - Consolidate output paths and timing summaries before exiting (`run.py:124-160`).
-
