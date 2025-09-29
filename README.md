@@ -42,8 +42,8 @@ It prepares raw CSVs, parses text into structured features, detects candidate ge
 
 ```mermaid
 flowchart TD
-    A[PNF CSV] --> B[Prepare PNF (normalize, parse dose/form/route)]
-    A2[eSOA CSV] --> C[Prepare eSOA (normalize raw_text)]
+    A[PNF CSV] --> B[Prepare PNF: normalize + parse dose/route/form]
+    A2[eSOA CSV] --> C[Prepare eSOA: normalize raw_text]
     B --> D[PNF prepared CSV]
     C --> E[eSOA prepared CSV]
 
@@ -53,13 +53,17 @@ flowchart TD
     D --> I[Build features]
     E --> I
     H --> I
-    I --> J[Brand → Generic Swaps]
-    I --> K[Dose/Route/Form parsing]
-    I --> L[PNF + WHO molecule detection]
-    I --> M[Combination vs Salt detection]
+    I --> J[Brand to Generic swaps]
+    I --> K[Dose, Route, Form parsing]
+    I --> L[PNF and WHO molecule detection]
+    I --> M[Combination detection]
     I --> N[Unknown token extraction]
 
-    J & K & L & M & N --> O[Scoring & Classification]
+    J --> O[Scoring & classification]
+    K --> O
+    L --> O
+    M --> O
+    N --> O
     O --> P[Matched dataset (CSV, Excel)]
     O --> Q[Summary.txt (distribution)]
     O --> R[Unknown_words.csv]
