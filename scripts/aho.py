@@ -10,6 +10,7 @@ from .text_utils import normalize_compact, normalize_text
 
 
 def build_molecule_automata(pnf_df) -> Tuple[ahocorasick.Automaton, ahocorasick.Automaton]:
+    """Create normalized and compact automatons for PNF generics plus their synonyms."""
     A_norm = ahocorasick.Automaton()
     A_comp = ahocorasick.Automaton()
     seen_norm = set()
@@ -39,6 +40,7 @@ def build_molecule_automata(pnf_df) -> Tuple[ahocorasick.Automaton, ahocorasick.
 def scan_pnf_all(text_norm: str, text_comp: str,
                  A_norm: ahocorasick.Automaton,
                  A_comp: ahocorasick.Automaton) -> Tuple[List[str], List[str]]:
+    """Return ordered (gid, token) hits using whichever automaton produced the longest span."""
     candidates: Dict[str, str] = {}
     for _, (gid, token) in A_norm.iter(text_norm):
         if gid not in candidates or len(token) > len(candidates[gid]):

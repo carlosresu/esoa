@@ -22,6 +22,7 @@ HEADERS = {
 
 
 def fetch_csv_export() -> List[Dict[str, str]]:
+    """Download the FDA PH drug CSV export and return it as a list of dict rows."""
     with requests.Session() as s:
         r0 = s.get(HUMAN_DRUGS_URL, headers=HEADERS, timeout=30)
         r0.raise_for_status()
@@ -39,6 +40,7 @@ def fetch_csv_export() -> List[Dict[str, str]]:
 
 
 def normalize_columns(rows: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """Rename raw FDA columns into predictable snake_case keys."""
     key_map = {
         "Registration Number": "registration_number",
         "Generic Name": "generic_name",
@@ -64,6 +66,7 @@ def normalize_columns(rows: List[Dict[str, str]]) -> List[Dict[str, str]]:
 
 
 def infer_form_and_route(dosage_form: Optional[str]) -> (Optional[str], Optional[str]):
+    """Derive normalized form and route tokens from the FDA dosage form string."""
     if not isinstance(dosage_form, str) or not dosage_form.strip():
         return None, None
     norm = normalize_text(dosage_form)
@@ -73,6 +76,7 @@ def infer_form_and_route(dosage_form: Optional[str]) -> (Optional[str], Optional
 
 
 def build_brand_map(rows: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """Trim, dedupe, and enrich FDA rows for downstream brand→generic lookups."""
     seen = set()
     out: List[Dict[str, str]] = []
     for r in rows:
@@ -112,6 +116,7 @@ def build_brand_map(rows: List[Dict[str, str]]) -> List[Dict[str, str]]:
 
 
 def main() -> None:
+    """CLI wrapper that downloads, normalizes, and writes the brand-map export."""
     ap = argparse.ArgumentParser(description="Build FDA PH brand→generic map (CSV export only)")
     ap.add_argument("--outdir", default="inputs", help="Output directory")
     ap.add_argument("--outfile", default=None, help="Optional explicit output CSV filename")

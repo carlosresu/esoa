@@ -8,6 +8,7 @@ from typing import Dict, List, Tuple, Optional
 Token = str
 
 def _tokenize(s: str) -> List[Token]:
+    """Lowercase text and return alphanumeric tokens suitable for prefix matching."""
     return re.findall(r"[a-z0-9]+", s.lower())
 
 class PnfTokenIndex:
@@ -21,9 +22,11 @@ class PnfTokenIndex:
 
     @staticmethod
     def _name_tokens(name_norm: str) -> List[Token]:
+        """Tokenize an already-normalized PNF name for partial matching."""
         return _tokenize(name_norm)
 
     def add(self, generic_id: str, generic_name_norm: str) -> None:
+        """Register a PNF generic under its first token for fast prefix lookups."""
         toks = self._name_tokens(generic_name_norm)
         if not toks:
             return
@@ -31,6 +34,7 @@ class PnfTokenIndex:
         self.by_first.setdefault(first, []).append((generic_id, toks, generic_name_norm))
 
     def build_from_pnf(self, pnf_df) -> "PnfTokenIndex":
+        """Populate the index from the prepared PNF dataframe."""
         # expects columns: generic_id, generic_name (normalized externally if desired)
         for gid, gname in pnf_df[["generic_id","generic_name"]].drop_duplicates().itertuples(index=False):
             if not isinstance(gname, str):

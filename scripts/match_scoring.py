@@ -40,6 +40,7 @@ from .text_utils import _base_name, _normalize_text_basic
 
 
 def _mk_reason(series: pd.Series, default_ok: str) -> pd.Series:
+    """Standardize reason columns by filling unspecified entries with a default value."""
     s = series.astype("string")
     s = s.fillna(default_ok)
     s = s.replace({"": default_ok, "unspecified": default_ok})
@@ -47,6 +48,7 @@ def _mk_reason(series: pd.Series, default_ok: str) -> pd.Series:
 
 
 def _annotate_unknown(s: str) -> str:
+    """Append clarifying text for buckets that merely state "Unknown"."""
     if s == "Single - Unknown":
         return "Single - Unknown (unknown to PNF, WHO, FDA)"
     if s == "Multiple - All Unknown":
@@ -57,6 +59,7 @@ def _annotate_unknown(s: str) -> str:
 
 
 def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.DataFrame:
+    """Score features, select best PNF candidates, and prepare audit columns."""
     df = features_df.copy()
 
     def _format_variant(

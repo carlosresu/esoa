@@ -39,6 +39,7 @@ if str(THIS_DIR) not in sys.path:
 # Utilities
 # ----------------------------
 def _resolve_input_path(p: str | os.PathLike[str], default_subdir: str = DEFAULT_INPUTS_DIR) -> Path:
+    """Resolve user-provided paths, falling back to ./inputs/{filename} when relative."""
     if not p:
         raise FileNotFoundError("No input path provided.")
     pth = Path(p)
@@ -55,18 +56,21 @@ def _resolve_input_path(p: str | os.PathLike[str], default_subdir: str = DEFAULT
 
 
 def _ensure_outputs_dir() -> Path:
+    """Make sure the outputs directory exists and return its filesystem path."""
     outdir = THIS_DIR / OUTPUTS_DIR
     outdir.mkdir(parents=True, exist_ok=True)
     return outdir
 
 
 def _ensure_inputs_dir() -> Path:
+    """Create the inputs directory when missing so upstream steps can drop files."""
     inp = THIS_DIR / DEFAULT_INPUTS_DIR
     inp.mkdir(parents=True, exist_ok=True)
     return inp
 
 
 def _assert_all_exist(root: Path, files: Iterable[str | os.PathLike[str]]) -> None:
+    """Validate that every filename under root exists before shelling out to R scripts."""
     for f in files:
         fp = root / f
         if not fp.is_file():
@@ -203,10 +207,12 @@ DEFAULT_GROUP = "Other"
 
 
 class TimingCollector:
+    """Accumulate per-step timings and expose grouped rollups for summary output."""
     def __init__(self) -> None:
         self._entries: list[tuple[str, float]] = []
 
     def add(self, label: str, seconds: float) -> None:
+        """Track the elapsed time for a named pipeline step."""
         self._entries.append((label, seconds))
 
     @property
@@ -214,6 +220,7 @@ class TimingCollector:
         return list(self._entries)
 
     def grouped_totals(self) -> dict[str, float]:
+        """Roll up timings by high-level group, preserving the predefined order."""
         totals: dict[str, float] = {group: 0.0 for group in GROUP_ORDER}
         other_total = 0.0
         for label, seconds in self._entries:
@@ -227,10 +234,12 @@ class TimingCollector:
         return totals
 
     def total(self) -> float:
+        """Return the aggregate runtime of every recorded step."""
         return sum(seconds for _, seconds in self._entries)
 
 
 def _print_grouped_summary(timings: TimingCollector) -> None:
+    """Render grouped timing totals to stdout in a compact report."""
     totals = timings.grouped_totals()
     non_zero = [(group, secs) for group, secs in totals.items() if secs > 0.0]
     if not non_zero:
@@ -251,6 +260,7 @@ def _print_grouped_summary(timings: TimingCollector) -> None:
 # Steps (silent)
 # ----------------------------
 def install_requirements(req_path: str | os.PathLike[str]) -> None:
+    """Install pinned dependencies quietly so repeated runs stay deterministic."""
     req = Path(req_path) if req_path else None
     if not req or not req.is_file():
         return
@@ -264,6 +274,7 @@ def install_requirements(req_path: str | os.PathLike[str]) -> None:
 
 
 def run_r_scripts() -> None:
+    """Execute the bundled R preprocessors when the environment has the needed tools."""
     atcd_dir = THIS_DIR / ATCD_SUBDIR
     if not atcd_dir.is_dir():
         return
@@ -282,6 +293,7 @@ def run_r_scripts() -> None:
 
 
 def build_brand_map(inputs_dir: Path, outfile: Path | None) -> Path:
+    """Ensure an FDA brand map exists, constructing a fresh one when required."""
     date_str = datetime.now().strftime("%Y-%m-%d")
     out_csv = outfile or (inputs_dir / f"fda_brand_map_{date_str}.csv")
     if out_csv.exists():
@@ -349,6 +361,7 @@ def run_resolve_unknowns() -> None:
 # Main entry
 # ----------------------------
 def main_entry() -> None:
+    """CLI front-end that orchestrates instals, preprocessing, matching, and reports."""
     parser = argparse.ArgumentParser(
         description="Run full ESOA pipeline (ATC → brand map → prepare → match) with spinner+timing",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,

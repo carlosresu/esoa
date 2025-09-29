@@ -48,9 +48,11 @@ WHO_DIR = ROOT / "dependencies" / "atcd" / "output"
 _token_re = re.compile(r"[a-z0-9]+")
 
 def _norm(s: str) -> str:
+    """Lowercase a string and collapse internal whitespace for stable tokenization."""
     return re.sub(r"\s+", " ", s.lower().strip())
 
 def _tokens(s: str) -> List[str]:
+    """Split normalized text into alphanumeric tokens used by the n-gram index."""
     return _token_re.findall(_norm(s))
 
 def _read_unknowns_with_counts(path: Path) -> Dict[str, int]:
@@ -75,6 +77,7 @@ def _read_unknowns_with_counts(path: Path) -> Dict[str, int]:
     return out
 
 def _read_col(path: Path, colname: str) -> List[str]:
+    """Collect non-empty values from a named CSV column, preserving original order."""
     if not path or not path.is_file():
         return []
     out = []
@@ -89,6 +92,7 @@ def _read_col(path: Path, colname: str) -> List[str]:
     return out
 
 def _pick_newest(pattern: Path) -> Optional[Path]:
+    """Select the newest file matching the glob pattern, if any exist."""
     files = sorted(glob.glob(str(pattern)), key=os.path.getmtime, reverse=True)
     return Path(files[0]) if files else None
 
@@ -125,6 +129,7 @@ def _scan_source(
     index_by_len: Dict[int, Dict[Tuple[str, ...], List[str]]],
     lengths: set,
 ) -> List[List[str]]:
+    """Return match rows describing how each reference string lines up with unknown tokens."""
     results: List[List[str]] = []
     refpath_str = str(src_path) if src_path else ""
     for ref in names:
@@ -154,6 +159,7 @@ def _scan_source(
     return results
 
 def main():
+    """CLI entry point orchestrating unknown-word enrichment across reference vocabularies."""
     unknowns_path = OUTPUTS / "unknown_words.csv"
     if not unknowns_path.is_file():
         print(f"ERROR: {unknowns_path} not found.", file=sys.stderr)

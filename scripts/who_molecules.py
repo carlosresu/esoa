@@ -13,6 +13,7 @@ from .text_utils import _base_name, _normalize_text_basic
 
 
 def load_who_molecules(who_csv: str) -> Tuple[Dict[str, set], List[str], Dict[str, List[dict]]]:
+    """Load WHO exports, providing lookup dictionaries and candidate name lists."""
     who = pd.read_csv(who_csv)
     who["name_base"] = who["atc_name"].fillna("").map(_base_name)
     who["name_norm"] = who["atc_name"].fillna("").map(_normalize_text_basic)
@@ -49,6 +50,7 @@ def detect_all_who_molecules(
     *,
     pre_normalized: str | None = None,
 ) -> Tuple[List[str], List[str]]:
+    """Return normalized WHO molecule names and corresponding ATC codes found in text."""
     if not isinstance(text, str):
         return [], []
     nt = pre_normalized if pre_normalized is not None else _normalize_text_basic(text)

@@ -9,16 +9,19 @@ from typing import Optional, List
 PAREN_CONTENT_RX = re.compile(r"\(([^)]+)\)")
 
 def _normalize_text_basic(s: str) -> str:
+    """Lowercase and collapse whitespace, leaving only alphanumeric tokens."""
     s = s.lower().strip()
     s = re.sub(r"[^a-z0-9]+", " ", s)
     return re.sub(r"\s+", " ", s).strip()
 
 def _base_name(name: str) -> str:
+    """Strip trailing qualifiers so only the base molecule name remains."""
     name = str(name).lower().strip()
     name = re.split(r",| incl\.| including ", name, maxsplit=1)[0]
     return re.sub(r"\s+", " ", name).strip()
 
 def normalize_text(s: str) -> str:
+    """Produce the canonical normalized text used for matching and parsing routines."""
     if not isinstance(s, str):
         return ""
     s = unicodedata.normalize("NFKD", s)
@@ -32,18 +35,22 @@ def normalize_text(s: str) -> str:
     return s
 
 def normalize_compact(s: str) -> str:
+    """Compact the normalized text by removing whitespace and hyphens."""
     return re.sub(r"[ \-]", "", normalize_text(s))
 
 def slug_id(name: str) -> str:
+    """Turn arbitrary text into a lowercase slug suitable for identifiers."""
     base = normalize_text(str(name))
     return re.sub(r"[^a-z0-9]+", "_", base).strip("_")
 
 def clean_atc(s: Optional[str]) -> str:
+    """Normalize ATC codes by trimming whitespace and non-breaking spaces."""
     if not isinstance(s, str):
         return ""
     return s.replace("\u00a0", " ").strip()
 
 def safe_to_float(x):
+    """Convert to float when possible, returning None on failures."""
     try:
         if x is None:
             return None

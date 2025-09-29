@@ -10,6 +10,7 @@ from .text_utils import clean_atc, normalize_text, slug_id
 
 
 def prepare(pnf_csv: str, esoa_csv: str, outdir: str = ".") -> tuple[str, str]:
+    """Normalize PNF and eSOA inputs, deriving helper columns and writing prepared CSVs."""
     os.makedirs(outdir, exist_ok=True)
 
     pnf = pd.read_csv(pnf_csv)
