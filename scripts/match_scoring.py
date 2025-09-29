@@ -35,6 +35,29 @@ FLAGGED_ROUTE_FORM_EXCEPTIONS: set[tuple[str, str]] = {
     ("ophthalmic", "injection"),
 }
 
+# WHO ATC administration route codes mapped to canonical route tokens
+# (Fact sheet: WHO ATC/DDD Index – Adm.R definitions)
+WHO_ADM_ROUTE_MAP: dict[str, set[str]] = {
+    "o": {"oral"},
+    "p": {"intravenous", "intramuscular", "subcutaneous"},
+    "r": {"rectal"},
+    "v": {"vaginal"},
+    "i": {"inhalation"},
+    "inh": {"inhalation"},
+    "n": {"nasal", "intranasal"},
+    "in": {"nasal", "intranasal"},
+    "sl": {"sublingual", "buccal"},
+    "td": {"transdermal"},
+    "im": {"intramuscular"},
+    "iv": {"intravenous"},
+    "sc": {"subcutaneous"},
+    "it": {"intrathecal"},
+    "a": {"otic"},
+    "d": {"other"},
+    "e": {"other"},
+    "ep": {"other"},
+}
+
 from .dose import dose_similarity
 from .text_utils import _base_name, _normalize_text_basic
 
@@ -655,6 +678,7 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     present_in_fda = out["present_in_fda_generic"].astype(bool)
     has_atc_in_pnf = atc_present
     who_route_info_available = out["who_atc_adm_r"].fillna("").astype(str).str.strip().ne("")
+    who_only_mask = present_in_who & (~present_in_pnf)
 
     out.loc[present_in_pnf & has_atc_in_pnf, "match_molecule(s)"] = "ValidMoleculeWithATCinPNF"
     out.loc[(~present_in_pnf) & present_in_who, "match_molecule(s)"] = "ValidMoleculeWithATCinWHO/NotInPNF"
@@ -697,13 +721,53 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
 
     route_norm = out["route"].map(_normalize_route)
     route_source = out["route_source"].fillna("").astype(str).str.lower()
-    allowed_sets = out["selected_route_allowed"].map(_split_route_allowed)
+    def _map_who_routes(value: str) -> set[str]:
+        routes: set[str] = set()
+        if not isinstance(value, str) or not value:
+            return routes
+        for code in value.split("|"):
+            key = code.strip().lower()
+            if not key:
+                continue
+            routes.update(WHO_ADM_ROUTE_MAP.get(key, set()))
+        return routes
+
+    selected_allowed_sets = [
+        _split_route_allowed(val)
+        for val in out["selected_route_allowed"]
+    ]
+    who_allowed_sets = [
+        _map_who_routes(val)
+        for val in out["who_atc_adm_r"].fillna("").astype(str)
+    ]
+    allowed_sets = []
+    for sel_allowed, who_allowed, in_pnf, in_who in zip(
+        selected_allowed_sets,
+        who_allowed_sets,
+        present_in_pnf,
+        present_in_who,
+    ):
+        allowed = sel_allowed
+        if (not allowed) and in_who and not in_pnf and who_allowed:
+            allowed = who_allowed
+        allowed_sets.append(allowed)
+
     route_conflict = [
-        bool(r) and ((not allowed) or (r not in allowed))
-        for r, allowed in zip(route_norm, allowed_sets)
+        False if (who_only and not allowed)
+        else bool(r) and ((not allowed) or (r not in allowed))
+        for r, allowed, who_only in zip(route_norm, allowed_sets, who_only_mask)
     ]
     route_conflict = pd.Series(route_conflict, index=out.index)
     route_unreliable = route_source.ne("text") & (route_norm != "")
+
+    route_ok_array = out["route_ok"].astype(bool).to_numpy()
+    for idx, (who_only, allowed, route_value) in enumerate(zip(who_only_mask, allowed_sets, route_norm)):
+        if who_only:
+            if allowed:
+                route_ok_array[idx] = route_value in allowed
+            else:
+                route_ok_array[idx] = True
+    out["route_ok"] = pd.Series(route_ok_array, index=out.index)
 
     unresolved = needs_rev_mask & (out["match_quality"] == "")
     out.loc[unresolved & (form_conflict | form_unreliable), "match_quality"] = "form_mismatch"
