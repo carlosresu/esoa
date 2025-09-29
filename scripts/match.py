@@ -7,6 +7,7 @@ from typing import Callable
 
 # Local lightweight spinner so this module is self-contained
 def _run_with_spinner(label: str, func: Callable[[], None]) -> float:
+    """Wrap a callable with a lightweight spinner to show progress inside module-level scripts."""
     import threading
     done = threading.Event()
     err = []
@@ -47,6 +48,7 @@ def match(
     *,
     timing_hook: Callable[[str, float], None] | None = None,
 ) -> str:
+    """Run the feature build, scoring, and output-writing stages on prepared inputs."""
     def _timed(label: str, func: Callable[[], None]) -> float:
         elapsed = _run_with_spinner(label, func)
         if timing_hook:

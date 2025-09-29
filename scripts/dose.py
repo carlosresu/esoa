@@ -46,6 +46,7 @@ def _unmask_pack_strength(s_norm: str) -> str:
 
 
 def parse_dose_struct_from_text(s_norm: str) -> Dict[str, Any]:
+    """Extract a structured dose payload describing amount, ratio, or percent."""
     if not isinstance(s_norm, str) or not s_norm:
         return {}
     s_proc = _unmask_pack_strength(s_norm)
@@ -97,6 +98,7 @@ def parse_dose_struct_from_text(s_norm: str) -> Dict[str, Any]:
 
 
 def to_mg(value: Optional[float], unit: Optional[str]) -> Optional[float]:
+    """Convert amount doses to milligrams when the unit is convertible."""
     if value is None or not isinstance(unit, str):
         return None
     u = unit.lower()
@@ -110,6 +112,7 @@ def to_mg(value: Optional[float], unit: Optional[str]) -> Optional[float]:
 
 
 def to_mg_match(value: float, unit: str):
+    """Helper used by match-time comparison for converting dose amounts to mg."""
     u = unit.lower()
     if u == "mg":
         return value
@@ -121,6 +124,7 @@ def to_mg_match(value: float, unit: str):
 
 
 def safe_ratio_mg_per_ml(strength, unit, per_val):
+    """Return the mg/mL equivalent for ratio doses when convertible."""
     mg = to_mg(strength, unit)
     pv = safe_to_float(per_val)
     if mg is None or pv in (None, 0):
@@ -129,6 +133,7 @@ def safe_ratio_mg_per_ml(strength, unit, per_val):
 
 
 def extract_dosage(s_norm: str):
+    """Parse normalized text into a compact dosage dict tailored for features."""
     if not isinstance(s_norm, str) or not s_norm:
         return None
     s_proc = _unmask_pack_strength(s_norm)
