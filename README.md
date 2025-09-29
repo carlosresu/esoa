@@ -251,6 +251,16 @@ Optional flags
 - --skip-r — Skip ATC preprocessing
 - --skip-brandmap — Reuse existing FDA brand map
 
+### Profiling the pipeline
+
+To inspect runtime hotspots, execute the profiled wrapper:
+
+```bash
+python debug.py --pnf inputs/pnf.csv --esoa inputs/esoa.csv --out esoa_matched.csv
+```
+
+`debug.py` mirrors `run.py` but wraps execution with [pyinstrument](https://github.com/joerick/pyinstrument). Profiling reports are saved to `./outputs/pyinstrument_profile_<timestamp>.html` and `.txt`, allowing you to review the call tree in a browser or terminal.
+
 ---
 
 ## 📂 Repository Structure
