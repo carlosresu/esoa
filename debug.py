@@ -10,8 +10,14 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+import subprocess
+import sys
 
-from pyinstrument import Profiler
+try:
+    from pyinstrument import Profiler
+except ModuleNotFoundError:  # pragma: no cover - runtime dependency bootstrapping
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "pyinstrument>=4.4"], stdout=sys.stdout)
+    from pyinstrument import Profiler
 
 import run
 
