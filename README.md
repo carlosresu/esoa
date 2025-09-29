@@ -250,6 +250,7 @@ Optional flags
 - --skip-install — Skip pip install
 - --skip-r — Skip ATC preprocessing
 - --skip-brandmap — Reuse existing FDA brand map
+- --skip-excel — Skip writing the XLSX workbook (CSV and summaries only)
 
 ### Minimal/local run
 
@@ -259,7 +260,7 @@ For incremental testing without touching external data sources or emitting Excel
 python run_minimal.py --pnf inputs/pnf.csv --esoa inputs/esoa.csv --out esoa_matched.csv
 ```
 
-This wrapper invokes `run.py` with `--skip-install --skip-r --skip-brandmap` and removes the Excel artifact, leaving only the CSV/summary outputs.
+This wrapper invokes `run.py` with `--skip-install --skip-r --skip-brandmap --skip-excel`, leaving only the CSV and summary outputs.
 
 ### Profiling the pipeline
 

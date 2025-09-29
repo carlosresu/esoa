@@ -47,6 +47,7 @@ def match(
     out_csv: str = "esoa_matched.csv",
     *,
     timing_hook: Callable[[str, float], None] | None = None,
+    skip_excel: bool = False,
 ) -> str:
     """Run the feature build, scoring, and output-writing stages on prepared inputs exactly as outlined in pipeline.md steps 6–15."""
     def _timed(label: str, func: Callable[[], None]) -> float:
@@ -74,6 +75,6 @@ def match(
     # Write outputs — inner module prints its own sub-spinners; do not show outer spinner
     out_path = os.path.abspath(out_csv)
     # Persist the outputs (CSV, XLSX, summaries) while capturing timing metrics.
-    write_outputs(out_df[0], out_path, timing_hook=timing_hook)
+    write_outputs(out_df[0], out_path, timing_hook=timing_hook, skip_excel=skip_excel)
 
     return out_path

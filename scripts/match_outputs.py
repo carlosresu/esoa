@@ -195,8 +195,10 @@ def write_outputs(
     out_csv: str,
     *,
     timing_hook: Callable[[str, float], None] | None = None,
+    skip_excel: bool = False,
 ) -> str:
-    """Persist the canonical CSV/XLSX outputs plus text summaries described in README (distribution breakdowns, molecule- and match-focused pivots, unknown token report)."""
+    """Persist the canonical CSV output (and optionally XLSX) plus text summaries described in README."""
+
     def _timed(label: str, func: Callable[[], None]) -> float:
         elapsed = _run_with_spinner(label, func)
         if timing_hook:
@@ -210,26 +212,29 @@ def write_outputs(
 
     _timed("Write matched CSV", lambda: out_small.to_csv(out_csv, index=False, encoding="utf-8"))
 
-    xlsx_out = os.path.splitext(out_csv)[0] + ".xlsx"
-    def _to_excel():
-        try:
-            with pd.ExcelWriter(xlsx_out, engine="xlsxwriter") as writer:
-                out_small.to_excel(writer, index=False, sheet_name="matched")
-                ws = writer.sheets["matched"]
-                # Freeze the top row to keep headers visible during review.
-                ws.freeze_panes(1, 0)
-                nrows, ncols = out_small.shape
-                ws.autofilter(0, 0, nrows, ncols - 1)
-        except Exception:
-            with pd.ExcelWriter(xlsx_out, engine="openpyxl") as writer:
-                out_small.to_excel(writer, index=False, sheet_name="matched")
-                ws = writer.sheets["matched"]
-                try:
-                    ws.freeze_panes = "A2"
-                    ws.auto_filter.ref = ws.dimensions
-                except Exception:
-                    pass
-    _timed("Write Excel", _to_excel)
+    if not skip_excel:
+        xlsx_out = os.path.splitext(out_csv)[0] + ".xlsx"
+
+        def _to_excel():
+            try:
+                with pd.ExcelWriter(xlsx_out, engine="xlsxwriter") as writer:
+                    out_small.to_excel(writer, index=False, sheet_name="matched")
+                    ws = writer.sheets["matched"]
+                    # Freeze the top row to keep headers visible during review.
+                    ws.freeze_panes(1, 0)
+                    nrows, ncols = out_small.shape
+                    ws.autofilter(0, 0, nrows, ncols - 1)
+            except Exception:
+                with pd.ExcelWriter(xlsx_out, engine="openpyxl") as writer:
+                    out_small.to_excel(writer, index=False, sheet_name="matched")
+                    ws = writer.sheets["matched"]
+                    try:
+                        ws.freeze_panes = "A2"
+                        ws.auto_filter.ref = ws.dimensions
+                    except Exception:
+                        pass
+
+        _timed("Write Excel", _to_excel)
 
     def _write_unknowns():
         unknown = out_small.loc[
