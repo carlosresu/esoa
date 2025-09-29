@@ -1,8 +1,8 @@
 Instructions:
 
-1. Look for all repo .md files (search in ./_.md, ./dependencies/atcd/_.md).
+1. Look for all repo .md files, i.e., search in ./<script>.md, ./dependencies/atcd/<script>.md.
 2. Make sure all content is consistent with the current state of the repository's current branch
-   1. look at everything in ./scripts/_.py, ./_.py, and ./dependencies/atcd/\*.R
+   1. look at everything in ./scripts/<script>.py, ./<script>.py, and ./dependencies/atcd/<script>.R
    2. make sure all markdown documentation files are consistent with each other and with the repo code
 3. Ensure all line number references are accurate.
 4. Ensure all file paths are also hyperlinked.

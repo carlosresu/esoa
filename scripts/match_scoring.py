@@ -233,9 +233,9 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
             )
 
             if not best_rows.empty:
-                match_quality = np.where(best_rows["dose_sim"] < 1.0, "dose mismatch", "OK")
-                match_quality = np.where((match_quality == "OK") & (~best_rows["_form_ok"]), "no/poor form match", match_quality)
-                match_quality = np.where((match_quality == "OK") & (~best_rows["_route_ok"]), "no/poor route match", match_quality)
+                match_quality = np.where(best_rows["dose_sim"] < 1.0, "dose_mismatch", "OK")
+                match_quality = np.where((match_quality == "OK") & (~best_rows["_form_ok"]), "no_poor_form_match", match_quality)
+                match_quality = np.where((match_quality == "OK") & (~best_rows["_route_ok"]), "no_poor_route_match", match_quality)
 
                 variants: list[str] = [
                     _format_variant(dk, strength, unit, per_val, per_unit, pct)
@@ -541,9 +541,9 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
             offending = text_form_norm if text_form_norm and not text_allowed else pnf_form_norm
             offending_display = offending or "unspecified"
             if route_norm:
-                flag_message = f"invalid: {route_norm}={offending_display}"
+                flag_message = f"invalid:{route_norm}={offending_display}"
             else:
-                flag_message = f"invalid: {offending_display}"
+                flag_message = f"invalid:{offending_display}"
         else:
             route_has_rules = approved_forms is not None
             if route_has_rules:
@@ -551,7 +551,7 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
                     form_ok_array[idx] = True
                     if text_form_norm != pnf_form_norm:
                         # Record when both sources are allowed but differ, so reviewers can spot overrides.
-                        flag_message = f"accepted: {text_form_norm}={pnf_form_norm}"
+                        flag_message = f"accepted:{text_form_norm}={pnf_form_norm}"
                 elif text_form_norm and text_form_norm in approved_forms and not pnf_form_norm:
                     form_ok_array[idx] = True
                 elif pnf_form_norm and pnf_form_norm in approved_forms and not text_form_norm:
@@ -563,7 +563,7 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
                 flagged_form = text_form_norm if text_flagged else pnf_form_norm
                 flagged_form_disp = flagged_form or "unspecified"
                 # Communicate accepted-but-flagged exceptions for manual review.
-                flag_message = f"flagged: {route_norm}={flagged_form_disp}" if route_norm else f"flagged: {flagged_form_disp}"
+                flag_message = f"flagged:{route_norm}={flagged_form_disp}" if route_norm else f"flagged:{flagged_form_disp}"
 
         route_form_flags.append(flag_message)
         route_form_invalid_flags.append(invalid)
@@ -685,7 +685,7 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     dose_mismatch_general = dose_mismatch_general & (
         selected_variant_present | (who_brand_swap & who_has_ddd)
     )
-    out.loc[needs_rev_mask & dose_mismatch_general, "match_quality"] = "dose mismatch"
+    out.loc[needs_rev_mask & dose_mismatch_general, "match_quality"] = "dose_mismatch"
     out.loc[needs_rev_mask & (~dose_mismatch_general) & (missing_series.str.len() > 0), "match_quality"] = missing_series
 
     form_norm = out["form"].map(_normalize_form_token)
@@ -709,10 +709,10 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     route_unreliable = route_source.ne("text") & (route_norm != "")
 
     unresolved = needs_rev_mask & (out["match_quality"] == "")
-    out.loc[unresolved & (form_conflict | form_unreliable), "match_quality"] = "form mismatch"
+    out.loc[unresolved & (form_conflict | form_unreliable), "match_quality"] = "form_mismatch"
 
     unresolved = needs_rev_mask & (out["match_quality"] == "")
-    out.loc[unresolved & (route_conflict | route_unreliable), "match_quality"] = "route mismatch"
+    out.loc[unresolved & (route_conflict | route_unreliable), "match_quality"] = "route_mismatch"
     out.loc[needs_rev_mask & route_form_invalid_mask, "match_quality"] = "route/form_mismatch"
     out.loc[needs_rev_mask & (out["match_quality"] == ""), "match_quality"] = "unspecified"
 
