@@ -38,8 +38,14 @@ def main(argv: list[str] | None = None) -> None:
     finally:
         sys.argv = original_argv
 
-    run._prune_dated_exports(Path(run.THIS_DIR) / "dependencies" / "atcd" / "output", "who_atc_", ".csv")
-    run._prune_dated_exports(Path(run.THIS_DIR) / "inputs", "", ".csv")
+    run._prune_dated_exports(
+        Path(run.THIS_DIR) / "dependencies" / "atcd" / "output",
+        ["who_atc_", "who_atc_level5_", "WHO ATC-DDD "],
+    )
+    run._prune_dated_exports(
+        Path(run.THIS_DIR) / "inputs",
+        ["fda_brand_map_"],
+    )
 
 
 if __name__ == "__main__":
