@@ -42,6 +42,16 @@ INPUTS = ROOT / "inputs"
 OUTPUTS = ROOT / "outputs"
 WHO_DIR = ROOT / "dependencies" / "atcd" / "output"
 
+# Common nouns that should be ignored (already handled in match_outputs but kept for safety)
+COMMON_UNKNOWN_STOPWORDS = {
+    "bottle",
+    "bottles",
+    "box",
+    "boxes",
+    "syringe",
+    "syringes",
+}
+
 # -----------------------------
 # Helpers
 # -----------------------------
@@ -174,6 +184,9 @@ def main():
         sys.exit(1)
 
     unknown_counts = _read_unknowns_with_counts(unknowns_path)
+    for key in list(unknown_counts.keys()):
+        if key.lower() in COMMON_UNKNOWN_STOPWORDS:
+            unknown_counts.pop(key)
     if not unknown_counts:
         print("No unknown words found (empty file).")
         OUTPUTS.mkdir(parents=True, exist_ok=True)
@@ -241,7 +254,15 @@ def main():
 
     # Add counts column; keep deterministic order: by unknown, then ref
     # Sorting ensures reproducible output and easier diffing of subsequent runs.
-    filtered_rows.sort(key=lambda r: (r[0], r[1], r[2], r[3]))
+    filtered_rows.sort(
+        key=lambda r: (
+            -unknown_counts.get(r[0], 0),
+            r[0],
+            r[1],
+            r[2],
+            r[3],
+        )
+    )
 
     OUTPUTS.mkdir(parents=True, exist_ok=True)
     outpath = OUTPUTS / "missed_generics.csv"

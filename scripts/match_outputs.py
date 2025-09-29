@@ -59,6 +59,16 @@ OUTPUT_COLUMNS = [
     "bucket_final","why_final","reason_final",
 ]
 
+# Common non-clinical nouns that should not be escalated as unknowns
+COMMON_UNKNOWN_STOPWORDS = {
+    "bottle",
+    "bottles",
+    "box",
+    "boxes",
+    "syringe",
+    "syringes",
+}
+
 def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
     """Produce human-readable distribution summaries for review files."""
     total = len(out_small)
@@ -230,7 +240,11 @@ def write_outputs(
         for s in unknown["unknown_words"]:
             for w in str(s).split("|"):
                 w = w.strip()
-                if w: words.append(w)
+                if not w:
+                    continue
+                if w.lower() in COMMON_UNKNOWN_STOPWORDS:
+                    continue
+                words.append(w)
         if words:
             unk_df = pd.DataFrame({"word": words})
             unk_df = unk_df.groupby("word").size().reset_index(name="count").sort_values("count", ascending=False)
