@@ -35,6 +35,10 @@ FLAGGED_ROUTE_FORM_EXCEPTIONS: set[tuple[str, str]] = {
     ("ophthalmic", "injection"),
 }
 
+# Default reasons when metadata is insufficient to determine the precise mismatch
+DEFAULT_METADATA_GAP_REASON = "review_required_metadata_insufficient"
+WHO_METADATA_GAP_REASON = "who_metadata_insufficient_review_required"
+
 # WHO ATC administration route codes mapped to canonical route tokens
 # (Fact sheet: WHO ATC/DDD Index – Adm.R definitions)
 WHO_ADM_ROUTE_MAP: dict[str, set[str]] = {
@@ -66,7 +70,7 @@ def _mk_reason(series: pd.Series, default_ok: str) -> pd.Series:
     """Standardize reason columns by filling unspecified entries with a default value."""
     s = series.astype("string")
     s = s.fillna(default_ok)
-    s = s.replace({"": default_ok, "unspecified": default_ok})
+    s = s.replace({"": default_ok, "no_specific_reason_provided": default_ok})
     return s.astype("string")
 
 
@@ -322,7 +326,7 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
         out["dose_sim"] = 0.0
         out["form_ok"] = False
         out["route_ok"] = False
-        out["match_quality"] = "unspecified"
+        out["match_quality"] = "no_specific_reason_provided"
         out["selected_form"] = None
         out["selected_variant"] = None
         out["selected_route_allowed"] = None
@@ -341,7 +345,7 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
         # Avoid FutureWarning on object-dtype downcasting by using pandas BooleanDtype
         out["form_ok"] = out["form_ok"].astype("boolean").fillna(False).astype(bool)
         out["route_ok"] = out["route_ok"].astype("boolean").fillna(False).astype(bool)
-        out["match_quality"] = out["match_quality"].fillna("unspecified")
+        out["match_quality"] = out["match_quality"].fillna("no_specific_reason_provided")
         out["selected_form"] = out["selected_form"].where(out["selected_form"].notna(), None)
         out["selected_variant"] = out["selected_variant"].where(out["selected_variant"].notna(), None)
         out["selected_route_allowed"] = out["selected_route_allowed"].where(out["selected_route_allowed"].notna(), None)
@@ -775,7 +779,9 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     unresolved = needs_rev_mask & (out["match_quality"] == "")
     out.loc[unresolved & (route_conflict | route_unreliable), "match_quality"] = "route_mismatch"
     out.loc[needs_rev_mask & route_form_invalid_mask, "match_quality"] = "route_form_mismatch"
-    out.loc[needs_rev_mask & (out["match_quality"] == ""), "match_quality"] = "unspecified"
+    unresolved = needs_rev_mask & (out["match_quality"] == "")
+    out.loc[unresolved & who_only_mask, "match_quality"] = WHO_METADATA_GAP_REASON
+    out.loc[unresolved & (~who_only_mask), "match_quality"] = DEFAULT_METADATA_GAP_REASON
 
     who_without_ddd = present_in_who & (~present_in_pnf)
     dose_related = out["match_quality"].str.contains("dose", case=False, na=False)
@@ -785,7 +791,7 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     out.loc[needs_rev_mask & who_without_route_info & route_related, "match_quality"] = "who_does_not_provide_route_info"
 
     out.loc[needs_rev_mask, "reason_final"] = out.loc[needs_rev_mask, "match_quality"]
-    out["reason_final"] = _mk_reason(out["reason_final"], "unspecified")
+    out["reason_final"] = _mk_reason(out["reason_final"], DEFAULT_METADATA_GAP_REASON)
 
     unknown_single = out["unknown_kind"].eq("Single - Unknown")
     unknown_multi_all = out["unknown_kind"].eq("Multiple - All Unknown")
@@ -832,7 +838,7 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     remaining = out["bucket_final"].eq("")
     out.loc[remaining, "bucket_final"] = "Needs review"
     out.loc[remaining, "why_final"] = "Needs review"
-    out.loc[remaining, "reason_final"] = _mk_reason(out.loc[remaining, "match_quality"], "unspecified")
+    out.loc[remaining, "reason_final"] = _mk_reason(out.loc[remaining, "match_quality"], DEFAULT_METADATA_GAP_REASON)
 
     if "dose_recognized" in out.columns:
         out["dose_recognized"] = np.where(out["dose_sim"].astype(float) == 1.0, out["dose_recognized"], "N/A")
