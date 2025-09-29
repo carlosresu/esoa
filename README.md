@@ -301,6 +301,9 @@ Optional flags
 5. Unknowns triage  
    `unknown_words.csv` plus `missed_generics.csv` flag candidate additions for the PNF/WHO/FDA dictionaries. Which buckets trigger formulary enrichment, local alias mapping, or data-quality remediation, and who owns each follow-up loop?
 
+6. FDA brand map cadence  
+   `probable_brands` and brand-swap scoring depend on the freshness of `fda_brand_map_*.csv`. Confirm how often the brand export should be refreshed and who validates multi-generic mappings before they enter production.
+
 ---
 
 ## 🔒 Data & Operational Notes
