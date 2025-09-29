@@ -448,6 +448,9 @@ def main_entry() -> None:
     # Final timing summary (console only)
     _print_grouped_summary(timings)
 
+    _prune_dated_exports(THIS_DIR / "dependencies" / "atcd" / "output", "who_atc_", ".csv")
+    _prune_dated_exports(THIS_DIR / DEFAULT_INPUTS_DIR, "", ".csv")
+
 
 if __name__ == "__main__":
     try:
@@ -455,3 +458,33 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"ERROR: {e}", file=sys.stderr)
         raise
+
+
+def _prune_dated_exports(directory: Path, prefix: str, extension: str) -> None:
+    """Remove dated files older than the latest YYYY-MM-DD available."""
+    if not directory.is_dir():
+        return
+
+    dated_paths: dict[str, Path] = {}
+    for path in directory.glob(f"{prefix}*{extension}"):
+        stem = path.stem
+        if prefix and not stem.startswith(prefix):
+            continue
+        suffix = stem[len(prefix):]
+        date_str = suffix.split("_", 1)[0]
+        try:
+            dt = datetime.strptime(date_str, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        key = dt.isoformat()
+        existing = dated_paths.get(key)
+        if existing is None or path.stat().st_mtime > existing.stat().st_mtime:
+            dated_paths[key] = path
+
+    if not dated_paths:
+        return
+
+    newest = max(dated_paths.keys())
+    for key, path in dated_paths.items():
+        if key < newest and path.exists():
+            path.unlink()
