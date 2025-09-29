@@ -43,15 +43,26 @@ WHO_METADATA_GAP_REASON = "who_metadata_insufficient_review_required"
 # (WHO ATC/DDD Index – Adm.R definitions)
 WHO_ADM_ROUTE_MAP: dict[str, set[str]] = {
     "o": {"oral"},
+    "oral": {"oral"},
+    "chewing gum": {"oral"},
     "p": {"intravenous", "intramuscular", "subcutaneous"},  # parenteral umbrella
     "r": {"rectal"},
     "v": {"vaginal"},
     "n": {"nasal"},
-    "sl": {"sublingual", "buccal", "oromucosal"},
+    "sl": {"sublingual"},
     "td": {"transdermal"},
     "inhal": {"inhalation"},
-    "instill": {"instillation"},
-    "implant": {"implant"},
+    "inhal.aerosol": {"inhalation"},
+    "inhal.powder": {"inhalation"},
+    "inhal.solution": {"inhalation"},
+    "instill.solution": {"ophthalmic"},
+    "implant": {"subcutaneous"},
+    "s.c. implant": {"subcutaneous"},
+    "intravesical": {"intravesical"},
+    "lamella": {"ophthalmic"},
+    "ointment": {"topical"},
+    "oral aerosol": {"inhalation"},
+    "urethral": {"urethral"},
 }
 
 from .dose import dose_similarity
@@ -673,7 +684,9 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     present_in_who = out["present_in_who"].astype(bool)
     present_in_fda = out["present_in_fda_generic"].astype(bool)
     has_atc_in_pnf = atc_present
-    who_route_info_available = out["who_atc_adm_r"].fillna("").astype(str).str.strip().ne("")
+    who_route_lists = [tokens if isinstance(tokens, list) else [] for tokens in out.get("who_route_tokens", [[] for _ in range(len(out))])]
+    who_route_sets = [set(tokens) for tokens in who_route_lists]
+    who_route_info_available = pd.Series([bool(tokens) for tokens in who_route_sets], index=out.index)
     who_only_mask = present_in_who & (~present_in_pnf)
 
     out.loc[present_in_pnf & has_atc_in_pnf, "match_molecule(s)"] = "ValidMoleculeWithATCinPNF"
@@ -717,25 +730,11 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
 
     route_norm = out["route"].map(_normalize_route)
     route_source = out["route_source"].fillna("").astype(str).str.lower()
-    def _map_who_routes(value: str) -> set[str]:
-        routes: set[str] = set()
-        if not isinstance(value, str) or not value:
-            return routes
-        for code in value.split("|"):
-            key = code.strip().lower()
-            if not key:
-                continue
-            routes.update(WHO_ADM_ROUTE_MAP.get(key, set()))
-        return routes
-
     selected_allowed_sets = [
         _split_route_allowed(val)
         for val in out["selected_route_allowed"]
     ]
-    who_allowed_sets = [
-        _map_who_routes(val)
-        for val in out["who_atc_adm_r"].fillna("").astype(str)
-    ]
+    who_allowed_sets = who_route_sets
     allowed_sets = []
     for sel_allowed, who_allowed, in_pnf, in_who in zip(
         selected_allowed_sets,
@@ -743,9 +742,9 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
         present_in_pnf,
         present_in_who,
     ):
-        allowed = sel_allowed
+        allowed = set(sel_allowed)
         if (not allowed) and in_who and not in_pnf and who_allowed:
-            allowed = who_allowed
+            allowed = set(who_allowed)
         allowed_sets.append(allowed)
 
     route_conflict = [

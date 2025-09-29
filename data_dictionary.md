@@ -76,6 +76,8 @@ Each record in `esoa_matched.csv` represents one normalized eSOA free-text row, 
 | `who_atc_count` | Count of WHO ATC codes on the row. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Integer. |
 | `who_atc_has_ddd` | `True` if any matched WHO code carries a defined daily dose. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Boolean flag. |
 | `who_atc_adm_r` | Pipe-delimited WHO administration-route annotations from DDD metadata. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Lowercase route abbreviations. |
+| `who_route_tokens` | List of canonical route tokens inferred from WHO Adm.R metadata. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Used when PNF lacks route allowances. |
+| `who_form_tokens` | List of canonical form tokens inferred from WHO Adm.R/UOM metadata. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Supports WHO-only route/form reconciliation. |
 
 ## Selected PNF Variant & Dose Alignment
 

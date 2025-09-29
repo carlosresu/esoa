@@ -48,7 +48,7 @@ OUTPUT_COLUMNS = [
     "form_ok","route_ok","route_form_imputations","route_evidence",
     "present_in_pnf","present_in_who","present_in_fda_generic","probable_atc",
     "generic_id","molecule_token","pnf_hits_gids","pnf_hits_count","pnf_hits_tokens",
-    "who_molecules_list","who_molecules","who_atc_codes_list","who_atc_codes","who_atc_count","who_atc_has_ddd","who_atc_adm_r",
+    "who_molecules_list","who_molecules","who_atc_codes_list","who_atc_codes","who_atc_count","who_atc_has_ddd","who_atc_adm_r","who_route_tokens","who_form_tokens",
     "selected_form","selected_route_allowed","selected_variant",
     "selected_dose_kind","selected_strength","selected_unit","selected_strength_mg",
     "selected_per_val","selected_per_unit","selected_ratio_mg_per_ml","selected_pct",
