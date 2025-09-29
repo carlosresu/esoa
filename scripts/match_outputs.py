@@ -7,6 +7,7 @@ from typing import Callable, List
 
 # Local lightweight spinner so this module is self-contained
 def _run_with_spinner(label: str, func: Callable[[], None]) -> float:
+    """Provide a local progress spinner so downstream modules stay dependency-free."""
     import threading
     done = threading.Event()
     err = []
@@ -59,6 +60,7 @@ OUTPUT_COLUMNS = [
 ]
 
 def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
+    """Produce human-readable distribution summaries for review files."""
     total = len(out_small)
     lines: List[str] = ["Distribution Summary"]
 
@@ -159,6 +161,7 @@ def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
 
 
 def _write_summary_text(out_small: pd.DataFrame, out_csv: str) -> None:
+    """Write multiple summary text files that slice the results by molecule or match quality."""
     base_dir = os.path.dirname(out_csv)
     summaries = [
         ("summary.txt", "default"),
@@ -178,6 +181,7 @@ def write_outputs(
     *,
     timing_hook: Callable[[str, float], None] | None = None,
 ) -> str:
+    """Persist the canonical CSV/XLSX outputs plus text summaries, reporting timings."""
     def _timed(label: str, func: Callable[[], None]) -> float:
         elapsed = _run_with_spinner(label, func)
         if timing_hook:

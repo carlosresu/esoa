@@ -14,6 +14,7 @@ from .pnf_partial import PnfTokenIndex
 
 # Local lightweight spinner so this module is self-contained
 def _run_with_spinner(label: str, func: Callable[[], None]) -> float:
+    """Mirror the CLI spinner locally so the feature builder stays self-contained."""
     import threading
     done = threading.Event()
     err = []
@@ -47,6 +48,7 @@ DOSE_OR_UNIT_RX = re.compile(r"(?:(\b\d+(?:[.,]\d+)?\s*(?:mg|g|mcg|ug|iu|lsu|ml|
 GENERIC_TOKEN_RX = re.compile(r"[a-z]+", re.I)
 
 def _friendly_dose(d: dict) -> str:
+    """Render a human-friendly dose string from a structured dose payload."""
     if not d: return ""
     kind = d.get("kind") or d.get("dose_kind")
     if kind == "amount": return f"{d.get('strength')}{d.get('unit','')}"
@@ -59,6 +61,7 @@ def _friendly_dose(d: dict) -> str:
     return ""
 
 def _segment_norm(seg: str) -> str:
+    """Normalize a combo segment by stripping doses, stopwords, and punctuation."""
     s = _normalize_text_basic(_base_name(seg))
     s = DOSE_OR_UNIT_RX.sub(" ", s)
     s = re.sub(r"\b(?:per|with|and)\b", " ", s)
@@ -66,11 +69,13 @@ def _segment_norm(seg: str) -> str:
     return s
 
 def load_latest_who_dir(root_dir: str) -> str | None:
+    """Locate the newest WHO ATC export living under the project dependencies folder."""
     who_dir = os.path.join(root_dir, "dependencies", "atcd", "output")
     candidates = glob.glob(os.path.join(who_dir, "who_atc_*_molecules.csv"))
     return max(candidates, key=os.path.getmtime) if candidates else None
 
 def _tokenize_unknowns(s_norm: str) -> List[str]:
+    """Break normalized candidate strings into tokens for unknown-word diagnostics."""
     return [m.group(0) for m in GENERIC_TOKEN_RX.finditer(s_norm)]
 
 def build_features(
@@ -79,6 +84,7 @@ def build_features(
     *,
     timing_hook: Callable[[str, float], None] | None = None,
 ) -> pd.DataFrame:
+    """Derive the expansive feature frame used downstream for scoring and auditing."""
     def _timed(label: str, func: Callable[[], None]) -> float:
         elapsed = _run_with_spinner(label, func)
         if timing_hook:

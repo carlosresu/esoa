@@ -18,11 +18,13 @@ from scripts.match import match
 
 
 def run_all(pnf_csv: str, esoa_csv: str, outdir: str = ".", out_csv: str = "esoa_matched.csv") -> str:
+    """Execute preparation then matching so callers get a single convenience entry point."""
     pnf_prepared, esoa_prepared = prepare(pnf_csv, esoa_csv, outdir)
     return match(pnf_prepared, esoa_prepared, out_csv)
 
 
 def _cli():
+    """Parse CLI arguments and run the full pipeline with user-provided paths."""
     ap = argparse.ArgumentParser(description="Dose-aware drug matching pipeline")
     ap.add_argument("--pnf", required=False, default="pnf.csv")
     ap.add_argument("--esoa", required=False, default="esoa.csv")
