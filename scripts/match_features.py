@@ -12,6 +12,47 @@ from .who_molecules import detect_all_who_molecules, load_who_molecules
 from .brand_map import load_latest_brandmap, build_brand_automata, fda_generics_set
 from .pnf_partial import PnfTokenIndex
 
+WHO_ADM_ROUTE_MAP: dict[str, set[str]] = {
+    "o": {"oral"},
+    "oral": {"oral"},
+    "chewing gum": {"oral"},
+    "p": {"intravenous", "intramuscular", "subcutaneous"},
+    "r": {"rectal"},
+    "v": {"vaginal"},
+    "n": {"nasal"},
+    "sl": {"sublingual"},
+    "td": {"transdermal"},
+    "inhal": {"inhalation"},
+    "inhal.aerosol": {"inhalation"},
+    "inhal.powder": {"inhalation"},
+    "inhal.solution": {"inhalation"},
+    "instill.solution": {"ophthalmic"},
+    "implant": {"subcutaneous"},
+    "s.c. implant": {"subcutaneous"},
+    "intravesical": {"intravesical"},
+    "lamella": {"ophthalmic"},
+    "ointment": {"topical"},
+    "oral aerosol": {"inhalation"},
+    "urethral": {"urethral"},
+}
+
+WHO_FORM_TO_CANONICAL: dict[str, set[str]] = {
+    "chewing gum": {"tablet"},
+    "inhal.aerosol": {"mdi"},
+    "inhal.powder": {"dpi"},
+    "inhal.solution": {"solution"},
+    "instill.solution": {"solution"},
+    "oral aerosol": {"mdi"},
+    "ointment": {"ointment"},
+    "lamella": {"solution"},
+    "implant": {"solution"},
+    "s.c. implant": {"solution"},
+}
+
+WHO_UOM_TO_CANONICAL: dict[str, set[str]] = {
+    "tablet": {"tablet"},
+}
+
 # Local lightweight spinner so this module is self-contained
 def _run_with_spinner(label: str, func: Callable[[], None]) -> float:
     """Mirror the CLI spinner locally so the feature builder stays self-contained."""
@@ -347,6 +388,8 @@ def build_features(
             who_names_all, who_atc_all = [], []
             who_ddd_flags: List[bool] = []
             who_adm_r_cols: List[str] = []
+            who_route_cols: List[List[str]] = []
+            who_form_cols: List[List[str]] = []
             for txt, txt_norm in zip(df["match_basis"].tolist(), df["match_basis_norm_basic"].tolist()):
                 names, codes = detect_all_who_molecules(txt, who_regex, codes_by_name, pre_normalized=txt_norm)
                 who_names_all.append(names)
@@ -355,22 +398,34 @@ def build_features(
 
                 has_ddd = False
                 adm_r_values: set[str] = set()
+                route_tokens: set[str] = set()
+                form_tokens: set[str] = set()
                 for code in sorted_codes:
                     for detail in who_details_by_code.get(code, []):
                         ddd_val = detail.get("ddd")
                         if pd.notna(ddd_val) and str(ddd_val).strip():
                             has_ddd = True
                         uom_val = detail.get("uom")
-                        if pd.isna(ddd_val) and pd.notna(uom_val):
-                            # conserve future compatibility; no-op currently
-                            pass
+                        if pd.notna(uom_val):
+                            uom_key = str(uom_val).strip().lower()
+                            form_tokens.update(WHO_UOM_TO_CANONICAL.get(uom_key, set()))
                         adm_r_val = detail.get("adm_r")
                         if pd.notna(adm_r_val):
                             adm_r_text = str(adm_r_val).strip()
                             if adm_r_text:
-                                adm_r_values.add(adm_r_text.lower())
+                                adm_key = adm_r_text.lower()
+                                mapped_routes = WHO_ADM_ROUTE_MAP.get(adm_key)
+                                if mapped_routes:
+                                    route_tokens.update(mapped_routes)
+                                else:
+                                    route_tokens.add(adm_key)
+                                form_tokens.update(WHO_FORM_TO_CANONICAL.get(adm_key, set()))
+                if route_tokens:
+                    adm_r_values.update(route_tokens)
                 who_ddd_flags.append(has_ddd)
                 who_adm_r_cols.append("|".join(sorted(adm_r_values)) if adm_r_values else "")
+                who_route_cols.append(sorted(route_tokens))
+                who_form_cols.append(sorted(form_tokens))
 
             df["who_molecules_list"] = who_names_all
             df["who_atc_codes_list"] = who_atc_all
@@ -378,6 +433,8 @@ def build_features(
             df["who_atc_codes"] = df["who_atc_codes_list"].map(lambda xs: "|".join(xs) if xs else "")
             df["who_atc_has_ddd"] = who_ddd_flags
             df["who_atc_adm_r"] = who_adm_r_cols
+            df["who_route_tokens"] = who_route_cols
+            df["who_form_tokens"] = who_form_cols
         else:
             df["who_molecules_list"] = [[] for _ in range(len(df))]
             df["who_atc_codes_list"] = [[] for _ in range(len(df))]
@@ -385,6 +442,8 @@ def build_features(
             df["who_atc_codes"] = ""
             df["who_atc_has_ddd"] = False
             df["who_atc_adm_r"] = ""
+            df["who_route_tokens"] = [[] for _ in range(len(df))]
+            df["who_form_tokens"] = [[] for _ in range(len(df))]
     _timed("Detect WHO molecules", _who_detect)
 
     # 13) Combination detection helpers

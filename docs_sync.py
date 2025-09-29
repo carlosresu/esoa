@@ -405,6 +405,18 @@ DATA_SECTIONS: list[tuple[str, list[tuple[str, str, str, str]]]] = [
                 "[scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)",
                 "Lowercase route abbreviations.",
             ),
+            (
+                "`who_route_tokens`",
+                "List of canonical route tokens inferred from WHO Adm.R metadata.",
+                "[scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)",
+                "Used when PNF lacks route allowances.",
+            ),
+            (
+                "`who_form_tokens`",
+                "List of canonical form tokens inferred from WHO Adm.R/UOM metadata.",
+                "[scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)",
+                "Supports WHO-only route/form reconciliation.",
+            ),
         ],
     ),
     (
