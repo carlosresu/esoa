@@ -97,9 +97,12 @@ DATA_HEADER = dedent(
 
 def _section(title: str, rows: list[tuple[str, str, str, str]]) -> str:
     """Assemble a Markdown section with a heading and tabular column descriptions."""
+    # Seed the Markdown rows with the section header and table scaffold.
     out: list[str] = [f"## {title}", "", "| Column | Meaning | First Assigned | Notes |", "| --- | --- | --- | --- |"]
     for column, meaning, first_assigned, notes in rows:
+        # Append each column's metadata as a Markdown table row.
         out.append(f"| {column} | {meaning} | {first_assigned} | {notes} |")
+    # Insert a trailing blank line to keep sections visually separated.
     out.append("")
     return "\n".join(out)
 
@@ -574,33 +577,44 @@ DATA_SECTIONS: list[tuple[str, list[tuple[str, str, str, str]]]] = [
 
 def render_pipeline() -> str:
     """Compose the pipeline walkthrough Markdown from the static step listing."""
+    # Begin with the static introduction text.
     parts = [PIPELINE_HEADER.strip(), ""]
     for idx, (title, body) in enumerate(PIPELINE_STEPS, start=1):
+        # Emit a numbered heading for the step.
         parts.append(f"{idx}. **{title}**  ")
+        # Pair the heading with its descriptive paragraph.
         parts.append(f"   {body}")
+        # Maintain spacing between bullet paragraphs for readability.
         parts.append("")
     return "\n".join(parts).strip() + "\n"
 
 
 def render_data_dictionary() -> str:
     """Build the data dictionary Markdown capturing every documented column."""
+    # Prime the output with the top-level heading.
     sections = [DATA_HEADER.strip(), ""]
     for section_title, rows in DATA_SECTIONS:
+        # Generate a table for each thematic grouping.
         sections.append(_section(section_title, rows))
     return "\n".join(sections).strip() + "\n"
 
 
 def update_file(path: Path, content: str) -> None:
     """Write Markdown when contents change, avoiding churn in version control."""
+    # Read existing file contents (if present) to avoid unnecessary writes.
     current = path.read_text() if path.exists() else ""
     if current != content:
+        # Persist the freshly rendered Markdown when a diff is detected.
         path.write_text(content)
 
 
 def main() -> None:
     """Regenerate the pipeline and data dictionary docs in-place."""
+    # Update pipeline walkthrough documentation.
     update_file(PIPELINE_MD, render_pipeline())
+    # Refresh the data dictionary to mirror the latest schema.
     update_file(DATA_DICTIONARY_MD, render_data_dictionary())
+    # Provide a simple confirmation for CLI users.
     print("Documentation synchronised: pipeline.md, data_dictionary.md")
 
 

@@ -40,12 +40,15 @@ if str(THIS_DIR) not in sys.path:
 # ----------------------------
 def _resolve_input_path(p: str | os.PathLike[str], default_subdir: str = DEFAULT_INPUTS_DIR) -> Path:
     """Resolve user-provided paths, falling back to ./inputs/{filename} when relative."""
+    # Fail fast when no argument is supplied.
     if not p:
         raise FileNotFoundError("No input path provided.")
     pth = Path(p)
+    # Accept absolute or pre-resolved file references as-is.
     if pth.is_file():
         return pth
     candidate = THIS_DIR / default_subdir / pth.name
+    # Look in the project-relative inputs directory for convenience.
     if candidate.is_file():
         return candidate
     raise FileNotFoundError(
@@ -58,6 +61,7 @@ def _resolve_input_path(p: str | os.PathLike[str], default_subdir: str = DEFAULT
 def _ensure_outputs_dir() -> Path:
     """Make sure the outputs directory exists and return its filesystem path."""
     outdir = THIS_DIR / OUTPUTS_DIR
+    # Create the directory tree so downstream writes succeed.
     outdir.mkdir(parents=True, exist_ok=True)
     return outdir
 
@@ -65,6 +69,7 @@ def _ensure_outputs_dir() -> Path:
 def _ensure_inputs_dir() -> Path:
     """Create the inputs directory when missing so upstream steps can drop files."""
     inp = THIS_DIR / DEFAULT_INPUTS_DIR
+    # Mirror the outputs helper to ensure inputs/ exists during bootstrapping.
     inp.mkdir(parents=True, exist_ok=True)
     return inp
 
@@ -73,6 +78,7 @@ def _assert_all_exist(root: Path, files: Iterable[str | os.PathLike[str]]) -> No
     """Validate that every filename under root exists before shelling out to R scripts."""
     for f in files:
         fp = root / f
+        # Surface a clear error when an expected script is missing.
         if not fp.is_file():
             raise FileNotFoundError(f"Required file not found: {fp}")
 
@@ -89,13 +95,16 @@ def run_with_spinner(label: str, func: Callable[[], None], start_delay: float = 
 
     def worker():
         try:
+            # Execute the workload in a background thread while the spinner animates.
             func()
         except BaseException as e:  # noqa: BLE001
             err.append(e)
         finally:
+            # Signal the spinner loop to exit once the task finishes.
             done.set()
 
     t0 = time.perf_counter()
+    # Spawn the worker thread immediately so the spinner reflects real time.
     th = threading.Thread(target=worker, daemon=True)
     th.start()
 
@@ -105,13 +114,16 @@ def run_with_spinner(label: str, func: Callable[[], None], start_delay: float = 
     while not done.is_set():
         elapsed = time.perf_counter() - t0
         frame = spinner_frames[idx % len(spinner_frames)]
+        # Continuously update the console line with elapsed time and spinner state.
         sys.stdout.write(f"\r{frame} {elapsed:7.2f}s {label}")
         sys.stdout.flush()
         idx += 1
         time.sleep(0.1)
 
+    # Ensure the worker concluded before finalizing output.
     th.join()
     elapsed = time.perf_counter() - t0
+    # Emit a final success line with the total runtime.
     sys.stdout.write(f"\r✓ {elapsed:7.2f}s {label}\n")
     sys.stdout.flush()
 
@@ -209,6 +221,7 @@ DEFAULT_GROUP = "Other"
 class TimingCollector:
     """Accumulate per-step timings and expose grouped rollups for summary output."""
     def __init__(self) -> None:
+        # Store (step label, duration) pairs in insertion order.
         self._entries: list[tuple[str, float]] = []
 
     def add(self, label: str, seconds: float) -> None:
@@ -217,6 +230,7 @@ class TimingCollector:
 
     @property
     def entries(self) -> list[tuple[str, float]]:
+        # Provide an immutable snapshot to avoid external mutation.
         return list(self._entries)
 
     def grouped_totals(self) -> dict[str, float]:
@@ -226,8 +240,10 @@ class TimingCollector:
         for label, seconds in self._entries:
             group = STEP_TO_GROUP.get(label)
             if group:
+                # Accumulate durations within the matched group.
                 totals[group] += seconds
             else:
+                # Collect timings that do not map to a known group.
                 other_total += seconds
         if other_total > 0.0:
             totals[DEFAULT_GROUP] = totals.get(DEFAULT_GROUP, 0.0) + other_total
@@ -235,6 +251,7 @@ class TimingCollector:
 
     def total(self) -> float:
         """Return the aggregate runtime of every recorded step."""
+        # Sum directly over the recorded durations for quick reuse.
         return sum(seconds for _, seconds in self._entries)
 
 
@@ -245,6 +262,7 @@ def _print_grouped_summary(timings: TimingCollector) -> None:
     if not non_zero:
         return
     label_width = max(len(group) for group, _ in non_zero)
+    # Print grouped totals followed by the aggregate wall clock time.
     print("\n=== Timing Summary ===")
     total = 0.0
     for group, secs in non_zero:
@@ -265,6 +283,7 @@ def install_requirements(req_path: str | os.PathLike[str]) -> None:
     if not req or not req.is_file():
         return
     with open(os.devnull, "w") as devnull:
+        # Delegate to pip while silencing noisy progress output.
         subprocess.check_call(
             [sys.executable, "-m", "pip", "install", "--disable-pip-version-check", "-r", str(req)],
             cwd=str(THIS_DIR),
@@ -279,16 +298,19 @@ def run_r_scripts() -> None:
     if not atcd_dir.is_dir():
         return
     out_dir = atcd_dir / "output"
+    # Ensure the ATC output directory exists for downstream CSVs.
     out_dir.mkdir(parents=True, exist_ok=True)
     rscript = shutil.which("Rscript")
     if not rscript:
         return
     try:
+        # Validate that all orchestrated R scripts are present before looping.
         _assert_all_exist(atcd_dir, ATCD_SCRIPTS)
     except FileNotFoundError:
         return
     with open(os.devnull, "w") as devnull:
         for script in ATCD_SCRIPTS:
+            # Run each R script sequentially, surfacing errors if any command fails.
             subprocess.run([rscript, script], check=True, cwd=str(atcd_dir), stdout=devnull, stderr=devnull)
 
 
@@ -305,6 +327,7 @@ def build_brand_map(inputs_dir: Path, outfile: Path | None) -> Path:
     existing_maps = sorted(inputs_dir.glob("fda_brand_map_*.csv"), reverse=True)
     with open(os.devnull, "w") as devnull:
         try:
+            # Attempt to build a fresh brand map using the scraper module.
             subprocess.run(
                 [
                     sys.executable,
@@ -348,6 +371,7 @@ def run_resolve_unknowns() -> None:
         # If the script doesn't exist, nothing to do
         return
     with open(os.devnull, "w") as devnull:
+        # Invoke the module via python -m so relative imports resolve correctly.
         subprocess.run(
             [sys.executable, "-m", mod_name],
             check=True,
@@ -377,6 +401,7 @@ def main_entry() -> None:
 
     outdir = _ensure_outputs_dir()
     inputs_dir = _ensure_inputs_dir()
+    # Resolve the requested raw inputs, enforcing the fallback search behavior.
     pnf_path = _resolve_input_path(args.pnf)
     esoa_path = _resolve_input_path(args.esoa)
     out_path = outdir / Path(args.out).name
@@ -387,17 +412,21 @@ def main_entry() -> None:
     timings = TimingCollector()
 
     if not args.skip_install and args.requirements:
+        # Optionally install Python dependencies prior to the heavy lifting.
         t = run_with_spinner("Install requirements", lambda: install_requirements(args.requirements))
         timings.add("Install requirements", t)
 
     if not args.skip_r:
+        # Execute the R preprocessing stage (WHO ATC scraping -> filtered outputs).
         t = run_with_spinner("ATC R preprocessing", run_r_scripts)
         timings.add("ATC R preprocessing", t)
 
     if not args.skip_brandmap:
+        # Generate or reuse the FDA brand map that feeds the feature builder.
         t = run_with_spinner("Build FDA brand map", lambda: build_brand_map(inputs_dir, outfile=None))
         timings.add("Build FDA brand map", t)
 
+    # Prepare inputs prior to matching (PNF normalization + eSOA renaming).
     t = run_with_spinner("Prepare inputs", lambda: _prepare(str(pnf_path), str(esoa_path), str(inputs_dir)))
     timings.add("Prepare inputs", t)
 
@@ -409,6 +438,7 @@ def main_entry() -> None:
         timing_hook=timings.add,
     )
 
+    # Run the follow-up enrichment step to analyze unknown tokens.
     t = run_with_spinner("Resolve unknowns", run_resolve_unknowns)
     timings.add("Resolve unknowns", t)
 

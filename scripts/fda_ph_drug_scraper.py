@@ -26,6 +26,7 @@ def fetch_csv_export() -> List[Dict[str, str]]:
     with requests.Session() as s:
         r0 = s.get(HUMAN_DRUGS_URL, headers=HEADERS, timeout=30)
         r0.raise_for_status()
+        # Request the CSV export endpoint once the session is established.
         r = s.get(f"{HUMAN_DRUGS_URL}?export=csv", headers=HEADERS, timeout=120)
         r.raise_for_status()
         text = r.text
@@ -33,6 +34,7 @@ def fetch_csv_export() -> List[Dict[str, str]]:
     rows: List[Dict[str, str]] = []
     reader = csv.DictReader(text.splitlines())
     for row in reader:
+        # Normalize whitespace around keys and values for consistency.
         rows.append({k.strip(): (v.strip() if isinstance(v, str) else v) for k, v in row.items()})
     if not rows:
         raise RuntimeError("FDA export returned no rows.")
@@ -60,6 +62,7 @@ def normalize_columns(rows: List[Dict[str, str]]) -> List[Dict[str, str]]:
         nr: Dict[str, str] = {}
         for k, v in r.items():
             kk = key_map.get(k, k.lower().replace(" ", "_"))
+            # Map or fallback to a deterministic snake_case key.
             nr[kk] = v
         out.append(nr)
     return out
@@ -136,6 +139,7 @@ def main() -> None:
     with out_csv.open("w", encoding="utf-8", newline="") as f:
         w = csv.DictWriter(f, fieldnames=fieldnames)
         w.writeheader()
+        # Stream rows to disk preserving the deduped ordering.
         w.writerows(brand_map)
 
 

@@ -58,6 +58,7 @@ def _tokens(s: str) -> List[str]:
 def _read_unknowns_with_counts(path: Path) -> Dict[str, int]:
     """Read unknown_words.csv with header [word,count] -> dict word->count."""
     out: Dict[str, int] = {}
+    # Bail out when the source file is absent.
     if not path.is_file():
         return out
     with path.open("r", encoding="utf-8-sig", newline="") as f:
@@ -65,6 +66,7 @@ def _read_unknowns_with_counts(path: Path) -> Dict[str, int]:
         if not reader.fieldnames or "word" not in reader.fieldnames:
             return out
         for r in reader:
+            # Normalize the unknown token and associated count field.
             w = (r.get("word") or "").strip()
             c_raw = (r.get("count") or "").strip()
             if not w:
@@ -73,6 +75,7 @@ def _read_unknowns_with_counts(path: Path) -> Dict[str, int]:
                 c = int(c_raw) if c_raw != "" else 0
             except Exception:
                 c = 0
+            # Persist the observed count (defaults to 0 on parsing failure).
             out[w] = c
     return out
 
@@ -88,11 +91,13 @@ def _read_col(path: Path, colname: str) -> List[str]:
         for r in reader:
             v = (r.get(colname) or "").strip()
             if v:
+                # Preserve meaningful entries exactly as they appear in the file.
                 out.append(v)
     return out
 
 def _pick_newest(pattern: Path) -> Optional[Path]:
     """Select the newest file matching the glob pattern, if any exist."""
+    # Sort matches by mtime so the freshest export is preferred.
     files = sorted(glob.glob(str(pattern)), key=os.path.getmtime, reverse=True)
     return Path(files[0]) if files else None
 
@@ -115,6 +120,7 @@ def _build_unknown_index(unknowns: Iterable[str]) -> Tuple[Dict[int, Dict[Tuple[
             continue
         L = len(toks)
         lengths.add(L)
+        # Group unknowns first by token length then by the exact token tuple.
         bucket = index_by_len.setdefault(L, {})
         bucket.setdefault(toks, []).append(u)
     return index_by_len, lengths
@@ -142,6 +148,7 @@ def _scan_source(
             lst = index_by_len[n].get(tuple(ref_tokens))
             if lst:
                 for u in lst:
+                    # Capture full-length alignments for the report.
                     results.append([u, source_name, ref, "whole", refpath_str])
         # Partial matches: contiguous subsequences shorter than full length
         for L in lengths:
@@ -155,6 +162,7 @@ def _scan_source(
                 lst = bucket.get(window)
                 if lst:
                     for u in lst:
+                        # Record partial overlaps that may explain shorter unknown spans.
                         results.append([u, source_name, ref, "partial", refpath_str])
     return results
 
@@ -176,6 +184,7 @@ def main():
         print(str(outpath))
         return
 
+    # Preserve the file order to maintain deterministic reporting.
     unknown_words = list(unknown_counts.keys())
 
     # Build fast index of unknown token n-grams
@@ -213,6 +222,7 @@ def main():
         t = tuple(row)
         if t not in seen_rows:
             seen_rows.add(t)
+            # Keep only the first observation of each (unknown, source, ref, kind) tuple.
             deduped.append(row)
 
     # Prioritize per unknown: PNF > WHO > FDA
@@ -230,6 +240,7 @@ def main():
         filtered_rows.extend(src_map[best_src])
 
     # Add counts column; keep deterministic order: by unknown, then ref
+    # Sorting ensures reproducible output and easier diffing of subsequent runs.
     filtered_rows.sort(key=lambda r: (r[0], r[1], r[2], r[3]))
 
     OUTPUTS.mkdir(parents=True, exist_ok=True)
@@ -240,6 +251,7 @@ def main():
         for u, src, ref, kind, rpath in filtered_rows:
             writer.writerow([u, unknown_counts.get(u, 0), src, ref, kind, rpath])
 
+    # Print the output path for automation hooks and quick discovery.
     print(str(outpath))
 
 if __name__ == "__main__":

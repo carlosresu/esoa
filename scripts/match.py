@@ -56,20 +56,24 @@ def match(
         return elapsed
 
     # Load inputs
+    # Use small mutable containers so closures can assign to outer scope by reference.
     pnf_df = [None]
     esoa_df = [None]
     _timed("Load PNF prepared CSV", lambda: pnf_df.__setitem__(0, pd.read_csv(pnf_prepared_csv)))
     _timed("Load eSOA prepared CSV", lambda: esoa_df.__setitem__(0, pd.read_csv(esoa_prepared_csv)))
 
     # Build features — inner function prints its own sub-spinners; do not show outer spinner
+    # Feed the matcher-specific feature engineering step.
     features_df = build_features(pnf_df[0], esoa_df[0], timing_hook=timing_hook)
 
     # Score & classify
+    # Prepare container for the scored DataFrame so the closure can mutate it.
     out_df = [None]
     _timed("Score & classify", lambda: out_df.__setitem__(0, score_and_classify(features_df, pnf_df[0])))
 
     # Write outputs — inner module prints its own sub-spinners; do not show outer spinner
     out_path = os.path.abspath(out_csv)
+    # Persist the outputs (CSV, XLSX, summaries) while capturing timing metrics.
     write_outputs(out_df[0], out_path, timing_hook=timing_hook)
 
     return out_path

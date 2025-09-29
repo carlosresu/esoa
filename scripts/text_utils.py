@@ -71,6 +71,7 @@ def extract_parenthetical_phrases(raw_text: str) -> List[str]:
             continue
         if re.fullmatch(r"[-/+\s]+", it):
             continue
+        # Normalize whitespace within each parenthetical snippet.
         cleaned.append(re.sub(r"\s+", " ", it))
     seen = set()
     uniq = []
@@ -79,6 +80,7 @@ def extract_parenthetical_phrases(raw_text: str) -> List[str]:
         if k in seen:
             continue
         seen.add(k)
+        # Preserve original casing for display purposes.
         uniq.append(c)
     return uniq
 

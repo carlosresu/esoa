@@ -73,12 +73,15 @@ def build_brand_automata(brand_df: pd.DataFrame) -> Tuple[ahocorasick.Automaton,
         bc = normalize_compact(b)
         if not bn:
             continue
+        # Map the normalized brand token to its full metadata payload.
         mapping.setdefault(bn, []).append(BrandMatch(
             brand=b, generic=g, dosage_form=dosage_form, route=route, dosage_strength=dosage_strength
         ))
         if bn not in seen_norm:
+            # Register the normalized token once for the standard automaton.
             A_norm.add_word(bn, bn); seen_norm.add(bn)
         if bc and bc not in seen_comp:
+            # Register the compact token to capture hyphen/space variations.
             A_comp.add_word(bc, bn); seen_comp.add(bc)
     A_norm.make_automaton()
     A_comp.make_automaton()
@@ -91,8 +94,10 @@ def scan_brands(text_norm: str, text_comp: str,
     """Return normalized brand keys detected via either normalized or compact searches."""
     found: Dict[str, int] = {}
     for _, bn in A_norm.iter(text_norm):
+        # Record matches from the normalized automaton, tracking longest span per key.
         found[bn] = max(found.get(bn, 0), len(bn))
     for _, bn in A_comp.iter(text_comp):
+        # Merge in compact hits to catch spacing-insensitive matches.
         found[bn] = max(found.get(bn, 0), len(bn))
     return [k for k, _ in sorted(found.items(), key=lambda kv: (-kv[1], kv[0]))]
 
@@ -105,5 +110,6 @@ def fda_generics_set(brand_df: pd.DataFrame) -> Set[str]:
     for g in brand_df["generic_name"].fillna("").astype(str).tolist():
         gb = _normalize_text_basic(_base_name(g))
         if gb:
+            # Store the normalized generic token for fast membership checks.
             gens.add(gb)
     return gens

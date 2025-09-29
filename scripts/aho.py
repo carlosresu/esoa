@@ -19,8 +19,10 @@ def build_molecule_automata(pnf_df) -> Tuple[ahocorasick.Automaton, ahocorasick.
         key_norm = normalize_text(gname)
         key_comp = normalize_compact(gname)
         if key_norm and (gid, key_norm) not in seen_norm:
+            # Store the longest normalized token once per (gid, normalized name).
             A_norm.add_word(key_norm, (gid, gname)); seen_norm.add((gid, key_norm))
         if key_comp and (gid, key_comp) not in seen_comp:
+            # Include the compact form to catch spacing and hyphen differences.
             A_comp.add_word(key_comp, (gid, gname)); seen_comp.add((gid, key_comp))
     if "synonyms" in pnf_df.columns:
         for gid, syns in pnf_df[["generic_id", "synonyms"]].itertuples(index=False):
@@ -29,8 +31,10 @@ def build_molecule_automata(pnf_df) -> Tuple[ahocorasick.Automaton, ahocorasick.
                     key_norm = normalize_text(s)
                     key_comp = normalize_compact(s)
                     if key_norm and (gid, key_norm) not in seen_norm:
+                        # Treat synonyms as alternative tokens for the same generic.
                         A_norm.add_word(key_norm, (gid, s)); seen_norm.add((gid, key_norm))
                     if key_comp and (gid, key_comp) not in seen_comp:
+                        # Register compact synonym variants as well.
                         A_comp.add_word(key_comp, (gid, s)); seen_comp.add((gid, key_comp))
     A_norm.make_automaton()
     A_comp.make_automaton()
@@ -43,9 +47,11 @@ def scan_pnf_all(text_norm: str, text_comp: str,
     """Return ordered (gid, token) hits using whichever automaton produced the longest span."""
     candidates: Dict[str, str] = {}
     for _, (gid, token) in A_norm.iter(text_norm):
+        # Keep the longest token emitted per gid when scanning the normalized string.
         if gid not in candidates or len(token) > len(candidates[gid]):
             candidates[gid] = token
     for _, (gid, token) in A_comp.iter(text_comp):
+        # Merge compact hits, preferring longer matches to reduce noise.
         if gid not in candidates or len(token) > len(candidates[gid]):
             candidates[gid] = token
     items = sorted(candidates.items(), key=lambda kv: (-len(kv[1]), kv[0]))
