@@ -712,7 +712,7 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     out.loc[needs_rev_mask & route_form_invalid_mask, "match_quality"] = "route_form_mismatch"
     out.loc[needs_rev_mask & (out["match_quality"] == ""), "match_quality"] = "unspecified"
 
-    who_without_ddd = present_in_who & (~who_has_ddd)
+    who_without_ddd = present_in_who & (~present_in_pnf)
     dose_related = out["match_quality"].str.contains("dose", case=False, na=False)
     out.loc[needs_rev_mask & who_without_ddd & dose_related, "match_quality"] = "who_does_not_provide_dose_info"
 
