@@ -8,6 +8,32 @@ This repository implements the **eSOA (electronic Statement of Account) drug mat
 
 It prepares raw CSVs, parses text into structured features, detects candidate generics, scores/classifies matches, and outputs a labeled dataset with a detailed distribution summary and unknown token report. The goal is to support **public health operations and oversight**, not commercial decision-making.
 
+## Requirements
+
+- `pip install -r requirements.txt`
+
+**Python packages**
+- `numpy>=1.21`
+- `openpyxl>=3.1`
+- `pandas>=1.5`
+- `pyahocorasick>=2.0`
+- `requests>=2.31`
+- `XlsxWriter>=3.0`
+
+**R packages for WHO ATC preprocessing**
+- `pacman`
+- `rvest`
+- `dplyr`
+- `readr`
+- `xml2`
+- `purrr`
+- `future`
+- `furrr`
+- `memoise`
+- `httr2`
+- `tibble`
+- `stringr`
+
 ---
 
 ## 🚀 Pipeline Overview
@@ -271,3 +297,13 @@ Optional flags
 - Standardizes drug text for public-health monitoring, auditing, coverage analytics
 - Ensure use aligns with data-sharing agreements & privacy protections
 - FDA PH data is fetched from public portal’s CSV export; availability may vary
+
+---
+
+## 📚 Documentation
+
+- `data_dictionary.md` — Column-level definitions and provenance for `outputs/esoa_matched.csv`.
+- `pipeline.md` — Step-by-step execution walkthrough of the matching pipeline with module references.
+
+These references stay in sync with the current pipeline logic in `scripts/` and can be used by reviewers or developers who need deeper traceability.
+
