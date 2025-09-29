@@ -448,8 +448,14 @@ def main_entry() -> None:
     # Final timing summary (console only)
     _print_grouped_summary(timings)
 
-    _prune_dated_exports(THIS_DIR / "dependencies" / "atcd" / "output", "who_atc_", ".csv")
-    _prune_dated_exports(THIS_DIR / DEFAULT_INPUTS_DIR, "", ".csv")
+    _prune_dated_exports(
+        THIS_DIR / "dependencies" / "atcd" / "output",
+        ["who_atc_", "who_atc_level5_", "WHO ATC-DDD "],
+    )
+    _prune_dated_exports(
+        THIS_DIR / DEFAULT_INPUTS_DIR,
+        ["fda_brand_map_"],
+    )
 
 
 if __name__ == "__main__":
@@ -460,31 +466,51 @@ if __name__ == "__main__":
         raise
 
 
-def _prune_dated_exports(directory: Path, prefix: str, extension: str) -> None:
-    """Remove dated files older than the latest YYYY-MM-DD available."""
+def _prune_dated_exports(directory: Path, prefixes: list[str] | tuple[str, ...], extension: str = ".csv") -> None:
+    """Remove dated files (YYYY-MM-DD) older than the newest per prefix."""
     if not directory.is_dir():
         return
 
-    dated_paths: dict[str, list[Path]] = {}
-    for path in directory.glob(f"{prefix}*{extension}"):
+    if isinstance(prefixes, str):
+        prefixes = [prefixes]
+
+    dated_paths: dict[tuple[str, str], list[Path]] = {}
+
+    for path in directory.glob(f"*{extension}"):
         stem = path.stem
-        if prefix and not stem.startswith(prefix):
+        matched_prefix = None
+        remainder = None
+        for prefix in prefixes:
+            if prefix and stem.startswith(prefix):
+                matched_prefix = prefix
+                remainder = stem[len(prefix):]
+                break
+        if matched_prefix is None:
             continue
-        suffix = stem[len(prefix):]
-        date_str = suffix.split("_", 1)[0]
+
+        if remainder is None:
+            remainder = stem[len(matched_prefix):]
+
+        date_candidate = remainder.split("_", 1)[0][:10]
         try:
-            dt = datetime.strptime(date_str, "%Y-%m-%d").date()
+            dt = datetime.strptime(date_candidate, "%Y-%m-%d").date()
         except ValueError:
             continue
-        key = dt.isoformat()
+
+        key = (matched_prefix, dt.isoformat())
         dated_paths.setdefault(key, []).append(path)
 
     if not dated_paths:
         return
 
-    newest = max(dated_paths.keys())
-    for key, paths in dated_paths.items():
-        if key >= newest:
+    latest_by_prefix: dict[str, str] = {}
+    for prefix, date_str in dated_paths.keys():
+        latest = latest_by_prefix.get(prefix)
+        if latest is None or date_str > latest:
+            latest_by_prefix[prefix] = date_str
+
+    for (prefix, date_str), paths in dated_paths.items():
+        if date_str == latest_by_prefix.get(prefix):
             continue
         for path in paths:
             if path.exists():
