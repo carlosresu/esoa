@@ -75,7 +75,7 @@ flowchart TD
 
 ## 🧠 Core Algorithmic Logic
 
-1. Dose Parsing (scripts/dose.py)
+1. Dose Parsing ([scripts/dose.py](https://github.com/carlosresu/esoa/blob/main/scripts/dose.py))
 
 Understands expressions like:
 
@@ -105,7 +105,7 @@ Supervisor input needed
 
 ---
 
-2. Route & Form Detection (scripts/routes_forms.py + scripts/match_scoring.py)
+2. Route & Form Detection ([scripts/routes_forms.py](https://github.com/carlosresu/esoa/blob/main/scripts/routes_forms.py) + [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py))
 
 - Recognizes forms (tablet, cap, MDI, DPI, susp, soln, spray, supp, etc.) and maps them to canonical routes (oral, inhalation, nasal, rectal, etc.), expanding common aliases (PO, per os, SL, IM, IV, etc.).
 - When an eSOA entry is missing the route but the form is present, the PNF-derived route is imputed and logged in `route_evidence`.
@@ -123,7 +123,7 @@ Supervisor input needed
 
 ---
 
-3. Brand → Generic Swap (scripts/brand_map.py, used in match_features.py)
+3. Brand → Generic Swap ([scripts/brand_map.py](https://github.com/carlosresu/esoa/blob/main/scripts/brand_map.py), used in [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py))
 
 - Builds Aho–Corasick automata of FDA brand names; maps each to one or more FDA-listed generics with optional dose/form metadata.
 - For each eSOA line, we detect brands in the main text and replace with the FDA generic, recording did_brand_swap = True.
@@ -141,7 +141,7 @@ Supervisor input needed
 
 ---
 
-4. Combination vs. Salt Detection (scripts/combos.py)
+4. Combination vs. Salt Detection ([scripts/combos.py](https://github.com/carlosresu/esoa/blob/main/scripts/combos.py))
 
 - Splits on +, /, with, but masks dose ratios (mg/mL) to avoid false positives.
 - Treats known salt/ester/hydrate tails (e.g., hydrochloride, hemisuccinate, palmitate, pamoate, decanoate) as formulation modifiers and not separate molecules.
@@ -156,7 +156,7 @@ Supervisor input needed
 
 ---
 
-5. Best-Variant Selection & Scoring (scripts/match_scoring.py)
+5. Best-Variant Selection & Scoring ([scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py))
 
 For each eSOA entry with at least one PNF candidate:
 
@@ -179,14 +179,14 @@ Supervisor input needed
 
 ---
 
-6. Unknown Handling (scripts/match_features.py → unknown_words.csv)
+6. Unknown Handling ([scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) → unknown_words.csv)
 
 - Extracts tokens not recognized in PNF/WHO/FDA sets.
 - Categorizes:
   - Single - Unknown
   - Multiple - All Unknown
   - Multiple - Some Unknown
-- Post-processing via `resolve_unknowns.py` scans those tokens against PNF/WHO/FDA catalogues (token n-grams) and writes `missed_generics.csv` with suggested reference hits.
+- Post-processing via [resolve_unknowns.py](https://github.com/carlosresu/esoa/blob/main/resolve_unknowns.py) scans those tokens against PNF/WHO/FDA catalogues (token n-grams) and writes `missed_generics.csv` with suggested reference hits.
 
 Public health/program implications  
 Frequent unknowns may mean missing formulary entries, local shorthand, or data quality issues.
@@ -207,7 +207,7 @@ Supervisor input needed
 - outputs/esoa_matched.xlsx — Filterable Excel view of the same records
 - outputs/summary.txt — Default bucket breakdown; `summary_molecule.txt` and `summary_match.txt` provide molecule- and reason-focused pivots
 - outputs/unknown_words.csv — Frequency of unmatched tokens (fed into post-processing)
-- outputs/missed_generics.csv — Suggestions from `resolve_unknowns.py` that map unknown tokens back to PNF/WHO/FDA references (whole or partial n-gram matches)
+- outputs/missed_generics.csv — Suggestions from [resolve_unknowns.py](https://github.com/carlosresu/esoa/blob/main/resolve_unknowns.py) that map unknown tokens back to PNF/WHO/FDA references (whole or partial n-gram matches)
 
 Key columns to review inside `outputs/esoa_matched.csv` include:
 
@@ -256,22 +256,22 @@ Optional flags
 ## 📂 Repository Structure
 
 - scripts/
-- aho.py — Aho–Corasick automata for PNF names
-- combos.py — Combination vs. salt logic
-- dose.py — Dose parsing & similarity
-- match_features.py — Feature engineering (normalization, brand swap, detectors)
-- match_scoring.py — Variant selection, scoring, classification
-- match_outputs.py — CSV/Excel writers and summary
-- match.py — Orchestrates matching
-- prepare.py — Prepares PNF/eSOA inputs
-- routes_forms.py — Form→route maps and parsing
-- text_utils.py — Normalization helpers
-- who_molecules.py — WHO ATC loader/detector
-- fda_ph_drug_scraper.py — FDA PH brand map scraper
-- brand_map.py — Brand automata builder
-- main.py — API wrapper (prepare, match, run_all)
-- run.py — Full pipeline runner with spinner & timing
-- debug/master.py — All-in-one concatenated script for debugging
+- [aho.py](https://github.com/carlosresu/esoa/blob/main/scripts/aho.py) — Aho–Corasick automata for PNF names
+- [combos.py](https://github.com/carlosresu/esoa/blob/main/scripts/combos.py) — Combination vs. salt logic
+- [dose.py](https://github.com/carlosresu/esoa/blob/main/scripts/dose.py) — Dose parsing & similarity
+- [match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) — Feature engineering (normalization, brand swap, detectors)
+- [match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) — Variant selection, scoring, classification
+- [match_outputs.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_outputs.py) — CSV/Excel writers and summary
+- [match.py](https://github.com/carlosresu/esoa/blob/main/scripts/match.py) — Orchestrates matching
+- [prepare.py](https://github.com/carlosresu/esoa/blob/main/scripts/prepare.py) — Prepares PNF/eSOA inputs
+- [routes_forms.py](https://github.com/carlosresu/esoa/blob/main/scripts/routes_forms.py) — Form→route maps and parsing
+- [text_utils.py](https://github.com/carlosresu/esoa/blob/main/scripts/text_utils.py) — Normalization helpers
+- [who_molecules.py](https://github.com/carlosresu/esoa/blob/main/scripts/who_molecules.py) — WHO ATC loader/detector
+- [fda_ph_drug_scraper.py](https://github.com/carlosresu/esoa/blob/main/scripts/fda_ph_drug_scraper.py) — FDA PH brand map scraper
+- [brand_map.py](https://github.com/carlosresu/esoa/blob/main/scripts/brand_map.py) — Brand automata builder
+- [main.py](https://github.com/carlosresu/esoa/blob/main/main.py) — API wrapper (prepare, match, run_all)
+- [run.py](https://github.com/carlosresu/esoa/blob/main/run.py) — Full pipeline runner with spinner & timing
+- [debug/master.py](https://github.com/carlosresu/esoa/blob/main/debug/master.py) — All-in-one concatenated script for debugging
 - outputs/ — Generated files
 
 ---
