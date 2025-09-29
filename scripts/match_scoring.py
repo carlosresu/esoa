@@ -654,6 +654,7 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     present_in_who = out["present_in_who"].astype(bool)
     present_in_fda = out["present_in_fda_generic"].astype(bool)
     has_atc_in_pnf = atc_present
+    who_route_info_available = out["who_atc_adm_r"].fillna("").astype(str).str.strip().ne("")
 
     out.loc[present_in_pnf & has_atc_in_pnf, "match_molecule(s)"] = "ValidMoleculeWithATCinPNF"
     out.loc[(~present_in_pnf) & present_in_who, "match_molecule(s)"] = "ValidMoleculeWithATCinWHO/NotInPNF"
@@ -715,6 +716,9 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     who_without_ddd = present_in_who & (~present_in_pnf)
     dose_related = out["match_quality"].str.contains("dose", case=False, na=False)
     out.loc[needs_rev_mask & who_without_ddd & dose_related, "match_quality"] = "who_does_not_provide_dose_info"
+    who_without_route_info = present_in_who & (~present_in_pnf) & (~who_route_info_available)
+    route_related = out["match_quality"].str.contains("route", case=False, na=False)
+    out.loc[needs_rev_mask & who_without_route_info & route_related, "match_quality"] = "who_does_not_provide_route_info"
 
     out.loc[needs_rev_mask, "reason_final"] = out.loc[needs_rev_mask, "match_quality"]
     out["reason_final"] = _mk_reason(out["reason_final"], "unspecified")
