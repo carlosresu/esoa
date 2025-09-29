@@ -40,26 +40,18 @@ DEFAULT_METADATA_GAP_REASON = "review_required_metadata_insufficient"
 WHO_METADATA_GAP_REASON = "who_metadata_insufficient_review_required"
 
 # WHO ATC administration route codes mapped to canonical route tokens
-# (Fact sheet: WHO ATC/DDD Index – Adm.R definitions)
+# (WHO ATC/DDD Index – Adm.R definitions)
 WHO_ADM_ROUTE_MAP: dict[str, set[str]] = {
     "o": {"oral"},
-    "p": {"intravenous", "intramuscular", "subcutaneous"},
+    "p": {"intravenous", "intramuscular", "subcutaneous"},  # parenteral umbrella
     "r": {"rectal"},
     "v": {"vaginal"},
-    "i": {"inhalation"},
-    "inh": {"inhalation"},
-    "n": {"nasal", "intranasal"},
-    "in": {"nasal", "intranasal"},
-    "sl": {"sublingual", "buccal"},
+    "n": {"nasal"},
+    "sl": {"sublingual", "buccal", "oromucosal"},
     "td": {"transdermal"},
-    "im": {"intramuscular"},
-    "iv": {"intravenous"},
-    "sc": {"subcutaneous"},
-    "it": {"intrathecal"},
-    "a": {"otic"},
-    "d": {"other"},
-    "e": {"other"},
-    "ep": {"other"},
+    "inhal": {"inhalation"},
+    "instill": {"instillation"},
+    "implant": {"implant"},
 }
 
 from .dose import dose_similarity
