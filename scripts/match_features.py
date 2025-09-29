@@ -182,9 +182,11 @@ def build_features(
             df["match_basis"] = df["normalized"]
             df["did_brand_swap"] = False
             df["fda_dose_corroborated"] = False
+            df["probable_brands"] = ""
             return
         mb_list, swapped = [], []
         fda_hits = []
+        probable_brand_hits: List[str] = []
 
         def _clean_generic_for_swap(name: str) -> str:
             base = _base_name(name)
@@ -199,12 +201,13 @@ def build_features(
             # Inline selection/scoring identical to prior implementation
             found_keys: List[str] = []
             lengths: Dict[str, int] = {}
+            row_brand_labels: set[str] = set()
             for _, bn in B_norm.iter(norm):  # type: ignore
                 found_keys.append(bn); lengths[bn] = max(lengths.get(bn, 0), len(bn))
             for _, bn in B_comp.iter(comp):  # type: ignore
                 found_keys.append(bn); lengths[bn] = max(lengths.get(bn, 0), len(bn))
             if not found_keys:
-                mb_list.append(norm); swapped.append(False); fda_hits.append(False); continue
+                mb_list.append(norm); swapped.append(False); fda_hits.append(False); probable_brand_hits.append(""); continue
             uniq_keys = list(dict.fromkeys(found_keys))
             uniq_keys.sort(key=lambda k: (-lengths.get(k, len(k)), k))
 
@@ -214,6 +217,9 @@ def build_features(
                 options = brand_lookup.get(bn, [])
                 chosen_generic = None
                 if options:
+                    for opt in options:
+                        if getattr(opt, "brand", None):
+                            row_brand_labels.add(str(opt.brand))
                     # score
                     def _score(m):
                         sc = 0
@@ -264,10 +270,14 @@ def build_features(
                 ds = getattr(primary_option, "dosage_strength", "") or ""
                 if ds and friendly.lower() in ds.lower():
                     fda_hit = True
-            mb_list.append(out); swapped.append(replaced_any); fda_hits.append(fda_hit)
+            if not row_brand_labels and uniq_keys:
+                row_brand_labels.update(uniq_keys)
+            labels_joined = "|".join(sorted(row_brand_labels)) if row_brand_labels else ""
+            mb_list.append(out); swapped.append(replaced_any); fda_hits.append(fda_hit); probable_brand_hits.append(labels_joined)
         df["match_basis"] = mb_list
         df["did_brand_swap"] = swapped
         df["fda_dose_corroborated"] = fda_hits
+        df["probable_brands"] = probable_brand_hits
     _timed("Apply brand→generic swaps", _brand_swap)
     df["match_basis_norm_basic"] = df["match_basis"].map(_normalize_text_basic)
 

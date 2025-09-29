@@ -205,6 +205,13 @@ Supervisor input needed
 - outputs/unknown_words.csv — Frequency of unmatched tokens (fed into post-processing)
 - outputs/missed_generics.csv — Suggestions from `resolve_unknowns.py` that map unknown tokens back to PNF/WHO/FDA references (whole or partial n-gram matches)
 
+Key columns to review inside `outputs/esoa_matched.csv` include:
+
+- `molecules_recognized` — the canonical pipe-delimited list of generics the scorer accepts for ATC alignment and downstream matching
+- `probable_brands` — FDA brand display names detected before any swap, useful for auditing `did_brand_swap` outcomes
+
+The complete column reference lives in `data_dictionary.md`.
+
 Example summary (values from a historical run; your counts will vary):
 
 Distribution Summary  
@@ -306,4 +313,3 @@ Optional flags
 - `pipeline.md` — Step-by-step execution walkthrough of the matching pipeline with module references.
 
 These references stay in sync with the current pipeline logic in `scripts/` and can be used by reviewers or developers who need deeper traceability.
-
