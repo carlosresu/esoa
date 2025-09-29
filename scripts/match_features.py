@@ -110,6 +110,7 @@ def build_features(
         for gid, gname in pnf_df[["generic_id","generic_name"]].drop_duplicates().itertuples(index=False):
             key = _normalize_text_basic(_base_name(str(gname)))
             if key and key not in pnf_name_to_gid:
+                # Store the first-seen generic mapping so duplicates do not overwrite earlier entries.
                 pnf_name_to_gid[key] = (gid, gname)
     _timed("Index PNF names", _pnf_map)
     pnf_name_set: Set[str] = set(pnf_name_to_gid.keys())
@@ -129,6 +130,7 @@ def build_features(
             who_name_set.update(cbn.keys())
             who_details_by_code.update(details)
             if candidate_names:
+                # Compile a single regex that captures any candidate name at word boundaries.
                 who_regex_box[0] = re.compile(r"\b(" + "|".join(map(re.escape, candidate_names)) + r")\b")
     _timed("Load WHO molecules", _load_who)
     who_regex = who_regex_box[0]
@@ -138,6 +140,7 @@ def build_features(
     def _load_brand():
         project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
         inputs_dir = os.path.join(project_root, "inputs")
+        # Attempt to load the newest brand map for downstream substitutions.
         brand_df[0] = load_latest_brandmap(inputs_dir)
     _timed("Load FDA brand map", _load_brand)
     has_brandmap = brand_df[0] is not None and not brand_df[0].empty
@@ -204,6 +207,7 @@ def build_features(
         for norm, comp, form, friendly, parens in zip(
             df["normalized"], df["norm_compact"], df["form_raw"], df["dose_recognized"], df["parentheticals"]
         ):
+            # Scan each row for brand hits across both normalized and compact automatons.
             # Inline selection/scoring identical to prior implementation
             found_keys: List[str] = []
             lengths: Dict[str, int] = {}
@@ -215,6 +219,7 @@ def build_features(
             if not found_keys:
                 mb_list.append(norm); swapped.append(False); fda_hits.append(False); probable_brand_hits.append(""); continue
             uniq_keys = list(dict.fromkeys(found_keys))
+            # Prioritize longer matches first to favor more specific brand tokens.
             uniq_keys.sort(key=lambda k: (-lengths.get(k, len(k)), k))
 
             out = norm; replaced_any = False
@@ -234,6 +239,7 @@ def build_features(
                         gen_base = _normalize_text_basic(_base_name(m.generic))
                         if gen_base in pnf_name_to_gid: sc += 3
                         return sc
+                    # Prefer candidates that align on dose, form, and PNF membership.
                     options = sorted(options, key=_score, reverse=True)
                     if options:
                         primary_option = options[0]

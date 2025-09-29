@@ -179,6 +179,7 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
             if isinstance(allowed_val, str) and allowed_val:
                 cached = allowed_cache.get(allowed_val)
                 if cached is None:
+                    # Split cached string once to avoid repeated work inside the loop.
                     cached = tuple(part.strip() for part in allowed_val.split("|") if part.strip())
                     allowed_cache[allowed_val] = cached
                 route_ok = route_val in cached if cached else False
@@ -214,6 +215,7 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
                 dose_similarity(esoa_dose, pnf_row)
                 for esoa_dose, pnf_row in zip(df_cand["dosage_parsed"], pnf_records)
             ]
+            # Attach dose similarity scores so downstream ranking can use them directly.
             df_cand["dose_sim"] = pd.to_numeric(pd.Series(dose_sims), errors="coerce").fillna(0.0)
 
             df_cand["_form_ok"] = form_ok_series.to_numpy(dtype=bool)
@@ -548,6 +550,7 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
                 if text_form_norm and pnf_form_norm and text_form_norm in approved_forms and pnf_form_norm in approved_forms:
                     form_ok_array[idx] = True
                     if text_form_norm != pnf_form_norm:
+                        # Record when both sources are allowed but differ, so reviewers can spot overrides.
                         flag_message = f"accepted: {text_form_norm}={pnf_form_norm}"
                 elif text_form_norm and text_form_norm in approved_forms and not pnf_form_norm:
                     form_ok_array[idx] = True
@@ -559,6 +562,7 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
             if (text_flagged or pnf_flagged) and not flag_message:
                 flagged_form = text_form_norm if text_flagged else pnf_form_norm
                 flagged_form_disp = flagged_form or "unspecified"
+                # Communicate accepted-but-flagged exceptions for manual review.
                 flag_message = f"flagged: {route_norm}={flagged_form_disp}" if route_norm else f"flagged: {flagged_form_disp}"
 
         route_form_flags.append(flag_message)
@@ -583,6 +587,7 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
         + atc_present.astype(int) * 15
         + (dose_sim_clipped * 10).astype(int)
     )
+    # Add a bonus for high-quality brand swaps that also satisfy form/route/dose checks.
     bonus_mask = (
         out["did_brand_swap"].astype(bool)
         & out["form_ok"]
@@ -598,6 +603,7 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
         if isinstance(pnf_tokens, list):
             for tok in pnf_tokens:
                 if isinstance(tok, str):
+                    # Normalize PNF tokens before merging to avoid duplicates.
                     names.append(_normalize_text_basic(_base_name(tok)))
         if isinstance(who_tokens, list):
             for tok in who_tokens:

@@ -42,6 +42,7 @@ def _unmask_pack_strength(s_norm: str) -> str:
         amt = m.group(2)
         unit = m.group(3)
         return f"{amt}{unit}"
+    # Replace pack descriptors with a single strength to simplify downstream regexes.
     return PACK_RX.sub(repl, s_norm)
 
 
@@ -52,6 +53,7 @@ def parse_dose_struct_from_text(s_norm: str) -> Dict[str, Any]:
     s_proc = _unmask_pack_strength(s_norm)
     matches = []
     for rx in DOSAGE_REGEXES:
+        # Collect all regex hits across the supported dose patterns.
         for m in rx.finditer(s_proc):
             d = {k: (v.replace(",", ".") if isinstance(v, str) else v) for k, v in m.groupdict().items()}
             matches.append(d)
@@ -73,6 +75,7 @@ def parse_dose_struct_from_text(s_norm: str) -> Dict[str, Any]:
             if per_unit_norm == "l":
                 per_val *= 1000.0
                 per_unit_norm = "ml"
+            # Return the first ratio-style match encountered.
             return {
                 "dose_kind": "ratio",
                 "strength": strength_val,
@@ -139,6 +142,7 @@ def extract_dosage(s_norm: str):
     s_proc = _unmask_pack_strength(s_norm)
     matches = []
     for rx in DOSAGE_REGEXES:
+        # Gather candidates for amount/ratio/percent patterns within the string.
         for m in rx.finditer(s_proc):
             d = {k: (v.replace(",", ".") if isinstance(v, str) else v) for k, v in m.groupdict().items()}
             matches.append(d)
@@ -180,6 +184,7 @@ def extract_dosage(s_norm: str):
         den = float(m.group("den"))
         if m.group("den_unit").lower() == "l":
             den *= 1000.0
+        # Normalize implicit litre denominators to mL for consistency.
         return {"kind": "ratio", "strength": num, "unit": num_unit, "per_val": den, "per_unit": "ml"}
     return None
 
@@ -222,6 +227,7 @@ def dose_similarity(esoa_dose: dict, pnf_row) -> float:
                     and max_val is not None
                     and min_val <= float(mg_esoa) <= max_val
                 ):
+                    # Allow documented equivalence ranges for modified-release capsules.
                     return 1.0
         return 0.0
     if kind == "ratio":
@@ -234,6 +240,7 @@ def dose_similarity(esoa_dose: dict, pnf_row) -> float:
         ratio_pnf = pnf_row.get("ratio_mg_per_ml")
         if ratio_pnf in (None, 0):
             return 0.0
+        # Compare mg/mL ratios with strict equality semantics.
         return 1.0 if _eq(ratio_esoa, ratio_pnf) else 0.0
     if kind == "percent":
         if pnf_row.get("dose_kind") != "percent":
@@ -242,5 +249,6 @@ def dose_similarity(esoa_dose: dict, pnf_row) -> float:
         pct_pnf = pnf_row.get("pct")
         if pct_pnf is None:
             return 0.0
+        # Percent doses must match exactly once cast to floats.
         return 1.0 if _eq(pct_esoa, float(pct_pnf)) else 0.0
     return 0.0

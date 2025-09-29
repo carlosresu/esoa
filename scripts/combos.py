@@ -24,6 +24,7 @@ def split_combo_segments(s: str) -> List[str]:
     if not isinstance(s, str) or not s:
         return []
     parts = [p.strip() for p in COMBO_SEP_RX.split(s) if p.strip()]
+    # Collapse internal whitespace to keep downstream token comparisons consistent.
     return [re.sub(r"\s+", " ", p) for p in parts]
 
 def _is_salt_tail(segment: str) -> bool:
@@ -63,18 +64,21 @@ def looks_like_combination(s_norm: str, pnf_hit_count: int, who_hit_count: int) 
             return False
         if len(segs) == 2 and (_is_salt_tail(segs[0]) or _is_salt_tail(segs[1])):
             return False
+        # Multiple non-salt spans separated by slash strongly imply a combination.
         return True
 
     if "+" in s_masked:
         return True
 
     if re.search(r"\bwith\b", s_masked):
+        # Explicit "with" wording almost always denotes multiple actives.
         return True
 
     segs = split_combo_segments(s_masked)
     if len(segs) >= 2:
         if len(segs) == 2 and (_is_salt_tail(segs[0]) or _is_salt_tail(segs[1])):
             return False
+        # Three or more segments or non-salt pairs indicate a combination product.
         return True
 
     return False

@@ -31,6 +31,7 @@ class PnfTokenIndex:
         if not toks:
             return
         first = toks[0]
+        # Maintain all variants keyed by the first token for quick lookup.
         self.by_first.setdefault(first, []).append((generic_id, toks, generic_name_norm))
 
     def build_from_pnf(self, pnf_df) -> "PnfTokenIndex":
@@ -73,6 +74,7 @@ class PnfTokenIndex:
                     matched_span = " ".join(text_toks[i:i+L])
                     cand = (L, generic_len, str(gid), matched_span)
                     if cand > best:
+                        # Update best candidate when we find a longer or tighter prefix match.
                         best = cand
 
         if best[0] > 0:

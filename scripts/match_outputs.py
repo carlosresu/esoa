@@ -82,6 +82,7 @@ def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
         if len(swapped_exact):
             count = len(swapped_exact)
             pct = round(count / float(total) * 100, 2)
+            # Highlight brand-swapped exact matches separately for quick auditing.
             aa_breakdown.append(
                 (
                     count,
@@ -91,6 +92,7 @@ def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
         if len(clean_exact):
             count = len(clean_exact)
             pct = round(count / float(total) * 100, 2)
+            # Track native PNF exact matches without brand swaps.
             aa_breakdown.append(
                 (
                     count,
@@ -119,6 +121,7 @@ def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
             grp["pct"] = (grp["n"] / float(total) * 100).round(2) if total else 0.0
             grp = grp.sort_values(by=["n", "match_molecule(s)", "match_quality"], ascending=[False, True, True])
             for _, row in grp.iterrows():
+                # Provide molecule + quality breakdown when using the default summary.
                 lines.append(f"  {row['match_molecule(s)']}: {row['match_quality']}: {row['n']:,} ({row['pct']}%)")
         elif mode == "molecule":
             grp = (
@@ -129,6 +132,7 @@ def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
             grp["pct"] = (grp["n"] / float(total) * 100).round(2) if total else 0.0
             grp = grp.sort_values(by=["n", "match_molecule(s)"], ascending=[False, True])
             for _, row in grp.iterrows():
+                # Summarize purely by molecule when requested.
                 lines.append(f"  {row['match_molecule(s)']}: {row['n']:,} ({row['pct']}%)")
         elif mode == "match":
             grp = (
@@ -139,6 +143,7 @@ def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
             grp["pct"] = (grp["n"] / float(total) * 100).round(2) if total else 0.0
             grp = grp.sort_values(by=["n", "match_quality"], ascending=[False, True])
             for _, row in grp.iterrows():
+                # Provide a condensed breakdown keyed only by match quality.
                 lines.append(f"  {row['match_quality']}: {row['n']:,} ({row['pct']}%)")
 
     # Others
@@ -201,6 +206,7 @@ def write_outputs(
             with pd.ExcelWriter(xlsx_out, engine="xlsxwriter") as writer:
                 out_small.to_excel(writer, index=False, sheet_name="matched")
                 ws = writer.sheets["matched"]
+                # Freeze the top row to keep headers visible during review.
                 ws.freeze_panes(1, 0)
                 nrows, ncols = out_small.shape
                 ws.autofilter(0, 0, nrows, ncols - 1)

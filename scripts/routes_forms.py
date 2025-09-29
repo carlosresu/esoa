@@ -88,6 +88,7 @@ def parse_form_from_text(s_norm: str) -> Optional[str]:
     """Extract a recognized dosage form keyword from normalized text."""
     for fw in FORM_WORDS:
         if re.search(rf"\b{re.escape(fw)}\b", s_norm):
+            # Return the first matching form keyword encountered.
             return fw
     return None
 
@@ -107,6 +108,7 @@ def extract_route_and_form(s_norm: str) -> Tuple[Optional[str], Optional[str], s
             evidence.append(f"route:{alias}->{route}")
             break
     if not route_found and form_found in FORM_TO_ROUTE:
+        # Infer the route from the form when no explicit alias appears in the text.
         route_found = FORM_TO_ROUTE[form_found]
         evidence.append(f"impute_route:{form_found}->{route_found}")
     return route_found, form_found, ";".join(evidence)

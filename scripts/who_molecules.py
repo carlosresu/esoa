@@ -22,6 +22,7 @@ def load_who_molecules(who_csv: str) -> Tuple[Dict[str, set], List[str], Dict[st
     codes_by_name = defaultdict(set)
     details_by_code: Dict[str, List[dict]] = defaultdict(list)
     for _, r in who.iterrows():
+        # Store both base and fully normalized variants for lookup flexibility.
         codes_by_name[r["name_base_norm"]].add(r["atc_code"])
         codes_by_name[r["name_norm"]].add(r["atc_code"])
 
@@ -59,6 +60,7 @@ def detect_all_who_molecules(
         detected = m.group(1)
         base = _base_name(detected)
         bn = _normalize_text_basic(base)
+        # Track unique normalized molecule names in detection order.
         names.append(bn)
     names = list(dict.fromkeys(names))
     codes = sorted(set().union(*[codes_by_name.get(n, set()) for n in names])) if names else []
