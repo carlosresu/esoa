@@ -1,80 +1,51 @@
 # Pipeline Execution Walkthrough
 
-Detailed end-to-end view of [run.py](https://github.com/carlosresu/esoa/blob/main/run.py) → [scripts/match.py](https://github.com/carlosresu/esoa/blob/main/scripts/match.py) execution for generating `outputs/esoa_matched.*`.
+Detailed end-to-end view of the matching pipeline, from CLI invocation in [run.py](https://github.com/carlosresu/esoa/blob/main/run.py) through feature building in [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py), scoring in [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py), and export logic in [scripts/match_outputs.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_outputs.py).
 
-1. **Load prepared inputs**
-   - Resolve CLI paths (defaults under `inputs/`) and ensure files exist ([run.py](https://github.com/carlosresu/esoa/blob/main/run.py):358-371).
-   - Read `pnf_prepared.csv` and `esoa_prepared.csv` into pandas DataFrames ([scripts/match.py](https://github.com/carlosresu/esoa/blob/main/scripts/match.py):59-60).
+1. **Load Prepared Inputs**  
+   Resolve CLI paths (defaults under `inputs/`), verify the files exist, and read the prepared PNF and eSOA CSVs (`pnf_prepared.csv`, `esoa_prepared.csv`) into pandas data frames (see [run.py](https://github.com/carlosresu/esoa/blob/main/run.py) and [scripts/match.py](https://github.com/carlosresu/esoa/blob/main/scripts/match.py)).
 
-2. **Validate structural expectations**
-   - Check PNF frame contains core molecule, dose, route, and ATC fields ([scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py):88-98).
-   - Confirm the eSOA frame exposes a `raw_text` column; raise errors early if missing.
+2. **Validate Structural Expectations**  
+   Ensure the PNF frame exposes the required molecule, dose, route, and ATC fields and that the eSOA frame includes `raw_text` (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)).
 
-3. **Index reference vocabularies**
-   - Build normalized PNF name → (`generic_id`, `generic_name`) lookup ([scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py):101-109).
-   - Load WHO ATC exports, cache name/code regexes, and capture DDD metadata ([scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py):111-128).
-   - Load the most recent FDA brand map, then construct automata for normalized and compact tokens plus brand→generic lookups and FDA generic token set ([scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py):130-148).
+3. **Index Reference Vocabularies**  
+   Build normalized PNF name lookups, load WHO ATC exports (including regex caches and DDD metadata), and prepare the FDA brand map automata plus generic token set (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)).
 
-4. **Construct PNF search automata**
-   - Build normalized and compact Aho–Corasick automatons from PNF molecules ([scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py):150-157).
-   - Train the partial token index for fallback matching when full-string hits are absent ([scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py):155-157).
+4. **Construct PNF Search Automata**  
+   Create normalized/compact Aho–Corasick automatons and train the partial token index used for fallback matches (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)).
 
-5. **Normalize eSOA text**
-   - Create the working DataFrame seeded with `raw_text` and derived `esoa_idx` ([scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py):160-166).
-   - Extract parenthetical phrases for later brand heuristics and store normalized / compact (no spaces/hyphen) variants ([scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py):162-167).
+5. **Normalize eSOA Text**  
+   Produce the working frame with `raw_text`, parenthetical captures, `esoa_idx`, and normalized text variants (`normalized`, `norm_compact`) (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)).
 
-6. **Initial dose / route / form parsing**
-   - Parse dosage structures from `normalized` text using [scripts/dose.py](https://github.com/carlosresu/esoa/blob/main/scripts/dose.py); store the raw dictionary in `dosage_parsed_raw` and render `dose_recognized` strings ([scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py):172-175).
-   - Detect route/form tokens (`route_raw`, `form_raw`) and capture supporting evidence in `route_evidence_raw` before any substitutions ([scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py):176-177).
+6. **Initial Dose / Route / Form Parsing**  
+   Parse dosage structures via [scripts/dose.py](https://github.com/carlosresu/esoa/blob/main/scripts/dose.py), compute `dose_recognized`, and collect `route_raw`, `form_raw`, and `route_evidence_raw` (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)).
 
-7. **Apply FDA brand → generic substitutions**
-   - For each row, scan normalized text with brand automatons to identify candidate brands ([scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py):196-205).
-   - Score competing generics using dose/form corroboration and PNF-name presence to pick the best replacement ([scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py):206-227).
-   - Replace brand mentions with the chosen normalized generic, scrub duplicates when the text already contains the generic, and populate `probable_brands`, `did_brand_swap`, and `fda_dose_corroborated` flags ([scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py):228-270).
-   - Recompute `match_basis_norm_basic` for downstream detectors ([scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py):271-272).
+7. **Apply FDA Brand → Generic Substitutions**  
+   Scan normalized text for brand hits, score candidate generics, swap into `match_basis`, and populate `probable_brands`, `did_brand_swap`, and `fda_dose_corroborated`; recompute `match_basis_norm_basic` (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)).
 
-8. **Re-parse dose / route / form on `match_basis`**
-   - Run dose extraction, route/form detection, and evidence capture on the substituted text ([scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py):274-279).
+8. **Re-parse Dose / Route / Form on `match_basis`**  
+   Re-run dose parsing and route/form detection against the swapped text to produce `dosage_parsed`, `route`, `form`, and refreshed evidence fields (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)).
 
-9. **Detect molecules across references**
-   - Execute Aho–Corasick scans to gather PNF hits, filtering out salt-only matches, and assign `generic_id`/`molecule_token`; retain the full `pnf_hits_gids` / `pnf_hits_tokens` payload for auditing ([scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py):281-299).
-   - Use the partial token index to recover best-effort matches when full hits are absent ([scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py):302-319).
-   - Apply WHO regex detection to produce molecule lists, ATC codes, DDD flags, and administration-route tags ([scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py):321-365).
+9. **Detect Molecules Across References**  
+   Execute PNF automaton scans (`pnf_hits_gids`, `pnf_hits_tokens`), invoke partial fallbacks when needed, and detect WHO molecules with ATC/DDD metadata (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)).
 
-10. **Classify combinations and unknown tokens**
-    - Count known generic tokens (PNF/WHO/FDA) to label likely combination products ([scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py):368-385).
-    - Extract residual tokens not covered by the vocabularies to populate `unknown_kind`, `unknown_words_list`, and `unknown_words` ([scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py):387-449).
-    - Derive presence flags (`present_in_pnf`, `present_in_who`, `present_in_fda_generic`) ([scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py):452-457).
+10. **Classify Combinations and Extract Unknowns**  
+    Use known-generic heuristics to set `looks_combo_final`, record `combo_reason`, gather `unknown_words_list`, and derive presence flags for PNF, WHO, and FDA generics (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)).
 
-11. **Score candidates and pick best PNF variant**
-    - Join eSOA rows to all matching PNF variants and filter by route compatibility ([scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py):162-189).
-    - Compute preliminary dose similarity and composite scores favouring exact form/route agreement ([scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py):190-223).
-    - Select the top-scoring PNF row per eSOA index, capturing dose/form metadata and ATC codes ([scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py):224-287).
-    - Merge selections back into the working DataFrame, ensuring booleans fall back to `False` ([scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py):289-317).
+11. **Score Candidates and Select Best PNF Variant**  
+    Join eSOA rows to matching PNF variants, enforce route compatibility, compute preliminary scores, and select the best variant per `esoa_idx` along with dose/form metadata (see [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py)).
 
-12. **Refine dose, form, and route alignment**
-    - Recompute `dose_sim` against the chosen PNF payload to honour exact matching policies ([scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py):348-368).
-    - Track original text form/route, determine if PNF inference is safe, and update fields plus `route_evidence` entries when imputed ([scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py):370-415).
-    - Iterate through PNF candidates again to upgrade selections when dose similarity improves (especially for ratio doses) ([scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py):419-494).
-    - Validate route/form combinations against the curated whitelist, logging acceptances, flags, or violations in `route_form_imputations` ([scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py):500-566).
+12. **Refine Dose, Form, and Route Alignment**  
+    Recalculate `dose_sim`, infer missing form/route when safe, upgrade selections when ratio logic prefers liquid formulations, and track route/form validations plus `route_form_imputations` (see [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py)).
 
-13. **Aggregate scoring attributes**
-    - Compute presence booleans for dose, route, form, and route evidence; expose `form_ok`/`route_ok` compatibility flags and clip `dose_sim` to [0,1] ([scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py):568-575).
-    - Generate the 0–100 `confidence` score with brand-swap bonus handling ([scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py):576-590).
-    - Collate recognized molecule unions — including the canonical `molecules_recognized` pipe-delimited generics string alongside `molecules_recognized_list` — WHO ATC counts, and probable ATC fallbacks ([scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py):592-616).
+13. **Aggregate Scoring Attributes**  
+    Compute confidence components, aggregate recognized molecule lists, set `probable_atc`, and expose `form_ok`/`route_ok` compatibility flags (see [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py)).
 
-14. **Bucketize and annotate outcomes**
-    - Initialize `bucket_final`, `match_molecule(s)`, and `match_quality` then populate source-based labels (PNF/WHO/FDA) ([scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py):617-652).
-    - Mark `Auto-Accept` rows (PNF + ATC + aligned form/route) and default others to `Needs review` pending further analysis ([scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py):654-660).
-    - Assign detailed `match_quality` messages for dose, form, route, and missing-context scenarios ([scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py):662-708).
-    - Enrich `reason_final` / `why_final` based on unknown-token categories and unresolved states ([scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py):709-757).
-    - Normalize `dose_recognized` to `N/A` when the final `dose_sim` is not perfect ([scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py):759-760).
+14. **Bucketize and Annotate Outcomes**  
+    Populate `bucket_final`, `match_molecule(s)`, `match_quality`, `why_final`, and `reason_final`, ensuring Auto-Accept logic and review annotations remain consistent (see [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py)).
 
-15. **Write outputs and summaries**
-    - Trim/arrange columns per `OUTPUT_COLUMNS` and emit UTF-8 CSV ([scripts/match_outputs.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_outputs.py):38-76).
-    - Write Excel workbook with frozen header row and autofilter ([scripts/match_outputs.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_outputs.py):78-90).
-    - Produce distribution summaries (`summary*.txt`) covering bucket, molecule-source, and match-quality pivots ([scripts/match_outputs.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_outputs.py):92-118).
+15. **Write Outputs and Summaries**  
+    Persist the curated data set to CSV/XLSX, generate distribution summaries, and freeze workbook panes for review convenience (see [scripts/match_outputs.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_outputs.py)).
 
-16. **Post-processing (optional)**
-    - Invoke [resolve_unknowns.py](https://github.com/carlosresu/esoa/blob/main/resolve_unknowns.py) to analyze `unknown_words.csv` and suggest possible reference matches ([run.py](https://github.com/carlosresu/esoa/blob/main/run.py):112-122).
-    - Consolidate output paths and timing summaries before exiting ([run.py](https://github.com/carlosresu/esoa/blob/main/run.py):124-160).
+16. **Post-processing (Optional)**  
+    Run [resolve_unknowns.py](https://github.com/carlosresu/esoa/blob/main/resolve_unknowns.py) to analyse the generated `unknown_words.csv` report and produce follow-up clues, then accumulate timing information before exiting (see [run.py](https://github.com/carlosresu/esoa/blob/main/run.py)).

@@ -7,4 +7,5 @@ Instructions:
 3. Ensure all line number references are accurate.
 4. Ensure all file paths are also hyperlinked.
 5. Based on the repository, ensure all supervisor inputs are up-to-date i.e., we haven't implemented those changes yet (they are pending). Add more points that need supervisor inputs if necessary.
-6. Update all .md files accordingly.
+6. Read .gitignore and remove hyperlinks to gitignored repo destinations.
+7. Update all .md files accordingly.
