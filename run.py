@@ -465,7 +465,7 @@ def _prune_dated_exports(directory: Path, prefix: str, extension: str) -> None:
     if not directory.is_dir():
         return
 
-    dated_paths: dict[str, Path] = {}
+    dated_paths: dict[str, list[Path]] = {}
     for path in directory.glob(f"{prefix}*{extension}"):
         stem = path.stem
         if prefix and not stem.startswith(prefix):
@@ -477,14 +477,15 @@ def _prune_dated_exports(directory: Path, prefix: str, extension: str) -> None:
         except ValueError:
             continue
         key = dt.isoformat()
-        existing = dated_paths.get(key)
-        if existing is None or path.stat().st_mtime > existing.stat().st_mtime:
-            dated_paths[key] = path
+        dated_paths.setdefault(key, []).append(path)
 
     if not dated_paths:
         return
 
     newest = max(dated_paths.keys())
-    for key, path in dated_paths.items():
-        if key < newest and path.exists():
-            path.unlink()
+    for key, paths in dated_paths.items():
+        if key >= newest:
+            continue
+        for path in paths:
+            if path.exists():
+                path.unlink()
