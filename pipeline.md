@@ -9,7 +9,7 @@ Detailed end-to-end view of the matching pipeline, from CLI invocation in [run.p
    Ensure the PNF frame exposes the required molecule, dose, route, and ATC fields and that the eSOA frame includes `raw_text` (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)).
 
 3. **Index Reference Vocabularies**  
-   Build normalized PNF name lookups, load WHO ATC exports (including regex caches and DDD metadata), and prepare the FDA brand map automata plus generic token set (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)).
+   Build normalized PNF name lookups, load WHO ATC exports (including regex caches, DDD metadata, and WHO route/form mappings), and prepare the FDA brand map automata plus generic token set (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)).
 
 4. **Construct PNF Search Automata**  
    Create normalized/compact Aho–Corasick automatons and train the partial token index used for fallback matches (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)).
@@ -36,7 +36,7 @@ Detailed end-to-end view of the matching pipeline, from CLI invocation in [run.p
    Join eSOA rows to matching PNF variants, enforce route compatibility, compute preliminary scores, and select the best variant per `esoa_idx` along with dose/form metadata (see [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py)).
 
 12. **Refine Dose, Form, and Route Alignment**  
-   Recalculate `dose_sim`, infer missing form/route when safe, upgrade selections when ratio logic prefers liquid formulations, and track route/form validations plus `route_form_imputations` (see [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py)).
+   Recalculate `dose_sim`, infer missing form/route when safe, use WHO route/form tokens when PNF data is absent, upgrade selections when ratio logic prefers liquid formulations, and track route/form validations plus `route_form_imputations` (see [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py)).
 
 13. **Aggregate Scoring Attributes**  
    Compute confidence components, aggregate recognized molecule lists, set `probable_atc`, and expose `form_ok`/`route_ok` compatibility flags (see [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py)).

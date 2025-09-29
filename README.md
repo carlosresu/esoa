@@ -108,7 +108,7 @@ Supervisor input needed
 2. Route & Form Detection ([scripts/routes_forms.py](https://github.com/carlosresu/esoa/blob/main/scripts/routes_forms.py) + [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py))
 
 - Recognizes forms (tablet, cap, MDI, DPI, susp, soln, spray, supp, etc.) and maps them to canonical routes (oral, inhalation, nasal, rectal, etc.), expanding common aliases (PO, per os, SL, IM, IV, etc.).
-- When an eSOA entry is missing the route but the form is present, the PNF-derived route is imputed and logged in `route_evidence`.
+- When an eSOA entry is missing the route but the form is present, the PNF-derived route is imputed and logged in `route_evidence`. If only WHO metadata is available, we map WHO Adm.R/UOM codes to the same canonical routes/forms so alignment with PNF logic remains consistent.
 - The scorer keeps a per-route interchange whitelist (`APPROVED_ROUTE_FORMS`) so, for example, tablets and capsules under the oral route both satisfy `form_ok`. Accepted substitutions are surfaced in `route_form_imputations`.
 - Suspicious but historically observed combinations (e.g., oral vials) live in `FLAGGED_ROUTE_FORM_EXCEPTIONS`; they remain valid yet receive a `flagged:` annotation so reviewers know why the match passed.
 - Solid oral forms are not auto-imputed when the detected dose is a ratio (mg/mL) to avoid creating impossible solid/liquid pairings.
@@ -251,6 +251,16 @@ Optional flags
 - --skip-r — Skip ATC preprocessing
 - --skip-brandmap — Reuse existing FDA brand map
 
+### Minimal/local run
+
+For incremental testing without touching external data sources or emitting Excel, use:
+
+```bash
+python run_minimal.py --pnf inputs/pnf.csv --esoa inputs/esoa.csv --out esoa_matched.csv
+```
+
+This wrapper invokes `run.py` with `--skip-install --skip-r --skip-brandmap` and removes the Excel artifact, leaving only the CSV/summary outputs.
+
 ### Profiling the pipeline
 
 To inspect runtime hotspots, execute the profiled wrapper:
@@ -281,6 +291,7 @@ python debug.py --pnf inputs/pnf.csv --esoa inputs/esoa.csv --out esoa_matched.c
 - [brand_map.py](https://github.com/carlosresu/esoa/blob/main/scripts/brand_map.py) — Brand automata builder
 - [main.py](https://github.com/carlosresu/esoa/blob/main/main.py) — API wrapper (prepare, match, run_all)
 - [run.py](https://github.com/carlosresu/esoa/blob/main/run.py) — Full pipeline runner with spinner & timing
+- [run_minimal.py](https://github.com/carlosresu/esoa/blob/main/run_minimal.py) — Skip installs/R/brand-map rebuild and Excel export for quick reruns
 - [debug/master.py](https://github.com/carlosresu/esoa/blob/main/debug/master.py) — All-in-one concatenated script for debugging
 - outputs/ — Generated files
 
@@ -300,7 +311,7 @@ python debug.py --pnf inputs/pnf.csv --esoa inputs/esoa.csv --out esoa_matched.c
    Dose scoring now demands exact equality (aside from explicit overrides such as modified-release trimetazidine). Do we need more equivalence rules for other molecules, or is strict equality still the desired policy?
 
 2. Route/Form interchange list  
-   The `APPROVED_ROUTE_FORMS` whitelist defines which forms are interchangeable within a route, and `FLAGGED_ROUTE_FORM_EXCEPTIONS` document tolerated but suspicious pairings. Does this match clinical policy, and are there additions/removals required before deployment?
+   The `APPROVED_ROUTE_FORMS` whitelist defines which forms are interchangeable within a route, and `FLAGGED_ROUTE_FORM_EXCEPTIONS` document tolerated but suspicious pairings. WHO metadata now feeds additional route/form hints when PNF is silent—please confirm the mapping tables align with program expectations and whether more aliases should be added.
 
 3. Auto-Accept gate  
    Auto-Accept currently ignores dose mismatches as long as a PNF+ATC match with aligned route/form is present. Should we tighten this (e.g., require `dose_sim == 1.0`, brand corroboration, or a higher confidence score) to reduce downstream review risk?
