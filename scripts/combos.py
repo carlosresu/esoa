@@ -5,7 +5,7 @@
 import re
 from typing import List
 
-# Treat common pharmaceutical salts/hydrates as formulation modifiers, not separate actives
+# Treat common pharmaceutical salts/hydrates as formulation modifiers, not separate actives (matches guidance in README under Combination vs. Salt Detection)
 SALT_TOKENS = {
     "calcium","sodium","potassium","magnesium","zinc","ammonium",
     "hydrochloride","nitrate","nitrite","sulfate","sulphate","phosphate","dihydrogen phosphate",

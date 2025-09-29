@@ -47,7 +47,7 @@ def _unmask_pack_strength(s_norm: str) -> str:
 
 
 def parse_dose_struct_from_text(s_norm: str) -> Dict[str, Any]:
-    """Extract a structured dose payload describing amount, ratio, or percent."""
+    """Extract a structured dose payload describing amounts, ratios (mg per mL or per unit-dose noun), packs (10×500 mg → 500 mg), and percent strengths, normalizing units as detailed in README."""
     if not isinstance(s_norm, str) or not s_norm:
         return {}
     s_proc = _unmask_pack_strength(s_norm)
@@ -199,9 +199,9 @@ def _eq(a: float, b: float) -> bool:
 
 def dose_similarity(esoa_dose: dict, pnf_row) -> float:
     """Return 1.0 only for exact equality (after unit conversion); else 0.0.
-    - amount: mg equality must hold exactly after conversion
-    - ratio: mg/mL equality must hold exactly after conversion
-    - percent: equal percentage
+    - Amounts compare mg against the PNF `strength_mg` with optional modified-release equivalence (trimetazidine 55–90 mg ↦ 35 mg base).
+    - Ratios require the same mg/mL once litres are normalized to mL.
+    - Percents accept only exact matches.
     """
     if not esoa_dose:
         return 0.0

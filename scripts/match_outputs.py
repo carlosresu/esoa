@@ -186,7 +186,7 @@ def write_outputs(
     *,
     timing_hook: Callable[[str, float], None] | None = None,
 ) -> str:
-    """Persist the canonical CSV/XLSX outputs plus text summaries, reporting timings."""
+    """Persist the canonical CSV/XLSX outputs plus text summaries described in README (distribution breakdowns, molecule- and match-focused pivots, unknown token report)."""
     def _timed(label: str, func: Callable[[], None]) -> float:
         elapsed = _run_with_spinner(label, func)
         if timing_hook:
@@ -236,6 +236,7 @@ def write_outputs(
             unk_df = unk_df.groupby("word").size().reset_index(name="count").sort_values("count", ascending=False)
             unk_path = os.path.join(os.path.dirname(out_csv), "unknown_words.csv")
             unk_df.to_csv(unk_path, index=False, encoding="utf-8")
+            # Feeds resolve_unknowns.py to produce the missed_generics report highlighted in README.
     _timed("Write unknown words CSV", _write_unknowns)
 
     _timed("Write summary.txt", lambda: _write_summary_text(out_small, out_csv))

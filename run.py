@@ -385,11 +385,12 @@ def run_resolve_unknowns() -> None:
 # Main entry
 # ----------------------------
 def main_entry() -> None:
-    """CLI front-end that orchestrates instals, preprocessing, matching, and reports."""
+    """CLI front-end that mirrors README flow: optional installs, WHO ATC scraping, FDA brand map build, prepare+match, then reporting."""
     parser = argparse.ArgumentParser(
         description="Run full ESOA pipeline (ATC → brand map → prepare → match) with spinner+timing",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
+    # Flags align with README guidance: allow skipping installs, R preprocessing, or FDA brand rebuilds when rerunning.
     parser.add_argument("--pnf", default=f"{DEFAULT_INPUTS_DIR}/pnf.csv", help="Path to PNF CSV")
     parser.add_argument("--esoa", default=f"{DEFAULT_INPUTS_DIR}/esoa.csv", help="Path to eSOA CSV")
     parser.add_argument("--out", default="esoa_matched.csv", help="Output CSV filename (saved under ./outputs)")

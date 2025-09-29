@@ -59,7 +59,7 @@ def _annotate_unknown(s: str) -> str:
 
 
 def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.DataFrame:
-    """Score features, select best PNF candidates, and prepare audit columns."""
+    """Score features, select best PNF candidates, and prepare audit columns using the policy described in README (route/form whitelist, dose equality, confidence weights, Auto-Accept gates)."""
     df = features_df.copy()
 
     def _format_variant(
@@ -587,6 +587,7 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
         + atc_present.astype(int) * 15
         + (dose_sim_clipped * 10).astype(int)
     )
+    # Confidence weights mirror README guidance: strong emphasis on generic (60), then dose/ATC proof points, with optional bonus for corroborated brand swaps.
     # Add a bonus for high-quality brand swaps that also satisfy form/route/dose checks.
     bonus_mask = (
         out["did_brand_swap"].astype(bool)
