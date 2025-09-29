@@ -53,22 +53,22 @@ flowchart TD
     D --> I[Build features]
     E --> I
     H --> I
-    I --> J[Brand to Generic swaps]
-    I --> K[Dose, Route, Form parsing]
+    I --> J[Brand to generic swaps]
+    I --> K[Dose, route, form parsing]
     I --> L[PNF and WHO molecule detection]
     I --> M[Combination detection]
     I --> N[Unknown token extraction]
 
-    J --> O[Scoring & classification]
+    J --> O[Scoring and classification]
     K --> O
     L --> O
     M --> O
     N --> O
-    O --> P[Matched dataset (CSV, Excel)]
-    O --> Q[Summary.txt (distribution)]
-    O --> R[Unknown_words.csv]
+    O --> P[Matched dataset CSV and XLSX]
+    O --> Q[Summary text reports]
+    O --> R[Unknown words CSV]
 
-    R --> S[Resolve unknowns.py (optional)]
+    R --> S[Resolve unknowns helper]
 ```
 
 ---
