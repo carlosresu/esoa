@@ -57,6 +57,7 @@ ROUTE_ALIASES = {
 }
 
 def map_route_token(r) -> List[str]:
+    """Translate PNF route descriptors into canonical route token lists."""
     if not isinstance(r, str):
         return []
     r = r.strip()
@@ -84,12 +85,14 @@ def map_route_token(r) -> List[str]:
     return table.get(r, [])
 
 def parse_form_from_text(s_norm: str) -> Optional[str]:
+    """Extract a recognized dosage form keyword from normalized text."""
     for fw in FORM_WORDS:
         if re.search(rf"\b{re.escape(fw)}\b", s_norm):
             return fw
     return None
 
 def extract_route_and_form(s_norm: str) -> Tuple[Optional[str], Optional[str], str]:
+    """Simultaneously infer route, form, and evidence strings from normalized text."""
     route_found = None
     form_found = None
     evidence = []

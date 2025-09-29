@@ -20,6 +20,7 @@ SALT_TOKENS = {
 COMBO_SEP_RX = re.compile(r"\s*(?:\+|/| with )\s*")
 
 def split_combo_segments(s: str) -> List[str]:
+    """Split combo-looking strings on separators while keeping tidy whitespace."""
     if not isinstance(s, str) or not s:
         return []
     parts = [p.strip() for p in COMBO_SEP_RX.split(s) if p.strip()]
@@ -38,6 +39,7 @@ def _looks_like_oxygen_flow(s_norm: str) -> bool:
     return bool(re.search(r"\boxygen\s*(?:/|(?:\s+per\s+))\s*(?:l|liter|litre|minute|min|hr|hour|ml)\b", s))
 
 def looks_like_combination(s_norm: str, pnf_hit_count: int, who_hit_count: int) -> bool:
+    """Heuristically flag whether a normalized string represents a multi-ingredient product."""
     # Bypass cases
     if _looks_like_oxygen_flow(s_norm):
         return False

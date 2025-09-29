@@ -96,6 +96,7 @@ DATA_HEADER = dedent(
 )
 
 def _section(title: str, rows: list[tuple[str, str, str, str]]) -> str:
+    """Assemble a Markdown section with a heading and tabular column descriptions."""
     out: list[str] = [f"## {title}", "", "| Column | Meaning | First Assigned | Notes |", "| --- | --- | --- | --- |"]
     for column, meaning, first_assigned, notes in rows:
         out.append(f"| {column} | {meaning} | {first_assigned} | {notes} |")
@@ -572,6 +573,7 @@ DATA_SECTIONS: list[tuple[str, list[tuple[str, str, str, str]]]] = [
 
 
 def render_pipeline() -> str:
+    """Compose the pipeline walkthrough Markdown from the static step listing."""
     parts = [PIPELINE_HEADER.strip(), ""]
     for idx, (title, body) in enumerate(PIPELINE_STEPS, start=1):
         parts.append(f"{idx}. **{title}**  ")
@@ -581,6 +583,7 @@ def render_pipeline() -> str:
 
 
 def render_data_dictionary() -> str:
+    """Build the data dictionary Markdown capturing every documented column."""
     sections = [DATA_HEADER.strip(), ""]
     for section_title, rows in DATA_SECTIONS:
         sections.append(_section(section_title, rows))
@@ -588,12 +591,14 @@ def render_data_dictionary() -> str:
 
 
 def update_file(path: Path, content: str) -> None:
+    """Write Markdown when contents change, avoiding churn in version control."""
     current = path.read_text() if path.exists() else ""
     if current != content:
         path.write_text(content)
 
 
 def main() -> None:
+    """Regenerate the pipeline and data dictionary docs in-place."""
     update_file(PIPELINE_MD, render_pipeline())
     update_file(DATA_DICTIONARY_MD, render_data_dictionary())
     print("Documentation synchronised: pipeline.md, data_dictionary.md")

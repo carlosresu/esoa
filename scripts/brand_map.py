@@ -16,6 +16,7 @@ from .text_utils import _base_name, _normalize_text_basic, normalize_compact
 
 @dataclass
 class BrandMatch:
+    """Structured payload describing an FDA brand and its normalized attributes."""
     brand: str
     generic: str
     dosage_form: str
@@ -24,6 +25,7 @@ class BrandMatch:
 
 
 def _latest_brandmap_path(inputs_dir: str) -> Optional[str]:
+    """Return the newest brand map file path, supporting legacy naming schemes."""
     # Prefer renamed pattern
     pattern_new = os.path.join(inputs_dir, "fda_brand_map_*.csv")
     candidates = glob.glob(pattern_new)
@@ -38,6 +40,7 @@ def _latest_brandmap_path(inputs_dir: str) -> Optional[str]:
 
 
 def load_latest_brandmap(inputs_dir: str) -> Optional[pd.DataFrame]:
+    """Load the most recent brand map CSV into a dataframe with expected columns present."""
     path = _latest_brandmap_path(inputs_dir)
     if not path or not os.path.exists(path):
         return None
@@ -52,6 +55,7 @@ def load_latest_brandmap(inputs_dir: str) -> Optional[pd.DataFrame]:
 
 
 def build_brand_automata(brand_df: pd.DataFrame) -> Tuple[ahocorasick.Automaton, ahocorasick.Automaton, Dict[str, List[BrandMatch]]]:
+    """Compile Aho–Corasick automatons and lookup tables for brand→generic substitutions."""
     A_norm = ahocorasick.Automaton()
     A_comp = ahocorasick.Automaton()
     mapping: Dict[str, List[BrandMatch]] = {}
@@ -84,6 +88,7 @@ def build_brand_automata(brand_df: pd.DataFrame) -> Tuple[ahocorasick.Automaton,
 def scan_brands(text_norm: str, text_comp: str,
                 A_norm: ahocorasick.Automaton,
                 A_comp: ahocorasick.Automaton) -> List[str]:
+    """Return normalized brand keys detected via either normalized or compact searches."""
     found: Dict[str, int] = {}
     for _, bn in A_norm.iter(text_norm):
         found[bn] = max(found.get(bn, 0), len(bn))
