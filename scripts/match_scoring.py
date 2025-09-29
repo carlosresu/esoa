@@ -648,6 +648,7 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
         else:
             missing_strings.append("no dose, form, and route available")
     missing_series = pd.Series(missing_strings, index=out.index, dtype="string")
+    missing_series = missing_series.str.replace(r"[^0-9A-Za-z]+", "_", regex=True).str.strip("_")
 
     present_in_pnf = out["present_in_pnf"].astype(bool)
     present_in_who = out["present_in_who"].astype(bool)
@@ -677,14 +678,9 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     selected_variant_present = (
         selected_variant_series.fillna("").astype(str).str.strip().ne("")
     )
-    if "who_atc_has_ddd" in out.columns:
-        who_has_ddd = out["who_atc_has_ddd"].fillna(False).astype(bool)
-    else:
-        who_has_ddd = pd.Series(False, index=out.index)
+    who_has_ddd = False
     who_brand_swap = out["match_molecule(s)"].eq("ValidBrandSwappedForMoleculeWithATCinWHO")
-    dose_mismatch_general = dose_mismatch_general & (
-        selected_variant_present | (who_brand_swap & who_has_ddd)
-    )
+    dose_mismatch_general = dose_mismatch_general & selected_variant_present
     out.loc[needs_rev_mask & dose_mismatch_general, "match_quality"] = "dose_mismatch"
     out.loc[needs_rev_mask & (~dose_mismatch_general) & (missing_series.str.len() > 0), "match_quality"] = missing_series
 
@@ -713,8 +709,12 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
 
     unresolved = needs_rev_mask & (out["match_quality"] == "")
     out.loc[unresolved & (route_conflict | route_unreliable), "match_quality"] = "route_mismatch"
-    out.loc[needs_rev_mask & route_form_invalid_mask, "match_quality"] = "route/form_mismatch"
+    out.loc[needs_rev_mask & route_form_invalid_mask, "match_quality"] = "route_form_mismatch"
     out.loc[needs_rev_mask & (out["match_quality"] == ""), "match_quality"] = "unspecified"
+
+    who_without_ddd = present_in_who & (~who_has_ddd)
+    dose_related = out["match_quality"].str.contains("dose", case=False, na=False)
+    out.loc[needs_rev_mask & who_without_ddd & dose_related, "match_quality"] = "who_does_not_provide_dose_info"
 
     out.loc[needs_rev_mask, "reason_final"] = out.loc[needs_rev_mask, "match_quality"]
     out["reason_final"] = _mk_reason(out["reason_final"], "unspecified")
