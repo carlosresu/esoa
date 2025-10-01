@@ -5,13 +5,14 @@ import re
 from typing import List, Optional, Tuple
 
 FORM_TO_ROUTE = {
-    "tablet": "oral", "tab": "oral", "tabs": "oral",
+    "tablet": "oral", "tab": "oral", "tabs": "oral", "chewing gum": "oral",
     "capsule": "oral", "cap": "oral", "caps": "oral",
     "syrup": "oral", "suspension": "oral", "solution": "oral",
     "sachet": "oral",
     "drop": "ophthalmic", "eye drop": "ophthalmic", "ear drop": "otic",
     "cream": "topical", "ointment": "topical", "gel": "topical", "lotion": "topical",
     "patch": "transdermal", "inhaler": "inhalation", "nebule": "inhalation", "neb": "inhalation",
+    "inhal.aerosol": "inhalation", "inhal.powder": "inhalation", "inhal.solution": "inhalation", "oral aerosol": "inhalation",
     "ampoule": "intravenous", "amp": "intravenous", "ampul": "intravenous", "ampule": "intravenous",
     "vial": "intravenous", "vl": "intravenous", "inj": "intravenous", "injection": "intravenous",
     "suppository": "rectal",
@@ -25,7 +26,9 @@ FORM_TO_ROUTE = {
     "soln": "oral",
     "syr": "oral",
     "td": "transdermal",
-    "supp": "rectal"
+    "supp": "rectal",
+    "instill.solution": "ophthalmic", "lamella": "ophthalmic",
+    "implant": "subcutaneous", "s.c. implant": "subcutaneous"
 }
 FORM_WORDS = sorted(set(FORM_TO_ROUTE.keys()), key=len, reverse=True)
 
