@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -81,6 +82,39 @@ def _assert_all_exist(root: Path, files: Iterable[str | os.PathLike[str]]) -> No
         # Surface a clear error when an expected script is missing.
         if not fp.is_file():
             raise FileNotFoundError(f"Required file not found: {fp}")
+
+
+def _prune_dated_exports(directory: Path) -> None:
+    """Keep only the newest YYYY-MM-DD CSV per prefix/suffix family under directory."""
+    if not directory.is_dir():
+        return
+
+    date_rx = re.compile(r"\d{4}-\d{2}-\d{2}")
+    grouped: dict[tuple[str, str], list[tuple[str, Path]]] = {}
+
+    for path in directory.glob("*.csv"):
+        stem = path.stem
+        match = date_rx.search(stem)
+        if not match:
+            continue
+
+        prefix = stem[: match.start()]
+        suffix = stem[match.end():]
+        date_token = stem[match.start() : match.end()]
+
+        try:
+            datetime.strptime(date_token, "%Y-%m-%d")
+        except ValueError:
+            continue
+
+        key = (prefix, suffix)
+        grouped.setdefault(key, []).append((date_token, path))
+
+    for key, entries in grouped.items():
+        latest_date = max(date for date, _ in entries)
+        for date, path in entries:
+            if date != latest_date and path.exists():
+                path.unlink()
 
 
 # ----------------------------
@@ -448,14 +482,8 @@ def main_entry() -> None:
     # Final timing summary (console only)
     _print_grouped_summary(timings)
 
-    _prune_dated_exports(
-        THIS_DIR / "dependencies" / "atcd" / "output",
-        ["who_atc_", "who_atc_level5_", "WHO ATC-DDD "],
-    )
-    _prune_dated_exports(
-        THIS_DIR / DEFAULT_INPUTS_DIR,
-        ["fda_brand_map_"],
-    )
+    _prune_dated_exports(THIS_DIR / "dependencies" / "atcd" / "output")
+    _prune_dated_exports(THIS_DIR / DEFAULT_INPUTS_DIR)
 
 
 if __name__ == "__main__":
@@ -464,54 +492,3 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"ERROR: {e}", file=sys.stderr)
         raise
-
-
-def _prune_dated_exports(directory: Path, prefixes: list[str] | tuple[str, ...], extension: str = ".csv") -> None:
-    """Remove dated files (YYYY-MM-DD) older than the newest per prefix."""
-    if not directory.is_dir():
-        return
-
-    if isinstance(prefixes, str):
-        prefixes = [prefixes]
-
-    dated_paths: dict[tuple[str, str], list[Path]] = {}
-
-    for path in directory.glob(f"*{extension}"):
-        stem = path.stem
-        matched_prefix = None
-        remainder = None
-        for prefix in prefixes:
-            if prefix and stem.startswith(prefix):
-                matched_prefix = prefix
-                remainder = stem[len(prefix):]
-                break
-        if matched_prefix is None:
-            continue
-
-        if remainder is None:
-            remainder = stem[len(matched_prefix):]
-
-        date_candidate = remainder.split("_", 1)[0][:10]
-        try:
-            dt = datetime.strptime(date_candidate, "%Y-%m-%d").date()
-        except ValueError:
-            continue
-
-        key = (matched_prefix, dt.isoformat())
-        dated_paths.setdefault(key, []).append(path)
-
-    if not dated_paths:
-        return
-
-    latest_by_prefix: dict[str, str] = {}
-    for prefix, date_str in dated_paths.keys():
-        latest = latest_by_prefix.get(prefix)
-        if latest is None or date_str > latest:
-            latest_by_prefix[prefix] = date_str
-
-    for (prefix, date_str), paths in dated_paths.items():
-        if date_str == latest_by_prefix.get(prefix):
-            continue
-        for path in paths:
-            if path.exists():
-                path.unlink()
