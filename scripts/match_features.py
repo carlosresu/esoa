@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 import sys, time, glob, os, re
+from collections import defaultdict
 from typing import Tuple, Optional, List, Dict, Set, Callable
 import difflib
 import numpy as np, pandas as pd
@@ -11,7 +12,7 @@ from .routes_forms import extract_route_and_form
 from .text_utils import _base_name, _normalize_text_basic, normalize_text, extract_parenthetical_phrases, STOPWORD_TOKENS
 from .who_molecules import detect_all_who_molecules, load_who_molecules
 from .brand_map import load_latest_brandmap, build_brand_automata, fda_generics_set
-from .pnf_aliases import expand_generic_aliases, SPECIAL_GENERIC_ALIASES
+from .pnf_aliases import expand_generic_aliases, SPECIAL_GENERIC_ALIASES, apply_spelling_rules
 from .pnf_partial import PnfTokenIndex
 
 WHO_ADM_ROUTE_MAP: dict[str, set[str]] = {
@@ -159,7 +160,17 @@ def build_features(
     # 2) Map normalized PNF names to gid + original name
     pnf_name_to_gid: Dict[str, Tuple[str, str]] = {}
     pnf_alias_keys: List[str] = []
+    pnf_trigram_holder: List[Dict[str, Set[str]] | None] = [None]
+    def _generate_trigrams(value: str) -> Set[str]:
+        segment = re.sub(r"\s+", "", value)
+        if not segment:
+            return set()
+        if len(segment) <= 3:
+            return {segment}
+        return {segment[i:i+3] for i in range(len(segment) - 2)}
+
     def _pnf_map():
+        trigram_map: Dict[str, Set[str]] = defaultdict(set)
         for gid, gname in pnf_df[["generic_id","generic_name"]].drop_duplicates().itertuples(index=False):
             alias_set = expand_generic_aliases(str(gname))
             alias_set |= SPECIAL_GENERIC_ALIASES.get(gid, set())
@@ -171,9 +182,16 @@ def build_features(
                 if key and key not in pnf_name_to_gid:
                     # Store the first-seen generic mapping so duplicates do not overwrite earlier entries.
                     pnf_name_to_gid[key] = (gid, gname)
+                if key:
+                    for tri in _generate_trigrams(key):
+                        if tri:
+                            trigram_map[tri].add(key)
+        pnf_alias_keys.clear()
         pnf_alias_keys.extend(sorted(pnf_name_to_gid.keys()))
+        pnf_trigram_holder[0] = {tri: values for tri, values in trigram_map.items()}
     _timed("Index PNF names", _pnf_map)
     pnf_name_set: Set[str] = set(pnf_name_to_gid.keys())
+    pnf_trigram_index: Dict[str, Set[str]] = pnf_trigram_holder[0] or {}
 
     # 3) WHO molecules (names + regex)
     codes_by_name, candidate_names = ({}, [])
@@ -418,9 +436,8 @@ def build_features(
     _timed("Partial PNF fallback", _pnf_partial)
 
     def _pnf_fuzzy():
-        if not pnf_alias_keys:
+        if not pnf_alias_keys or not pnf_trigram_index:
             return
-        alias_list = pnf_alias_keys
         for idx, row in df.loc[df["generic_id"].isna()].iterrows():
             basis = row.get("match_basis_norm_basic") or ""
             if not isinstance(basis, str) or not basis:
@@ -428,45 +445,110 @@ def build_features(
             tokens = [tok for tok in basis.split() if tok]
             if not tokens:
                 continue
-            best_score = 0.0
-            best_alias = None
-            best_span = ""
+            candidate_forms_map: Dict[str, str] = {}
+
+            def _register(form: str, origin: str) -> None:
+                norm = form.strip()
+                if not norm:
+                    return
+                if norm not in candidate_forms_map:
+                    candidate_forms_map[norm] = origin
+
             max_window = min(4, len(tokens))
             for window in range(1, max_window + 1):
                 for start in range(0, len(tokens) - window + 1):
-                    candidate = " ".join(tokens[start:start + window])
-                    if len(candidate) < 4:
+                    segment_tokens = tokens[start:start + window]
+                    if not segment_tokens:
                         continue
-                    matches = difflib.get_close_matches(candidate, alias_list, n=1, cutoff=0.84)
-                    if not matches:
+                    candidate = " ".join(segment_tokens)
+                    if len(candidate.replace(" ", "")) < 3:
                         continue
-                    alias = matches[0]
-                    score = difflib.SequenceMatcher(None, candidate, alias).ratio()
-                    if score > best_score:
-                        best_score = score
-                        best_alias = alias
-                        best_span = candidate
-            if best_alias and best_score >= 0.86:
-                gid, _display = pnf_name_to_gid.get(best_alias, (None, None))
+                    _register(candidate, candidate)
+                    for variant in apply_spelling_rules(candidate):
+                        _register(variant, candidate)
+                    if len(segment_tokens) > 1:
+                        sorted_variant = " ".join(sorted(segment_tokens))
+                        _register(sorted_variant, candidate)
+                        for variant in apply_spelling_rules(sorted_variant):
+                            _register(variant, candidate)
+
+            if not candidate_forms_map:
+                continue
+
+            for form, origin in list(candidate_forms_map.items()):
+                compact = form.replace(" ", "")
+                if compact:
+                    _register(compact, origin)
+
+            form_trigram_cache: Dict[str, Set[str]] = {}
+            for form in list(candidate_forms_map.keys()):
+                trigrams = _generate_trigrams(form)
+                if trigrams:
+                    form_trigram_cache[form] = trigrams
+                else:
+                    candidate_forms_map.pop(form, None)
+
+            if not form_trigram_cache:
+                continue
+
+            candidate_counts: Dict[str, int] = {}
+            for form, tris in form_trigram_cache.items():
+                for tri in tris:
+                    for key in pnf_trigram_index.get(tri, set()):
+                        candidate_counts[key] = candidate_counts.get(key, 0) + 1
+
+            if not candidate_counts:
+                continue
+
+            sorted_candidates = sorted(candidate_counts.items(), key=lambda kv: kv[1], reverse=True)[:50]
+            best_score = 0.0
+            best_gid: Optional[str] = None
+            best_span = ""
+            phonetic_cache: Dict[str, Set[str]] = {}
+
+            for key, _overlap in sorted_candidates:
+                gid, _display = pnf_name_to_gid.get(key, (None, None))
                 if gid is None:
                     continue
-                df.at[idx, "generic_id"] = gid
-                df.at[idx, "molecule_token"] = best_span or best_alias
+                key_tris = _generate_trigrams(key)
+                if not key_tris:
+                    continue
+                for form, tris in form_trigram_cache.items():
+                    if len(form) >= 2 and len(key) >= 2 and form[:2] != key[:2]:
+                        continue
+                    edit_sim = difflib.SequenceMatcher(None, form, key).ratio()
+                    if edit_sim < 0.72:
+                        continue
+                    union = tris | key_tris
+                    if not union:
+                        continue
+                    jaccard = len(tris & key_tris) / len(union)
+                    if form not in phonetic_cache:
+                        phonetic_cache[form] = apply_spelling_rules(form)
+                    domain_bonus = 0.1 if key in phonetic_cache[form] else 0.0
+                    score = edit_sim * 0.6 + jaccard * 0.3 + domain_bonus
+                    if score > best_score:
+                        best_score = score
+                        best_gid = gid
+                        best_span = candidate_forms_map.get(form, form)
+
+            if best_score >= 0.88 and best_gid:
+                df.at[idx, "generic_id"] = best_gid
+                df.at[idx, "molecule_token"] = best_span
                 current_gids = df.at[idx, "pnf_hits_gids"] if "pnf_hits_gids" in df.columns else None
                 if isinstance(current_gids, list):
-                    if gid not in current_gids:
-                        current_gids.append(gid)
+                    if best_gid not in current_gids:
+                        current_gids.append(best_gid)
                     df.at[idx, "pnf_hits_gids"] = current_gids
                 else:
-                    df.at[idx, "pnf_hits_gids"] = [gid]
+                    df.at[idx, "pnf_hits_gids"] = [best_gid]
                 current_tokens = df.at[idx, "pnf_hits_tokens"] if "pnf_hits_tokens" in df.columns else None
-                token_span = best_span or best_alias
                 if isinstance(current_tokens, list):
-                    if token_span not in current_tokens:
-                        current_tokens.append(token_span)
+                    if best_span not in current_tokens:
+                        current_tokens.append(best_span)
                     df.at[idx, "pnf_hits_tokens"] = current_tokens
                 else:
-                    df.at[idx, "pnf_hits_tokens"] = [token_span]
+                    df.at[idx, "pnf_hits_tokens"] = [best_span]
                 try:
                     current_count = int(df.at[idx, "pnf_hits_count"])
                 except Exception:

@@ -141,7 +141,24 @@ Supervisor input needed
 
 ---
 
-4. Combination vs. Salt Detection ([scripts/combos.py](https://github.com/carlosresu/esoa/blob/main/scripts/combos.py))
+4. Lexical Normalization & Phonetic Matching ([scripts/pnf_aliases.py](https://github.com/carlosresu/esoa/blob/main/scripts/pnf_aliases.py), [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py))
+
+- Performs “hard” normalization on every PNF name and detected text fragment: ASCII fold, strip punctuation/whitespace, collapse separators, drop trailing salt/form suffixes (HCl, SR, tab, inj, etc.), and sort tokens for combination products.
+- Applies a focused set of pharma spelling transforms to cover UK↔US and historical spellings (ceph→cef, sulph→sulf, oes→es, haem→hem, amoxycill→amoxicill, etc.), emitting both the raw-normalized and rule-adjusted variants as lookup keys.
+- Builds the expanded alias dictionary (including parenthetical trade names, slash/plus-separated actives, curated abbreviations like Pen G, ATS, ALMG, ISMN/ISDN) and indexes every key into a trigram inverted index for millisecond lookups.
+- Uses the trigram index plus Damerau-Levenshtein/Jaccard scoring (threshold 0.88) as a final safety net when exact/partial matches fail, ensuring near-miss spellings such as “Acetylcistine”, “Cephalexin”, or “Trimetazidiine” still attach to the proper PNF molecule before WHO/FDA heuristics engage.
+
+Public health/program implications  
+Provides resilient coverage for common misspellings and legacy branches while keeping the matching deterministic—reviewers see `generic_final` populated even when billing text is noisy.
+
+Supervisor input needed
+
+- Are there additional salt/form suffixes or institutional abbreviations that should be treated as aliases (e.g., new ISMN/ISDN style jargon)?
+- Should the acceptance score (currently ≥0.88 combined similarity) be tuned tighter/looser for specific therapeutic classes?
+
+---
+
+5. Combination vs. Salt Detection ([scripts/combos.py](https://github.com/carlosresu/esoa/blob/main/scripts/combos.py))
 
 - Splits on +, /, with, but masks dose ratios (mg/mL) to avoid false positives.
 - Treats known salt/ester/hydrate tails (e.g., hydrochloride, hemisuccinate, palmitate, pamoate, decanoate) as formulation modifiers and not separate molecules.
@@ -157,7 +174,7 @@ Supervisor input needed
 
 ---
 
-5. Best-Variant Selection & Scoring ([scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py))
+6. Best-Variant Selection & Scoring ([scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py))
 
 For each eSOA entry with at least one PNF candidate:
 
@@ -181,7 +198,7 @@ Supervisor input needed
 
 ---
 
-6. Unknown Handling ([scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) → unknown_words.csv)
+7. Unknown Handling ([scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) → unknown_words.csv)
 
 - Extracts tokens not recognized in PNF/WHO/FDA sets.
 - Categorizes:
