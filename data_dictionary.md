@@ -115,6 +115,28 @@ Each record in `esoa_matched.csv` represents one normalized eSOA free-text row, 
 | `confidence` | Composite 0–100 score covering generic, dose, route, ATC, and brand-swap bonus. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Higher values suggest stronger auto-match evidence. |
 | `match_molecule(s)` | Source labels describing which reference validated the molecule (PNF/WHO/FDA/brand). | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Drives reporting pivots. |
 | `match_quality` | Summary for review (`dose mismatch`, `form mismatch`, etc.). | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Defaults to `unspecified` when no issue noted. |
+
+**`match_molecule(s)` values in daily reporting**
+
+- `ValidMoleculeWithATCinPNF` – Exact or inferred PNF generic with ATC coverage survived scoring.
+- `ValidBrandSwappedForGenericInPNF` – FDA brand map swapped the text to a PNF generic that subsequently passed scoring checks.
+- `ValidBrandSwappedForMoleculeWithATCinWHO` – Brand swap landed on a WHO molecule (no PNF coverage) that still carried ATC metadata.
+- `ValidMoleculeWithATCinWHO/NotInPNF` – WHO molecule matched without any PNF hit; we rely entirely on WHO metadata.
+- `ValidMoleculeNoATCinFDA/NotInPNF` – FDA generic matched but neither PNF nor WHO produced a molecule/ATC pairing.
+- `UnspecifiedSource` – No authoritative reference confirmed the text; downstream summaries coerce empty labels into this bucket for auditing.
+
+**`match_quality` review flags**
+
+- `dose_mismatch` – Recognized dose text disagrees with the selected PNF/WHO dose payload after normalization.
+- `form_mismatch` – Textual form or inferred form conflicts with the PNF-allowed form family for the chosen route.
+- `route_mismatch` – Textual route conflicts with the allowed routes for the candidate (including WHO fallbacks when PNF is missing).
+- `route_form_mismatch` – Route and form combination violates the curated `APPROVED_ROUTE_FORMS` whitelist even if each attribute alone might be acceptable.
+- `no_dose_available` / `no_form_available` / `no_route_available` – Parsed text lacks the corresponding attribute; we could not impute it with high confidence.
+- `no_dose_and_form_available` / `no_dose_and_route_available` / `no_form_and_route_available` / `no_dose_form_and_route_available` – Multiple attributes were simultaneously missing, signalling limited metadata.
+- `who_metadata_insufficient_review_required` – Only WHO supplied the molecule and none of the other checks raised a specific conflict, but we still lack enough corroborating detail to auto-accept.
+- `who_does_not_provide_dose_info` – We rely on WHO alone and the WHO ATC extract does not expose a DDD; dose comparisons therefore remain unresolved.
+- `who_does_not_provide_route_info` – We rely on WHO alone and the WHO ATC extract did not expose any Adm.R tokens; route validation falls back to manual review.
+- `unspecified` – No higher-priority signal surfaced, but the row still requires inspection (for example because no reference confirmed the molecule).
 | `bucket_final` | Final workflow bucket (`Auto-Accept`, `Needs review`, `Others`). | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Determines downstream handling. |
 | `why_final` | High-level justification aligned with `bucket_final`. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Often `Needs review` or `Unknown`. |
 | `reason_final` | Expanded rationale for review or other buckets. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Includes unknown-token annotations when applicable. |

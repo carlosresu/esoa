@@ -42,10 +42,79 @@ Detailed end-to-end view of the matching pipeline, from CLI invocation in [run.p
    Compute confidence components, aggregate recognized molecule lists, set `probable_atc`, and expose `form_ok`/`route_ok` compatibility flags (see [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py)).
 
 14. **Bucketize and Annotate Outcomes**  
-   Populate `bucket_final`, `match_molecule(s)`, `match_quality`, `why_final`, and `reason_final`, ensuring Auto-Accept logic and review annotations remain consistent (see [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py)).
+    Populate `bucket_final`, `match_molecule(s)`, `match_quality`, `why_final`, and `reason_final`, ensuring Auto-Accept logic and review annotations remain consistent (see [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py)).
 
 15. **Write Outputs and Summaries**  
-   Persist the curated data set to CSV/XLSX, generate distribution summaries, and freeze workbook panes for review convenience (see [scripts/match_outputs.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_outputs.py)).
+    Persist the curated data set to CSV/XLSX, generate distribution summaries, and freeze workbook panes for review convenience (see [scripts/match_outputs.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_outputs.py)).
 
 16. **Post-processing (Optional)**  
-   Run [resolve_unknowns.py](https://github.com/carlosresu/esoa/blob/main/resolve_unknowns.py) to analyse the generated `unknown_words.csv` report and produce follow-up clues, then accumulate timing information before exiting (see [run.py](https://github.com/carlosresu/esoa/blob/main/run.py)).
+    Run [resolve_unknowns.py](https://github.com/carlosresu/esoa/blob/main/resolve_unknowns.py) to analyse the generated `unknown_words.csv` report and produce follow-up clues, then accumulate timing information before exiting (see [run.py](https://github.com/carlosresu/esoa/blob/main/run.py)).
+
+## Needs Review Reference (match_molecule × match_quality)
+
+When `bucket_final` stays `Needs review`, downstream summaries pair `match_molecule(s)` with `match_quality`. The combinations below describe how each scenario moved through the pipeline and why manual review is still required.
+
+### ValidBrandSwappedForMoleculeWithATCinWHO
+
+- `who_metadata_insufficient_review_required` – Brand normalization selected a WHO molecule (no PNF coverage) and all hard checks passed, yet WHO lacked enough corroborating metadata to auto-accept. Confirm route, form, and dose manually.
+- `route_mismatch` – The input route text conflicts with the WHO Adm.R-derived route tokens (or our allowed per-route mapping). Validate the stated route or adjust the mapping.
+- `who_does_not_provide_dose_info` – Dose text exists but the WHO ATC export has no DDD for this molecule, so the comparison stops short. Verify the clinical dose manually.
+- `no_dose_available` – No usable dose was parsed from the eSOA text and WHO could not supply one. Add or confirm the dose evidence.
+- `no_form_and_route_available` – Neither form nor route surfaced in the text, leaving WHO hints as the only guide. Ensure the administration details match expectations.
+- `route_form_mismatch` – The route/form pairing gleaned from text (or WHO) is outside our `APPROVED_ROUTE_FORMS` whitelist. Review whether an exception is acceptable or the data needs correction.
+- `no_form_available` – A WHO-only molecule with no form parsed from the record; confirm the dosage form before approval.
+- `no_dose_and_form_available` – Both dose and form are missing in the textual evidence. Supply the missing context or reject.
+- `who_does_not_provide_route_info` – WHO provided the molecule but no Adm.R tokens, so we cannot validate the route stated (or missing) in text. Check clinical route manually.
+
+### ValidMoleculeWithATCinPNF
+
+- `no_dose_available` – The text mapped cleanly to a PNF generic with ATC coverage but contained no dose evidence. Review the record for missing strength information.
+- `no_dose_and_form_available` – Dose and form are absent in the text, so we cannot verify alignment with the PNF variant. Confirm both before finalizing.
+- `no_form_available` – Route and dose may be present, yet the dosage form was not parsed. Ensure the form matches the PNF listing.
+- `dose_mismatch` – Parsed dosing disagrees with the selected PNF strength after normalization. Correct the dose wording or pick a better variant.
+- `no_form_and_route_available` – Both form and route were missing, preventing validation against PNF allowances. Provide the missing administration context.
+- `route_form_mismatch` – The route/form combination from text violates our allowed pairings even though the PNF molecule matched. Decide whether to adjust the whitelist or fix the source data.
+- `no_dose_and_route_available` – Dose and route are absent, so the PNF hit lacks key metadata cross-checks. Supply the route and dosing information.
+- `no_dose_form_and_route_available` – None of the three attributes were captured; the molecule alone is insufficient for approval. Complete the clinical details.
+- `no_route_available` – The route could not be parsed or inferred, leaving the PNF route list unchecked. Confirm administration route.
+
+### ValidBrandSwappedForGenericInPNF
+
+- `no_dose_available` – FDA brand mapping surfaced a PNF generic, but the record lacked dose evidence. Validate the strength prior to acceptance.
+- `route_form_mismatch` – Textual route/form disagrees with the PNF whitelist even after the brand swap. Investigate whether the source data or whitelist needs correction.
+- `no_form_and_route_available` – Neither form nor route was available to compare against the PNF allowances. Add the missing administration details.
+- `no_dose_and_form_available` – Dose and form were absent; reviewers must confirm both attributes manually.
+- `dose_mismatch` – Parsed dose conflicts with the PNF variant chosen after the brand swap. Adjust the dose text or reconcile with an alternate variant.
+- `no_form_available` – Form could not be parsed, so the substitution lacks confirmation of dosage form. Provide or verify the form.
+- `no_dose_and_route_available` – Dose and route were both missing; ensure the record documents them before approving.
+- `no_route_available` – Route was absent in the text; confirm it against the PNF option.
+- `no_dose_form_and_route_available` – Dose, form, and route are all missing, leaving only the molecule identification; complete the clinical details.
+
+### ValidMoleculeWithATCinWHO/NotInPNF
+
+- `who_metadata_insufficient_review_required` – WHO supplied the molecule and ATC, yet no additional signals were present. Confirm full clinical metadata before use.
+- `who_does_not_provide_dose_info` – WHO lacks a DDD entry, so dose verification cannot proceed. Ensure the prescribed dose is sound.
+- `no_form_and_route_available` – The eSOA text omitted both form and route; WHO hints alone are insufficient. Add the missing administration info.
+- `who_does_not_provide_route_info` – WHO did not provide Adm.R tokens, preventing route validation. Confirm the route manually.
+- `no_form_available` – Form is missing from the text and WHO data; capture the dosage form before approval.
+- `route_form_mismatch` – WHO-derived or textual route/form pairing fell outside our approved combinations. Determine whether the pairing is clinically acceptable.
+- `route_mismatch` – The stated route conflicts with WHO’s Adm.R mapping. Validate the correct administration route.
+
+### ValidMoleculeNoATCinFDA/NotInPNF
+
+- `route_mismatch` – Only the FDA generic matched and the inferred route conflicts with our whitelist. Confirm the correct route or adjust mappings.
+- `no_dose_available` – Neither the text nor references provided a checkable dose. Supply the strength information.
+- `no_dose_form_and_route_available` – All three attributes were absent, so the FDA-only identification lacks supporting metadata. Complete the clinical details.
+- `no_form_and_route_available` – Form and route are missing; the FDA-only hit needs additional info.
+- `no_form_available` – Dosage form is absent. Add or validate the missing form.
+- `route_form_mismatch` – The available route/form combination is not allowed in our whitelist. Confirm whether the pairing should be permitted.
+- `no_dose_and_form_available` – Dose and form are missing while only the FDA source supplied the molecule. Provide both before approving.
+
+### UnspecifiedSource
+
+- `unspecified` – No reference (PNF/WHO/FDA) confirmed the molecule and no stronger signal was detected, yet the row still needs review. Determine whether the entry should map to a known molecule.
+- `route_mismatch` – The text points to an unverified molecule and also carries a route conflict. Resolve the molecule identification and the route evidence.
+- `no_dose_available` – No reference match plus a missing dose. Provide dose context or determine if the entry should be excluded.
+- `route_form_mismatch` – The captured route/form pairing is outside our whitelist for an unverified molecule. Clarify both the molecule and administration details.
+- `no_dose_and_form_available` – Both dose and form are absent while the molecule remains unverified. Supplement the missing fields or reject.
+- `no_form_available` – Form is missing and no reference confirmed the molecule. Capture the dosage form before moving forward.
