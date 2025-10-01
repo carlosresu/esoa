@@ -705,6 +705,37 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     out.loc[out["did_brand_swap"].astype(bool) & present_in_who, "match_molecule(s)"] = "ValidBrandSwappedForMoleculeWithATCinWHO"
     out.loc[out["did_brand_swap"].astype(bool) & present_in_pnf & has_atc_in_pnf, "match_molecule(s)"] = "ValidBrandSwappedForGenericInPNF"
 
+    def _unique_join(values: list[str]) -> str:
+        seen: list[str] = []
+        for val in values:
+            if not isinstance(val, str):
+                continue
+            item = val.strip()
+            if not item or item in seen:
+                continue
+            seen.append(item)
+        return "|".join(seen)
+
+    def _derive_generic_final(row: pd.Series) -> str:
+        gid = row.get("generic_id")
+        if isinstance(gid, str) and gid.strip():
+            return gid.strip()
+
+        who_list = row.get("who_molecules_list")
+        if isinstance(who_list, list):
+            joined = _unique_join([str(v) for v in who_list if isinstance(v, str)])
+            if joined:
+                return joined
+
+        fda_list = row.get("fda_generics_list")
+        if isinstance(fda_list, list):
+            joined = _unique_join([str(v) for v in fda_list if isinstance(v, str)])
+            if joined:
+                return joined
+        return ""
+
+    out["generic_final"] = out.apply(_derive_generic_final, axis=1)
+
     is_candidate_like = out["generic_id"].notna()
     auto_mask = is_candidate_like & present_in_pnf & has_atc_in_pnf & out["form_ok"] & out["route_ok"]
     out.loc[auto_mask, "bucket_final"] = "Auto-Accept"

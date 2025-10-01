@@ -39,7 +39,7 @@ Detailed end-to-end view of the matching pipeline, from CLI invocation in [run.p
    Recalculate `dose_sim`, infer missing form/route when safe, use WHO route/form tokens when PNF data is absent, upgrade selections when ratio logic prefers liquid formulations, and track route/form validations plus `route_form_imputations` (see [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py)).
 
 13. **Aggregate Scoring Attributes**  
-   Compute confidence components, aggregate recognized molecule lists, set `probable_atc`, and expose `form_ok`/`route_ok` compatibility flags (see [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py)).
+   Compute confidence components, aggregate recognized molecule lists, set `probable_atc`, expose `form_ok`/`route_ok`, and derive `generic_final` (PNF `generic_id` when available, otherwise WHO molecules or FDA generics) as the canonical molecule field (see [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py)).
 
 14. **Bucketize and Annotate Outcomes**  
     Populate `bucket_final`, `match_molecule(s)`, `match_quality`, `why_final`, and `reason_final`, ensuring Auto-Accept logic and review annotations remain consistent (see [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py)).
