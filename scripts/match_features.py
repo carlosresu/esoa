@@ -3,6 +3,7 @@
 from __future__ import annotations
 import sys, time, glob, os, re
 from typing import Tuple, Optional, List, Dict, Set, Callable
+import difflib
 import numpy as np, pandas as pd
 from .aho import build_molecule_automata, scan_pnf_all
 from .combos import SALT_TOKENS, looks_like_combination, split_combo_segments
@@ -10,6 +11,7 @@ from .routes_forms import extract_route_and_form
 from .text_utils import _base_name, _normalize_text_basic, normalize_text, extract_parenthetical_phrases, STOPWORD_TOKENS
 from .who_molecules import detect_all_who_molecules, load_who_molecules
 from .brand_map import load_latest_brandmap, build_brand_automata, fda_generics_set
+from .pnf_aliases import expand_generic_aliases, SPECIAL_GENERIC_ALIASES
 from .pnf_partial import PnfTokenIndex
 
 WHO_ADM_ROUTE_MAP: dict[str, set[str]] = {
@@ -156,12 +158,20 @@ def build_features(
 
     # 2) Map normalized PNF names to gid + original name
     pnf_name_to_gid: Dict[str, Tuple[str, str]] = {}
+    pnf_alias_keys: List[str] = []
     def _pnf_map():
         for gid, gname in pnf_df[["generic_id","generic_name"]].drop_duplicates().itertuples(index=False):
-            key = _normalize_text_basic(_base_name(str(gname)))
-            if key and key not in pnf_name_to_gid:
-                # Store the first-seen generic mapping so duplicates do not overwrite earlier entries.
-                pnf_name_to_gid[key] = (gid, gname)
+            alias_set = expand_generic_aliases(str(gname))
+            alias_set |= SPECIAL_GENERIC_ALIASES.get(gid, set())
+            syns = pnf_df.loc[pnf_df["generic_id"] == gid, "synonyms"].dropna().astype(str)
+            for syn in syns:
+                alias_set |= expand_generic_aliases(syn)
+            for alias in alias_set:
+                key = _normalize_text_basic(alias)
+                if key and key not in pnf_name_to_gid:
+                    # Store the first-seen generic mapping so duplicates do not overwrite earlier entries.
+                    pnf_name_to_gid[key] = (gid, gname)
+        pnf_alias_keys.extend(sorted(pnf_name_to_gid.keys()))
     _timed("Index PNF names", _pnf_map)
     pnf_name_set: Set[str] = set(pnf_name_to_gid.keys())
 
@@ -214,6 +224,9 @@ def build_features(
     pnf_partial_idx = [None]
     _timed("Build PNF partial index", lambda: pnf_partial_idx.__setitem__(0, PnfTokenIndex().build_from_pnf(pnf_df)))
     A_norm, A_comp, pnf_partial_idx = A_norm[0], A_comp[0], pnf_partial_idx[0]
+    for key, (gid, _display) in pnf_name_to_gid.items():
+        if key:
+            pnf_partial_idx.add(gid, key)
 
     # 6) Base ESOA frame and text normalization
     df = [None]
@@ -403,6 +416,63 @@ def build_features(
             df.loc[mask_partial, "molecule_token"] = [t for t in partial_tokens if t is not None]
             df.loc[mask_partial, "pnf_hits_count"] = df.loc[mask_partial, "pnf_hits_count"].fillna(0).astype(int) + 1
     _timed("Partial PNF fallback", _pnf_partial)
+
+    def _pnf_fuzzy():
+        if not pnf_alias_keys:
+            return
+        alias_list = pnf_alias_keys
+        for idx, row in df.loc[df["generic_id"].isna()].iterrows():
+            basis = row.get("match_basis_norm_basic") or ""
+            if not isinstance(basis, str) or not basis:
+                continue
+            tokens = [tok for tok in basis.split() if tok]
+            if not tokens:
+                continue
+            best_score = 0.0
+            best_alias = None
+            best_span = ""
+            max_window = min(4, len(tokens))
+            for window in range(1, max_window + 1):
+                for start in range(0, len(tokens) - window + 1):
+                    candidate = " ".join(tokens[start:start + window])
+                    if len(candidate) < 4:
+                        continue
+                    matches = difflib.get_close_matches(candidate, alias_list, n=1, cutoff=0.84)
+                    if not matches:
+                        continue
+                    alias = matches[0]
+                    score = difflib.SequenceMatcher(None, candidate, alias).ratio()
+                    if score > best_score:
+                        best_score = score
+                        best_alias = alias
+                        best_span = candidate
+            if best_alias and best_score >= 0.86:
+                gid, _display = pnf_name_to_gid.get(best_alias, (None, None))
+                if gid is None:
+                    continue
+                df.at[idx, "generic_id"] = gid
+                df.at[idx, "molecule_token"] = best_span or best_alias
+                current_gids = df.at[idx, "pnf_hits_gids"] if "pnf_hits_gids" in df.columns else None
+                if isinstance(current_gids, list):
+                    if gid not in current_gids:
+                        current_gids.append(gid)
+                    df.at[idx, "pnf_hits_gids"] = current_gids
+                else:
+                    df.at[idx, "pnf_hits_gids"] = [gid]
+                current_tokens = df.at[idx, "pnf_hits_tokens"] if "pnf_hits_tokens" in df.columns else None
+                token_span = best_span or best_alias
+                if isinstance(current_tokens, list):
+                    if token_span not in current_tokens:
+                        current_tokens.append(token_span)
+                    df.at[idx, "pnf_hits_tokens"] = current_tokens
+                else:
+                    df.at[idx, "pnf_hits_tokens"] = [token_span]
+                try:
+                    current_count = int(df.at[idx, "pnf_hits_count"])
+                except Exception:
+                    current_count = 0
+                df.at[idx, "pnf_hits_count"] = current_count + 1 if current_count >= 0 else 1
+    _timed("Fuzzy PNF fallback", _pnf_fuzzy)
 
     # 12) WHO molecule detection
     def _who_detect():

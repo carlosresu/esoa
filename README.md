@@ -146,6 +146,7 @@ Supervisor input needed
 - Splits on +, /, with, but masks dose ratios (mg/mL) to avoid false positives.
 - Treats known salt/ester/hydrate tails (e.g., hydrochloride, hemisuccinate, palmitate, pamoate, decanoate) as formulation modifiers and not separate molecules.
 - Identifies likely combinations when two or more known generic tokens are present (PNF, WHO, or FDA-generic sets).
+- Auto-builds combination aliases from PNF names (parenthetical trade names, slash/plus-separated actives, curated abbreviations such as Pen G, ATS, ALMG, ISMN/ISDN) so free-text variants like “Piperacillin Tazobactam”, “Co-amoxiclav”, or “Proparacaine” still map to the canonical molecule.
 
 Public health/program implications  
 Impacts whether a line is processed as a single molecule or combination product.
@@ -165,6 +166,7 @@ For each eSOA entry with at least one PNF candidate:
 - Normalizes route/form pairs against the `APPROVED_ROUTE_FORMS` whitelist, marking accepted substitutions or flagged exceptions in `route_form_imputations`.
 - Safely imputes missing form/route (`form_source`/`route_source`) from the chosen PNF variant when the text is silent and the inferred form would be coherent.
 - Emits `selected_form`, `selected_variant`, detailed dose fields, and `dose_recognized` when the dose matches exactly.
+- Falls back to a fuzzy PNF lookup (difflib) when exact and partial matches fail, catching common misspellings and UK/US spelling differences (e.g., Acetylcistine → Acetylcysteine, Cephalexin → Cefalexin, Trimetazidiine → Trimetazidine) before WHO/FDA heuristics engage.
 - `match_quality` covers `dose mismatch`, `form mismatch`, `route mismatch`, `route/form_mismatch`, or notes about missing contextual data; unresolved cases fall back to `unspecified`.
 - Confidence scoring: +60 generic present, +15 dose parsed, +10 route evidence, +15 ATC, +⌊dose_sim×10⌋, +10 extra when a clean brand swap aligns on dose/form/route.
 - Auto-Accept when a PNF generic with ATC is present and both `form_ok` and `route_ok` are true. Dose mismatches therefore become visible through `dose_sim`/`match_quality` (and optional flagged notes) but do not block Auto-Accept.

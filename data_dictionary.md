@@ -114,7 +114,7 @@ Each record in `esoa_matched.csv` represents one normalized eSOA free-text row, 
 | `atc_code_final` | ATC code inherited from the selected PNF row (if any). | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | `None` when the PNF row lacks an ATC. |
 | `confidence` | Composite 0–100 score covering generic, dose, route, ATC, and brand-swap bonus. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Higher values suggest stronger auto-match evidence. |
 | `match_molecule(s)` | Source labels describing which reference validated the molecule (PNF/WHO/FDA/brand). | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Drives reporting pivots. |
-| `generic_final` | Canonical molecule identifier(s) chosen after PNF→WHO→FDA fallback. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Pipe-delimited string; prefers `generic_id`, else WHO molecules, else FDA generics. |
+| `generic_final` | Canonical molecule identifier(s) chosen after PNF→WHO→FDA fallback. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Pipe-delimited string; prefers `generic_id`, else WHO molecules, else FDA generics derived from alias/fuzzy matching. |
 | `match_quality` | Summary for review (`dose mismatch`, `form mismatch`, etc.). | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Defaults to `unspecified` when no issue noted. |
 
 **`match_molecule(s)` values in daily reporting**
