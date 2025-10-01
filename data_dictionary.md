@@ -137,6 +137,11 @@ Each record in `esoa_matched.csv` represents one normalized eSOA free-text row, 
 - `who_does_not_provide_dose_info` – We rely on WHO alone and the WHO ATC extract does not expose a DDD; dose comparisons therefore remain unresolved.
 - `who_does_not_provide_route_info` – We rely on WHO alone and the WHO ATC extract did not expose any Adm.R tokens; route validation falls back to manual review.
 - `unspecified` – No higher-priority signal surfaced, but the row still requires inspection (for example because no reference confirmed the molecule).
+
+### Review Outcome Columns
+
+| Column | Meaning | First Assigned | Notes |
+| --- | --- | --- | --- |
 | `bucket_final` | Final workflow bucket (`Auto-Accept`, `Needs review`, `Others`). | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Determines downstream handling. |
 | `why_final` | High-level justification aligned with `bucket_final`. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Often `Needs review` or `Unknown`. |
 | `reason_final` | Expanded rationale for review or other buckets. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Includes unknown-token annotations when applicable. |
