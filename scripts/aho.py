@@ -7,6 +7,7 @@ from typing import Dict, List, Tuple
 import ahocorasick  # type: ignore
 
 from .text_utils import normalize_compact, normalize_text
+from .pnf_aliases import expand_generic_aliases, SPECIAL_GENERIC_ALIASES
 
 
 def build_molecule_automata(pnf_df) -> Tuple[ahocorasick.Automaton, ahocorasick.Automaton]:
@@ -16,26 +17,22 @@ def build_molecule_automata(pnf_df) -> Tuple[ahocorasick.Automaton, ahocorasick.
     seen_norm = set()
     seen_comp = set()
     for gid, gname in pnf_df[["generic_id", "generic_name"]].drop_duplicates().itertuples(index=False):
-        key_norm = normalize_text(gname)
-        key_comp = normalize_compact(gname)
-        if key_norm and (gid, key_norm) not in seen_norm:
-            # Store the longest normalized token once per (gid, normalized name).
-            A_norm.add_word(key_norm, (gid, gname)); seen_norm.add((gid, key_norm))
-        if key_comp and (gid, key_comp) not in seen_comp:
-            # Include the compact form to catch spacing and hyphen differences.
-            A_comp.add_word(key_comp, (gid, gname)); seen_comp.add((gid, key_comp))
-    if "synonyms" in pnf_df.columns:
-        for gid, syns in pnf_df[["generic_id", "synonyms"]].itertuples(index=False):
-            if isinstance(syns, str) and syns.strip():
-                for s in syns.split("|"):
-                    key_norm = normalize_text(s)
-                    key_comp = normalize_compact(s)
-                    if key_norm and (gid, key_norm) not in seen_norm:
-                        # Treat synonyms as alternative tokens for the same generic.
-                        A_norm.add_word(key_norm, (gid, s)); seen_norm.add((gid, key_norm))
-                    if key_comp and (gid, key_comp) not in seen_comp:
-                        # Register compact synonym variants as well.
-                        A_comp.add_word(key_comp, (gid, s)); seen_comp.add((gid, key_comp))
+        alias_set = expand_generic_aliases(gname)
+        alias_set.update(SPECIAL_GENERIC_ALIASES.get(gid, set()))
+        if "synonyms" in pnf_df.columns:
+            syns = pnf_df.loc[pnf_df["generic_id"] == gid, "synonyms"].dropna().astype(str)
+            for syn in syns:
+                for alias in syn.split("|"):
+                    alias_set.update(expand_generic_aliases(alias))
+        for alias in alias_set:
+            key_norm = normalize_text(alias)
+            key_comp = normalize_compact(alias)
+            if key_norm and (gid, key_norm) not in seen_norm:
+                # Store the longest normalized token once per (gid, normalized name).
+                A_norm.add_word(key_norm, (gid, alias)); seen_norm.add((gid, key_norm))
+            if key_comp and (gid, key_comp) not in seen_comp:
+                # Include the compact form to catch spacing and hyphen differences.
+                A_comp.add_word(key_comp, (gid, alias)); seen_comp.add((gid, key_comp))
     A_norm.make_automaton()
     A_comp.make_automaton()
     return A_norm, A_comp
