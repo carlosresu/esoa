@@ -212,6 +212,7 @@ Supervisor input needed
 Key columns to review inside `outputs/esoa_matched.csv` include:
 
 - `molecules_recognized` — the canonical pipe-delimited list of generics the scorer accepts for ATC alignment and downstream matching
+- `generic_final` — the normalized molecule identifier(s) the pipeline ultimately relied on (PNF `generic_id`, WHO molecule, or FDA generic fallback)
 - `probable_brands` — FDA brand display names detected before any swap, useful for auditing `did_brand_swap` outcomes
 
 The complete column reference lives in `data_dictionary.md`.
