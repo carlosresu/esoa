@@ -51,6 +51,15 @@ WHO_FORM_TO_CANONICAL: dict[str, set[str]] = {
 
 WHO_UOM_TO_CANONICAL: dict[str, set[str]] = {
     "tablet": {"tablet"},
+    "ml": {"solution", "suspension"},
+    "mg": {"tablet", "capsule", "solution", "injection", "suspension"},
+    "g": {"tablet", "capsule", "solution", "injection", "suspension"},
+    "mcg": {"tablet", "capsule", "solution", "injection", "suspension"},
+    "mmol": {"tablet", "solution"},
+    "u": {"tablet", "solution", "injection"},
+    "mu": {"tablet", "solution", "injection"},
+    "tu": {"tablet", "solution", "injection"},
+    "lsu": {"tablet", "solution"},
 }
 
 # Local lightweight spinner so this module is self-contained

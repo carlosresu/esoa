@@ -134,6 +134,7 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
             "tab": "tablet",
             "tabs": "tablet",
             "tablet": "tablet",
+            "chewing gum": "tablet",
             "cap": "capsule",
             "caps": "capsule",
             "capsule": "capsule",
@@ -145,6 +146,9 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
             "sol": "solution",
             "soln": "solution",
             "solution": "solution",
+            "inhal.solution": "solution",
+            "instill.solution": "solution",
+            "lamella": "solution",
             "ointment": "ointment",
             "oint": "ointment",
             "gel": "gel",
@@ -154,7 +158,10 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
             "supp": "suppository",
             "suppository": "suppository",
             "dpi": "dpi",
+            "inhal.powder": "dpi",
             "mdi": "mdi",
+            "inhal.aerosol": "mdi",
+            "oral aerosol": "mdi",
             "ampu": "ampule",
             "ampul": "ampule",
             "ampule": "ampule",
@@ -163,6 +170,8 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
             "vial": "vial",
             "inj": "injection",
             "injection": "injection",
+            "implant": "solution",
+            "s.c. implant": "solution",
         }.get(value, value)
 
     def _split_route_allowed(value: object) -> set[str]:
