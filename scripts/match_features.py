@@ -498,9 +498,6 @@ def build_features(
             detail = "; ".join(part for part in detail_parts if part)
             summary = f"FDA Food match: {display}" + (f" ({detail})" if detail else "")
 
-            if existing_summary[idx]:
-                summary = summary + "; " + existing_summary[idx]
-
             best_entries.append(best_entry)
             summaries.append(summary)
 
