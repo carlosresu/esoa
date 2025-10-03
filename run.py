@@ -13,11 +13,72 @@ File outputs:
 """
 from __future__ import annotations
 
+import ensurepip
 import os
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+
+THIS_DIR: Path = Path(__file__).resolve().parent
+
+
+def _bootstrap_requirements(req_file: Path | None = None) -> None:
+    req_path = req_file if req_file is not None else THIS_DIR / "requirements.txt"
+    if not req_path.is_file():
+        return
+
+    def _run(cmd: list[str], *, devnull: object, suppress: bool = True) -> None:
+        stdout = devnull if suppress else None
+        stderr = devnull if suppress else None
+        subprocess.check_call(cmd, cwd=str(THIS_DIR), stdout=stdout, stderr=stderr)
+
+    with open(os.devnull, "w") as devnull:
+        try:
+            _run([sys.executable, "-m", "pip", "--version"], devnull=devnull)
+        except subprocess.CalledProcessError:
+            try:
+                ensurepip.bootstrap()
+            except Exception:
+                pass
+            try:
+                _run([sys.executable, "-m", "pip", "--version"], devnull=devnull)
+            except subprocess.CalledProcessError:
+                try:
+                    _run([sys.executable, "-m", "ensurepip", "--default-pip"], devnull=devnull)
+                except subprocess.CalledProcessError as exc:
+                    raise RuntimeError("pip is unavailable and could not be bootstrapped.") from exc
+
+        try:
+            _run(
+                [sys.executable, "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"],
+                devnull=devnull,
+            )
+        except subprocess.CalledProcessError:
+            pass
+
+        install_cmd = [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--disable-pip-version-check",
+            "-r",
+            str(req_path),
+        ]
+        try:
+            _run(install_cmd, devnull=devnull)
+        except subprocess.CalledProcessError:
+            time.sleep(3)
+            print(
+                "! Initial dependency install failed; retrying with verbose output...",
+                file=sys.stderr,
+            )
+            _run(install_cmd, devnull=devnull, suppress=False)
+
+
+_bootstrap_requirements()
 
 import argparse
 import csv
@@ -25,10 +86,7 @@ import re
 import shutil
 import threading
 from datetime import datetime
-
 from typing import Callable, Iterable
-
-THIS_DIR: Path = Path(__file__).resolve().parent
 
 DEFAULT_INPUTS_DIR = "inputs"
 OUTPUTS_DIR = "outputs"
@@ -220,7 +278,6 @@ GROUP_DEFINITIONS: list[tuple[str, tuple[str, ...]]] = [
         (
             "ATC R preprocessing",
             "Build FDA brand map",
-            "Scrape FDA food catalog",
             "Prepare inputs",
         ),
     ),
@@ -418,41 +475,6 @@ def build_brand_map(inputs_dir: Path, outfile: Path | None) -> Path:
             ) from exc
     return out_csv
 
-def scrape_food_catalog(inputs_dir: Path, *, force_refresh: bool = False) -> Path:
-    """Ensure the scraped FDA food catalog CSV exists, invoking the scraper when needed."""
-    out_csv = inputs_dir / "fda_food_products.csv"
-    if out_csv.exists() and not force_refresh:
-        return out_csv
-
-    existing = out_csv if out_csv.exists() else None
-    cmd = [
-        sys.executable,
-        "-m",
-        "scripts.fda_ph_food_scraper",
-        "--outdir",
-        str(inputs_dir),
-        "--outfile",
-        out_csv.name,
-        "--quiet",
-    ]
-    if force_refresh:
-        cmd.append("--force")
-    try:
-        subprocess.run(cmd, check=True, cwd=str(THIS_DIR))
-    except subprocess.CalledProcessError as exc:
-        if existing is not None:
-            print(
-                "! Scraping FDA food catalog failed; reusing existing file "
-                f"{existing.name}. Run with --skip-food to bypass this step if the portal is unreachable.",
-                file=sys.stderr,
-            )
-            return existing
-        raise RuntimeError(
-            "Scraping FDA food catalog failed and no prior catalog is available. "
-            "Re-run with --skip-food if the FDA portal is unreachable."
-        ) from exc
-    return out_csv
-
 def run_resolve_unknowns() -> None:
     """Run resolve_unknowns.py if present (either at project root or under scripts/)."""
     # Prefer scripts/resolve_unknowns.py when available, otherwise fallback to root-level resolve_unknowns.py
@@ -489,12 +511,6 @@ def main_entry() -> None:
     parser.add_argument("--out", default="esoa_matched.csv", help="Output CSV filename (saved under ./outputs)")
     parser.add_argument("--skip-r", action="store_true", help="Skip running ATC R preprocessing scripts")
     parser.add_argument("--skip-brandmap", action="store_true", help="Skip building FDA brand map CSV")
-    parser.add_argument("--skip-food", action="store_true", help="Skip scraping the FDA food catalog")
-    parser.add_argument(
-        "--force-food-refresh",
-        action="store_true",
-        help="Force re-scraping the FDA food catalog even if a cached CSV exists",
-    )
     parser.add_argument("--skip-excel", action="store_true", help="Skip writing XLSX output (CSV and summaries still produced)")
     args = parser.parse_args()
 
@@ -519,13 +535,6 @@ def main_entry() -> None:
         # Generate or reuse the FDA brand map that feeds the feature builder.
         t = run_with_spinner("Build FDA brand map", lambda: build_brand_map(inputs_dir, outfile=None))
         timings.add("Build FDA brand map", t)
-
-    if not args.skip_food:
-        t = run_with_spinner(
-            "Scrape FDA food catalog",
-            lambda: scrape_food_catalog(inputs_dir, force_refresh=args.force_food_refresh),
-        )
-        timings.add("Scrape FDA food catalog", t)
 
     # Prepare inputs prior to matching (PNF normalization + eSOA renaming).
     t = run_with_spinner("Prepare inputs", lambda: _prepare(str(pnf_path), str(esoa_path), str(inputs_dir)))
