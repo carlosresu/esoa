@@ -6,10 +6,17 @@ from collections import defaultdict
 from typing import Tuple, Optional, List, Dict, Set, Callable
 import difflib
 import numpy as np, pandas as pd
+import ahocorasick  # type: ignore
 from .aho import build_molecule_automata, scan_pnf_all
 from .combos import SALT_TOKENS, looks_like_combination, split_combo_segments
 from .routes_forms import extract_route_and_form
-from .text_utils import _base_name, _normalize_text_basic, normalize_text, extract_parenthetical_phrases, STOPWORD_TOKENS
+from .text_utils import (
+    _base_name,
+    _normalize_text_basic,
+    normalize_text,
+    extract_parenthetical_phrases,
+    STOPWORD_TOKENS,
+)
 from .who_molecules import detect_all_who_molecules, load_who_molecules
 from .brand_map import load_latest_brandmap, build_brand_automata, fda_generics_set
 from .pnf_aliases import expand_generic_aliases, SPECIAL_GENERIC_ALIASES, apply_spelling_rules
@@ -234,6 +241,63 @@ def build_features(
         brand_lookup = {}
         fda_gens = set()
 
+    # 4b) FDA food/non-therapeutic catalog (optional, may not exist locally)
+    nonthera_lookup: Dict[str, List[Dict[str, str]]] = {}
+    nonthera_token_lookup: Dict[str, Set[str]] = {}
+    nonthera_loaded = [False]
+    nonthera_automaton = [None]
+
+    def _load_nontherapeutic_catalog():
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+        inputs_dir = os.path.join(project_root, "inputs")
+        catalog_path = os.path.join(inputs_dir, "fda_food_products.csv")
+        if not os.path.exists(catalog_path):
+            return
+        try:
+            df_catalog = pd.read_csv(catalog_path)
+        except Exception:
+            return
+        if df_catalog.empty:
+            return
+
+        keys: Set[str] = set()
+        for row in df_catalog.fillna("").to_dict("records"):
+            brand = str(row.get("brand_name", "") or "").strip()
+            product = str(row.get("product_name", "") or "").strip()
+            company = str(row.get("company_name", "") or "").strip()
+            regno = str(row.get("registration_number", "") or "").strip()
+
+            for field_name, raw_value in (("brand_name", brand), ("product_name", product)):
+                if not raw_value:
+                    continue
+                norm = _normalize_text_basic(_base_name(raw_value))
+                if not norm:
+                    continue
+                keys.add(norm)
+                detail = {
+                    "brand_name": brand,
+                    "product_name": product,
+                    "company_name": company,
+                    "registration_number": regno,
+                    "match_field": field_name,
+                    "match_value": raw_value,
+                }
+                nonthera_lookup.setdefault(norm, []).append(detail)
+                tokens = {m.group(0) for m in GENERIC_TOKEN_RX.finditer(norm)}
+                if tokens:
+                    existing = nonthera_token_lookup.setdefault(norm, set())
+                    existing.update(tokens)
+
+        if keys:
+            auto = ahocorasick.Automaton()
+            for key in keys:
+                auto.add_word(key, key)
+            auto.make_automaton()
+            nonthera_automaton[0] = auto
+            nonthera_loaded[0] = True
+
+    _timed("Load FDA non-therapeutic catalog", _load_nontherapeutic_catalog)
+
     # 5) PNF automata + partial index
     A_norm = [None]; A_comp = [None]
     _timed("Build PNF automata", lambda: (
@@ -257,6 +321,59 @@ def build_features(
         df.append(tmp)
     _timed("Normalize ESOA text", _mk_base)
     df = df[-1]
+
+    def _detect_non_therapeutic():
+        if not nonthera_loaded[0] or not nonthera_automaton[0]:
+            df["non_therapeutic_hits"] = [[] for _ in range(len(df))]
+            df["non_therapeutic_tokens"] = [[] for _ in range(len(df))]
+            df["non_therapeutic_summary"] = ["" for _ in range(len(df))]
+            return
+
+        auto = nonthera_automaton[0]
+        hits_col: List[List[Dict[str, str]]] = []
+        tokens_col: List[List[str]] = []
+        summary_col: List[str] = []
+
+        for norm_text in df["normalized"].astype(str).tolist():
+            if not norm_text:
+                hits_col.append([])
+                tokens_col.append([])
+                summary_col.append("")
+                continue
+
+            matched_keys = {key for _, key in auto.iter(norm_text)}  # type: ignore[attr-defined]
+            if not matched_keys:
+                hits_col.append([])
+                tokens_col.append([])
+                summary_col.append("")
+                continue
+
+            details: List[Dict[str, str]] = []
+            token_set: Set[str] = set()
+            summary_parts: List[str] = []
+            for key in matched_keys:
+                for entry in nonthera_lookup.get(key, []):
+                    details.append(entry)
+                    token_set.update(nonthera_token_lookup.get(key, {key}))
+                    display = (entry.get("match_value") or entry.get("brand_name") or entry.get("product_name") or key).strip()
+                    regno = (entry.get("registration_number") or "").strip()
+                    if regno:
+                        summary_parts.append(f"{display} [Reg {regno}]")
+                    else:
+                        summary_parts.append(display)
+
+            unique_parts = list(dict.fromkeys(part for part in summary_parts if part))
+            summary = "Matches FDA PH food catalog: " + "; ".join(unique_parts) if unique_parts else ""
+
+            hits_col.append(details)
+            tokens_col.append(sorted(token_set))
+            summary_col.append(summary)
+
+        df["non_therapeutic_hits"] = hits_col
+        df["non_therapeutic_tokens"] = tokens_col
+        df["non_therapeutic_summary"] = summary_col
+
+    _timed("Detect non-therapeutic brands", _detect_non_therapeutic)
 
     # 7) Dose/route/form on original normalized text
     def _dose_route_form_raw():
@@ -664,7 +781,7 @@ def build_features(
         for name in fda_gens:
             fda_token_lookup.update(_tokenize_unknowns(name))
 
-        def _unknown_kind_and_list(text_norm: str, matched_tokens: set[str]) -> Tuple[str, List[str]]:
+        def _unknown_kind_and_list(text_norm: str, matched_tokens: set[str], nonthera_tokens: Set[str]) -> Tuple[str, List[str]]:
             s = _segment_norm(text_norm)
             all_toks = _tokenize_unknowns(s)
             unknowns: list[str] = []
@@ -675,6 +792,7 @@ def build_features(
                     and t not in who_token_lookup
                     and t not in fda_token_lookup
                     and t not in STOPWORD_TOKENS
+                    and t not in nonthera_tokens
                 ):
                     unknowns.append(t)
             seen: set[str] = set()
@@ -692,9 +810,24 @@ def build_features(
             return "Multiple - Some Unknown", unknowns_uniq
 
         results: list[Tuple[str, List[str]]] = []
-        for text_norm, p_hits, who_hits in zip(df["match_basis"], df["pnf_hits_tokens"], df["who_molecules_list"]):
+        if "non_therapeutic_tokens" in df.columns:
+            nonthera_seq = df["non_therapeutic_tokens"].tolist()
+        else:
+            nonthera_seq = [[] for _ in range(len(df))]
+
+        for text_norm, p_hits, who_hits, nonthera_tokens in zip(
+            df["match_basis"],
+            df["pnf_hits_tokens"],
+            df["who_molecules_list"],
+            nonthera_seq,
+        ):
             matched_tokens = _token_set_from_phrase_list(p_hits) | _token_set_from_phrase_list(who_hits)
-            results.append(_unknown_kind_and_list(text_norm, matched_tokens))
+            tokens_for_row: Set[str]
+            if isinstance(nonthera_tokens, (list, tuple, set)):
+                tokens_for_row = {str(t) for t in nonthera_tokens if isinstance(t, str)}
+            else:
+                tokens_for_row = set()
+            results.append(_unknown_kind_and_list(text_norm, matched_tokens, tokens_for_row))
 
         if results:
             kinds, lists_ = zip(*results)

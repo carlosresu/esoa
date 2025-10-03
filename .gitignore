@@ -210,7 +210,7 @@ esoa_prepared.csv
 esoa.csv
 pnf_prepared.csv
 pnf.csv
-data/inputs/raw/*
+inputs/raw/*
 esoa_matched.xlsx
 ~$esoa_matched.xlsx
 not_in_pnf.csv
@@ -219,6 +219,7 @@ output/*
 **/*.csv
 **/*.xlsx
 **/*.rds
+**/*.tsv
 **/output/*
 **/outputs/*
 dependencies/atcd
