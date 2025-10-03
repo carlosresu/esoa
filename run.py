@@ -556,9 +556,11 @@ def main_entry() -> None:
         timings.add("Build FDA brand map", t)
 
     if not args.skip_food:
-        t0 = time.perf_counter()
-        scrape_food_catalog(inputs_dir, force_refresh=args.force_food_refresh)
-        timings.add("Scrape FDA food catalog", time.perf_counter() - t0)
+        t = run_with_spinner(
+            "Scrape FDA food catalog",
+            lambda: scrape_food_catalog(inputs_dir, force_refresh=args.force_food_refresh),
+        )
+        timings.add("Scrape FDA food catalog", t)
 
     # Prepare inputs prior to matching (PNF normalization + eSOA renaming).
     t = run_with_spinner("Prepare inputs", lambda: _prepare(str(pnf_path), str(esoa_path), str(inputs_dir)))
