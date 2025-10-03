@@ -59,6 +59,31 @@ WHO_FORM_TO_CANONICAL: dict[str, set[str]] = {
     "s.c. implant": {"solution"},
 }
 
+FOOD_FORM_KEYWORDS: dict[str, set[str]] = {
+    "capsule": {"capsule", "cap"},
+    "tablet": {"tablet", "tab"},
+    "syrup": {"syrup"},
+    "solution": {"solution", "sol"},
+    "suspension": {"suspension", "susp"},
+    "powder": {"powder"},
+    "gel": {"gel"},
+    "lotion": {"lotion"},
+    "cream": {"cream"},
+    "ointment": {"ointment", "oint"},
+    "spray": {"spray"},
+    "drops": {"drops", "drop"},
+    "drink": {"drink", "beverage"},
+}
+
+FOOD_ROUTE_KEYWORDS: dict[str, set[str]] = {
+    "oral": {"oral", "po", "by mouth"},
+    "topical": {"topical", "dermal"},
+    "nasal": {"nasal"},
+    "ophthalmic": {"ophthalmic", "eye"},
+    "otic": {"otic", "ear"},
+    "inhalation": {"inhalation", "inhaled"},
+}
+
 WHO_UOM_TO_CANONICAL: dict[str, set[str]] = {
     "tablet": {"tablet"},
     "ml": {"solution", "suspension"},
@@ -384,6 +409,104 @@ def build_features(
 
     _timed("Detect non-therapeutic brands", _detect_non_therapeutic)
 
+    def _score_food_entry(entry: Dict[str, str], norm_text: str, form_raw: Optional[str], route_raw: Optional[str]) -> float:
+        norm_lower = norm_text.lower()
+        norm_tokens = set(GENERIC_TOKEN_RX.findall(norm_lower))
+        score = 0.0
+
+        def _token_score(text: Optional[str], weight: float) -> float:
+            if not text:
+                return 0.0
+            text_lower = text.lower()
+            tokens = set(GENERIC_TOKEN_RX.findall(text_lower))
+            overlap = len(tokens & norm_tokens)
+            bonus = weight * 2 if text_lower and text_lower in norm_lower else 0.0
+            return weight * overlap + bonus
+
+        brand = entry.get("brand_name", "")
+        product = entry.get("product_name", "")
+        company = entry.get("company_name", "")
+        combined = " ".join(filter(None, [brand, product, company])).lower()
+
+        score += _token_score(brand, 3.0)
+        score += _token_score(product, 2.0)
+        score += _token_score(company, 1.0)
+
+        form_lower = (form_raw or "").lower()
+        for kw, candidates in FOOD_FORM_KEYWORDS.items():
+            if kw in combined:
+                if any(cand in form_lower for cand in candidates):
+                    score += 4.0
+                elif any(cand in norm_lower for cand in candidates):
+                    score += 2.0
+
+        route_lower = (route_raw or "").lower()
+        for kw, routes in FOOD_ROUTE_KEYWORDS.items():
+            if kw in combined and route_lower in routes:
+                score += 3.0
+
+        for num in re.findall(r"\d+(?:\.\d+)?", combined):
+            if num and num in norm_lower:
+                score += 1.0
+
+        if entry.get("registration_number"):
+            score += 1.0
+
+        return score
+
+    def _choose_best_nonthera() -> None:
+        if "non_therapeutic_hits" not in df.columns:
+            df["non_therapeutic_best"] = [{} for _ in range(len(df))]
+            return
+
+        existing_summary = df.get("non_therapeutic_summary", pd.Series(["" for _ in range(len(df))])).tolist()
+        best_entries: List[Dict[str, str]] = []
+        summaries: List[str] = []
+
+        for idx, (hits, norm_text, form_raw, route_raw) in enumerate(
+            zip(
+                df["non_therapeutic_hits"],
+                df["normalized"],
+                df.get("form_raw", [None] * len(df)),
+                df.get("route_raw", [None] * len(df)),
+            )
+        ):
+            if not hits:
+                best_entries.append({})
+                summaries.append(existing_summary[idx] if idx < len(existing_summary) else "")
+                continue
+
+            scores = []
+            for entry in hits:
+                scores.append((entry, _score_food_entry(entry, str(norm_text), form_raw, route_raw)))
+            scores.sort(key=lambda item: (-item[1], item[0].get("brand_name", ""), item[0].get("product_name", "")))
+            best_entry, best_score = scores[0] if scores else ({}, 0.0)
+
+            if best_score <= 0.0:
+                best_entries.append(best_entry)
+                summaries.append(existing_summary[idx] if idx < len(existing_summary) else "")
+                continue
+
+            display = best_entry.get("brand_name") or best_entry.get("product_name") or best_entry.get("company_name") or "FDA Food item"
+            detail_parts = []
+            if best_entry.get("product_name") and best_entry.get("product_name").strip().lower() != display.strip().lower():
+                detail_parts.append(best_entry["product_name"].strip())
+            if best_entry.get("company_name"):
+                detail_parts.append(best_entry["company_name"].strip())
+            if best_entry.get("registration_number"):
+                detail_parts.append(f"Reg {best_entry['registration_number'].strip()}")
+            detail = "; ".join(part for part in detail_parts if part)
+            summary = f"FDA Food match: {display}" + (f" ({detail})" if detail else "")
+
+            if existing_summary[idx]:
+                summary = summary + "; " + existing_summary[idx]
+
+            best_entries.append(best_entry)
+            summaries.append(summary)
+
+        df["non_therapeutic_best"] = best_entries
+        df["non_therapeutic_summary"] = summaries
+
     # 7) Dose/route/form on original normalized text
     def _dose_route_form_raw():
         from .dose import extract_dosage as _extract_dosage
@@ -512,6 +635,8 @@ def build_features(
         df["probable_brands"] = probable_brand_hits
         df["fda_generics_list"] = fda_generics_lists
     _timed("Apply brand→generic swaps", _brand_swap)
+
+    _timed("Summarize non-therapeutic", _choose_best_nonthera)
     df["match_basis_norm_basic"] = df["match_basis"].map(_normalize_text_basic)
 
     # 9) Dose/route/form on match_basis
