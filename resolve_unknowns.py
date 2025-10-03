@@ -50,6 +50,11 @@ COMMON_UNKNOWN_STOPWORDS = {
     "boxes",
     "syringe",
     "syringes",
+    "softgel",
+    "softgels",
+    "mc",
+    "none",
+    "content",
 }
 
 # -----------------------------
@@ -185,7 +190,9 @@ def main():
 
     unknown_counts = _read_unknowns_with_counts(unknowns_path)
     for key in list(unknown_counts.keys()):
-        if key.lower() in COMMON_UNKNOWN_STOPWORDS:
+        norm_key = key.strip()
+        # Drop empty strings, single letters, or known non-generic jargon tokens.
+        if not norm_key or len(norm_key) == 1 or norm_key.lower() in COMMON_UNKNOWN_STOPWORDS:
             unknown_counts.pop(key)
     if not unknown_counts:
         print("No unknown words found (empty file).")
