@@ -13,71 +13,11 @@ File outputs:
 """
 from __future__ import annotations
 
-import ensurepip
 import os
 import subprocess
 import sys
 import time
 from pathlib import Path
-
-THIS_DIR: Path = Path(__file__).resolve().parent
-
-
-def _bootstrap_requirements(req_file: Path | None = None) -> None:
-    req_path = req_file if req_file is not None else THIS_DIR / "requirements.txt"
-    if not req_path.is_file():
-        return
-
-    def _run(cmd: list[str], *, devnull: object, suppress: bool = True) -> None:
-        stdout = devnull if suppress else None
-        stderr = devnull if suppress else None
-        subprocess.check_call(cmd, cwd=str(THIS_DIR), stdout=stdout, stderr=stderr)
-
-    with open(os.devnull, "w") as devnull:
-        try:
-            _run([sys.executable, "-m", "pip", "--version"], devnull=devnull)
-        except subprocess.CalledProcessError:
-            try:
-                ensurepip.bootstrap()
-            except Exception:
-                pass
-            try:
-                _run([sys.executable, "-m", "pip", "--version"], devnull=devnull)
-            except subprocess.CalledProcessError:
-                try:
-                    _run([sys.executable, "-m", "ensurepip", "--default-pip"], devnull=devnull)
-                except subprocess.CalledProcessError as exc:
-                    raise RuntimeError("pip is unavailable and could not be bootstrapped.") from exc
-
-        try:
-            _run(
-                [sys.executable, "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"],
-                devnull=devnull,
-            )
-        except subprocess.CalledProcessError:
-            pass
-
-        install_cmd = [
-            sys.executable,
-            "-m",
-            "pip",
-            "install",
-            "--disable-pip-version-check",
-            "-r",
-            str(req_path),
-        ]
-        try:
-            _run(install_cmd, devnull=devnull)
-        except subprocess.CalledProcessError:
-            time.sleep(3)
-            print(
-                "! Initial dependency install failed; retrying with verbose output...",
-                file=sys.stderr,
-            )
-            _run(install_cmd, devnull=devnull, suppress=False)
-
-
-_bootstrap_requirements()
 
 import argparse
 import csv
@@ -85,7 +25,10 @@ import re
 import shutil
 import threading
 from datetime import datetime
+
 from typing import Callable, Iterable
+
+THIS_DIR: Path = Path(__file__).resolve().parent
 
 DEFAULT_INPUTS_DIR = "inputs"
 OUTPUTS_DIR = "outputs"
@@ -95,7 +38,6 @@ ATCD_SCRIPTS: tuple[str, ...] = ("atcd.R", "export.R", "filter.R")
 # Ensure local imports when called from other CWDs
 if str(THIS_DIR) not in sys.path:
     sys.path.insert(0, str(THIS_DIR))
-
 
 # ----------------------------
 # Utilities
@@ -119,13 +61,11 @@ def _resolve_input_path(p: str | os.PathLike[str], default_subdir: str = DEFAULT
         f"Place the file under ./{default_subdir}/ or pass --pnf/--esoa with a correct path."
     )
 
-
 def _natural_esoa_part_order(path: Path) -> tuple[int, str]:
     """Sort helper to order esoa_pt_*.csv using the first numeric suffix when available."""
     match = re.search(r"(\d+)", path.stem)
     index = int(match.group(1)) if match else sys.maxsize
     return index, path.name
-
 
 def _concatenate_csv(parts: list[Path], dest: Path) -> None:
     """Row-bind multiple CSV files (assuming identical headers) into dest."""
@@ -152,7 +92,6 @@ def _concatenate_csv(parts: list[Path], dest: Path) -> None:
                 for row in reader:
                     writer.writerow(row)
 
-
 def _resolve_esoa_path(esoa_arg: str) -> Path:
     """Resolve the eSOA input, concatenating esoa_pt_*.csv files when present."""
     raw_arg = Path(esoa_arg)
@@ -170,14 +109,12 @@ def _resolve_esoa_path(esoa_arg: str) -> Path:
 
     return _resolve_input_path(esoa_arg)
 
-
 def _ensure_outputs_dir() -> Path:
     """Make sure the outputs directory exists and return its filesystem path."""
     outdir = THIS_DIR / OUTPUTS_DIR
     # Create the directory tree so downstream writes succeed.
     outdir.mkdir(parents=True, exist_ok=True)
     return outdir
-
 
 def _ensure_inputs_dir() -> Path:
     """Create the inputs directory when missing so upstream steps can drop files."""
@@ -186,7 +123,6 @@ def _ensure_inputs_dir() -> Path:
     inp.mkdir(parents=True, exist_ok=True)
     return inp
 
-
 def _assert_all_exist(root: Path, files: Iterable[str | os.PathLike[str]]) -> None:
     """Validate that every filename under root exists before shelling out to R scripts."""
     for f in files:
@@ -194,7 +130,6 @@ def _assert_all_exist(root: Path, files: Iterable[str | os.PathLike[str]]) -> No
         # Surface a clear error when an expected script is missing.
         if not fp.is_file():
             raise FileNotFoundError(f"Required file not found: {fp}")
-
 
 def _prune_dated_exports(directory: Path) -> None:
     """Keep only the newest YYYY-MM-DD CSV per prefix/suffix family under directory."""
@@ -227,7 +162,6 @@ def _prune_dated_exports(directory: Path) -> None:
         for date, path in entries:
             if date != latest_date and path.exists():
                 path.unlink()
-
 
 # ----------------------------
 # Spinner + timing
@@ -277,7 +211,6 @@ def run_with_spinner(label: str, func: Callable[[], None], start_delay: float = 
         raise err[0]
     return elapsed
 
-
 # ----------------------------
 # Timing aggregation
 # ----------------------------
@@ -285,7 +218,6 @@ GROUP_DEFINITIONS: list[tuple[str, tuple[str, ...]]] = [
     (
         "Setup & Prerequisites",
         (
-            "Install requirements",
             "ATC R preprocessing",
             "Build FDA brand map",
             "Scrape FDA food catalog",
@@ -364,7 +296,6 @@ for group_name, step_names in GROUP_DEFINITIONS:
 
 DEFAULT_GROUP = "Other"
 
-
 class TimingCollector:
     """Accumulate per-step timings and expose grouped rollups for summary output."""
     def __init__(self) -> None:
@@ -401,7 +332,6 @@ class TimingCollector:
         # Sum directly over the recorded durations for quick reuse.
         return sum(seconds for _, seconds in self._entries)
 
-
 def _print_grouped_summary(timings: TimingCollector) -> None:
     """Render grouped timing totals to stdout in a compact report."""
     totals = timings.grouped_totals()
@@ -420,18 +350,9 @@ def _print_grouped_summary(timings: TimingCollector) -> None:
     padding = max(label_width - len("Total"), 0)
     print(f"• Total{'':<{padding}} {total:9.2f}s")
 
-
 # ----------------------------
 # Steps (silent)
 # ----------------------------
-def install_requirements(req_path: str | os.PathLike[str]) -> None:
-    """Install pinned dependencies quietly so repeated runs stay deterministic."""
-    req = Path(req_path) if req_path else None
-    if req is not None and not req.is_file():
-        return
-    _bootstrap_requirements(req)
-
-
 def run_r_scripts() -> None:
     """Execute the bundled R preprocessors when the environment has the needed tools."""
     atcd_dir = THIS_DIR / ATCD_SUBDIR
@@ -452,7 +373,6 @@ def run_r_scripts() -> None:
         for script in ATCD_SCRIPTS:
             # Run each R script sequentially, surfacing errors if any command fails.
             subprocess.run([rscript, script], check=True, cwd=str(atcd_dir), stdout=devnull, stderr=devnull)
-
 
 def build_brand_map(inputs_dir: Path, outfile: Path | None) -> Path:
     """Ensure an FDA brand map exists, constructing a fresh one when required."""
@@ -498,7 +418,6 @@ def build_brand_map(inputs_dir: Path, outfile: Path | None) -> Path:
             ) from exc
     return out_csv
 
-
 def scrape_food_catalog(inputs_dir: Path, *, force_refresh: bool = False) -> Path:
     """Ensure the scraped FDA food catalog CSV exists, invoking the scraper when needed."""
     out_csv = inputs_dir / "fda_food_products.csv"
@@ -534,7 +453,6 @@ def scrape_food_catalog(inputs_dir: Path, *, force_refresh: bool = False) -> Pat
         ) from exc
     return out_csv
 
-
 def run_resolve_unknowns() -> None:
     """Run resolve_unknowns.py if present (either at project root or under scripts/)."""
     # Prefer scripts/resolve_unknowns.py when available, otherwise fallback to root-level resolve_unknowns.py
@@ -556,22 +474,19 @@ def run_resolve_unknowns() -> None:
             stderr=devnull,
         )
 
-
 # ----------------------------
 # Main entry
 # ----------------------------
 def main_entry() -> None:
-    """CLI front-end that mirrors README flow: optional installs, WHO ATC scraping, FDA brand map build, prepare+match, then reporting."""
+    """CLI front-end that mirrors README flow: WHO ATC scraping, FDA brand map build, prepare+match, then reporting."""
     parser = argparse.ArgumentParser(
         description="Run full ESOA pipeline (ATC → brand map → prepare → match) with spinner+timing",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    # Flags align with README guidance: allow skipping installs, R preprocessing, or FDA brand rebuilds when rerunning.
+    # Flags align with README guidance: allow skipping R preprocessing or FDA brand rebuilds when rerunning.
     parser.add_argument("--pnf", default=f"{DEFAULT_INPUTS_DIR}/pnf.csv", help="Path to PNF CSV")
     parser.add_argument("--esoa", default=f"{DEFAULT_INPUTS_DIR}/esoa.csv", help="Path to eSOA CSV")
     parser.add_argument("--out", default="esoa_matched.csv", help="Output CSV filename (saved under ./outputs)")
-    parser.add_argument("--requirements", default="requirements.txt", help="Requirements file to install")
-    parser.add_argument("--skip-install", action="store_true", help="Skip pip install of requirements")
     parser.add_argument("--skip-r", action="store_true", help="Skip running ATC R preprocessing scripts")
     parser.add_argument("--skip-brandmap", action="store_true", help="Skip building FDA brand map CSV")
     parser.add_argument("--skip-food", action="store_true", help="Skip scraping the FDA food catalog")
@@ -594,11 +509,6 @@ def main_entry() -> None:
     from scripts.match import match as _match
 
     timings = TimingCollector()
-
-    if not args.skip_install and args.requirements:
-        # Optionally install Python dependencies prior to the heavy lifting.
-        t = run_with_spinner("Install requirements", lambda: install_requirements(args.requirements))
-        timings.add("Install requirements", t)
 
     if not args.skip_r:
         # Execute the R preprocessing stage (WHO ATC scraping -> filtered outputs).
@@ -639,7 +549,6 @@ def main_entry() -> None:
 
     _prune_dated_exports(THIS_DIR / "dependencies" / "atcd" / "output")
     _prune_dated_exports(THIS_DIR / DEFAULT_INPUTS_DIR)
-
 
 if __name__ == "__main__":
     try:

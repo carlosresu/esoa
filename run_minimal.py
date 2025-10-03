@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Minimal ESOA pipeline runner skipping installs/R/brand map rebuild and Excel export."""
+"""Minimal ESOA pipeline runner skipping R/brand map rebuild and Excel export."""
 from __future__ import annotations
 
 import argparse
@@ -12,7 +12,7 @@ import run
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
-        description="Run minimal ESOA pipeline (no installs/R/brand map rebuild, no Excel output)",
+        description="Run minimal ESOA pipeline (skips R/brand map rebuild, no Excel output)",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--pnf", default=f"{run.DEFAULT_INPUTS_DIR}/pnf.csv", help="Path to PNF CSV")
@@ -25,7 +25,6 @@ def main(argv: list[str] | None = None) -> None:
         "--pnf", args.pnf,
         "--esoa", args.esoa,
         "--out", args.out,
-        "--skip-install",
         "--skip-r",
         "--skip-brandmap",
         "--skip-excel",
