@@ -210,7 +210,8 @@ esoa_prepared.csv
 esoa.csv
 pnf_prepared.csv
 pnf.csv
-inputs/raw/*
+inputs/*
+raw/*
 esoa_matched.xlsx
 ~$esoa_matched.xlsx
 not_in_pnf.csv
