@@ -830,6 +830,13 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     none_found = out["unknown_kind"].eq("None")
     fallback_unknown = (~is_candidate_like) & (~present_in_who) & (~present_in_fda) & (~none_found)
 
+    if "non_therapeutic_summary" in out.columns:
+        nonthera_summary = out["non_therapeutic_summary"].fillna("").astype(str)
+        nonthera_mask = nonthera_summary.str.strip().ne("")
+    else:
+        nonthera_summary = pd.Series(["" for _ in range(len(out))], index=out.index)
+        nonthera_mask = pd.Series([False for _ in range(len(out))], index=out.index)
+
     def _annotate_unknown_with_presence(base_reason: str, idx: pd.Index) -> pd.Series:
         canonical = _annotate_unknown(base_reason)
         if "(" in canonical and canonical.endswith(")"):
@@ -861,10 +868,21 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
         (unknown_multi_some | (fallback_unknown & unknown_multi_some), "Multiple - Some Unknown"),
     ]:
         mask = cond & (out["bucket_final"] == "")
-        out.loc[mask, "bucket_final"] = "Others"
-        out.loc[mask, "why_final"] = "Unknown"
-        if mask.any():
-            out.loc[mask, "reason_final"] = _annotate_unknown_with_presence(reason, out.loc[mask].index)
+        if not mask.any():
+            continue
+
+        nonthera_here = mask & nonthera_mask
+        others_mask = mask & (~nonthera_mask)
+
+        if nonthera_here.any():
+            out.loc[nonthera_here, "bucket_final"] = "Others - Non-Therapeutic Medical Products"
+            out.loc[nonthera_here, "why_final"] = "Non-therapeutic catalog match"
+            out.loc[nonthera_here, "reason_final"] = nonthera_summary[nonthera_here]
+
+        if others_mask.any():
+            out.loc[others_mask, "bucket_final"] = "Others"
+            out.loc[others_mask, "why_final"] = "Unknown"
+            out.loc[others_mask, "reason_final"] = _annotate_unknown_with_presence(reason, out.loc[others_mask].index)
 
     remaining = out["bucket_final"].eq("")
     out.loc[remaining, "bucket_final"] = "Needs review"
