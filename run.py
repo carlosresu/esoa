@@ -457,12 +457,13 @@ def scrape_food_catalog(inputs_dir: Path, *, force_refresh: bool = False) -> Pat
         sys.executable,
         "-m",
         "scripts.fda_ph_food_scraper",
-        "--enable-download",
         "--outdir",
         str(inputs_dir),
         "--outfile",
         out_csv.name,
     ]
+    if force_refresh:
+        cmd.append("--force")
     try:
         subprocess.run(cmd, check=True, cwd=str(THIS_DIR))
     except subprocess.CalledProcessError as exc:
