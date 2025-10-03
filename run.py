@@ -14,6 +14,7 @@ File outputs:
 from __future__ import annotations
 
 import argparse
+import csv
 import os
 import re
 import shutil
@@ -57,6 +58,57 @@ def _resolve_input_path(p: str | os.PathLike[str], default_subdir: str = DEFAULT
         f"Tried: {pth.resolve()!s} and {candidate!s}. "
         f"Place the file under ./{default_subdir}/ or pass --pnf/--esoa with a correct path."
     )
+
+
+def _natural_esoa_part_order(path: Path) -> tuple[int, str]:
+    """Sort helper to order esoa_pt_*.csv using the first numeric suffix when available."""
+    match = re.search(r"(\d+)", path.stem)
+    index = int(match.group(1)) if match else sys.maxsize
+    return index, path.name
+
+
+def _concatenate_csv(parts: list[Path], dest: Path) -> None:
+    """Row-bind multiple CSV files (assuming identical headers) into dest."""
+    header: list[str] | None = None
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with dest.open("w", newline="", encoding="utf-8") as out_handle:
+        writer: csv.writer | None = None
+        for part in parts:
+            with part.open("r", newline="", encoding="utf-8-sig") as in_handle:
+                reader = csv.reader(in_handle)
+                try:
+                    file_header = next(reader)
+                except StopIteration:
+                    continue  # Skip empty files gracefully.
+                if header is None:
+                    header = file_header
+                    writer = csv.writer(out_handle)
+                    writer.writerow(header)
+                elif file_header != header:
+                    raise ValueError(
+                        f"Header mismatch when concatenating {part.name}; expected {header} but found {file_header}."
+                    )
+                assert writer is not None
+                for row in reader:
+                    writer.writerow(row)
+
+
+def _resolve_esoa_path(esoa_arg: str) -> Path:
+    """Resolve the eSOA input, concatenating esoa_pt_*.csv files when present."""
+    raw_arg = Path(esoa_arg)
+    search_dir = raw_arg.parent if raw_arg.parent else Path(DEFAULT_INPUTS_DIR)
+    if not search_dir.is_absolute():
+        search_dir = (THIS_DIR / search_dir).resolve()
+    if not search_dir.exists():
+        search_dir = (_ensure_inputs_dir()).resolve()
+
+    part_files = sorted(search_dir.glob("esoa_pt_*.csv"), key=_natural_esoa_part_order)
+    if part_files:
+        combined = search_dir / "esoa_combined.csv"
+        _concatenate_csv(part_files, combined)
+        return combined
+
+    return _resolve_input_path(esoa_arg)
 
 
 def _ensure_outputs_dir() -> Path:
@@ -439,7 +491,7 @@ def main_entry() -> None:
     inputs_dir = _ensure_inputs_dir()
     # Resolve the requested raw inputs, enforcing the fallback search behavior.
     pnf_path = _resolve_input_path(args.pnf)
-    esoa_path = _resolve_input_path(args.esoa)
+    esoa_path = _resolve_esoa_path(args.esoa)
     out_path = outdir / Path(args.out).name
 
     from scripts.prepare import prepare as _prepare
