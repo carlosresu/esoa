@@ -26,7 +26,7 @@ HEADERS = {
 RAW_DIR = Path(__file__).resolve().parent.parent / "raw"
 
 PAGE_SIZES = ("100",)
-DEFAULT_TIMEOUT = 600
+DEFAULT_TIMEOUT = None
 
 RECORD_SUMMARY_RX = re.compile(r"Records\s+\d+\s+to\s+([\d,]+)\s+of\s+([\d,]+)", re.IGNORECASE)
 
@@ -155,13 +155,34 @@ def _dedupe_rows(rows: Iterable[Dict[str, str]]) -> List[Dict[str, str]]:
     return unique
 
 
-def _fetch_page(session: requests.Session, *, recperpage: str, start: Optional[int], timeout: int) -> str:
+def _fetch_page(
+    session: requests.Session,
+    *,
+    recperpage: str,
+    start: Optional[int],
+    timeout: Optional[int],
+    retries: Optional[int] = None,
+    backoff: float = 5.0,
+) -> str:
     params: Dict[str, str] = {"recperpage": recperpage}
     if start is not None:
         params["start"] = str(start)
-    response = session.get(FOOD_PRODUCTS_URL, params=params, headers=HEADERS, timeout=timeout)
-    response.raise_for_status()
-    return response.text
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            response = session.get(FOOD_PRODUCTS_URL, params=params, headers=HEADERS, timeout=timeout)
+            response.raise_for_status()
+            return response.text
+        except Exception as exc:  # noqa: BLE001
+            if retries is not None and attempt >= retries:
+                raise
+            wait = backoff * attempt
+            print(
+                f"! Request failed (recperpage={recperpage}, start={start}): {exc}. Retrying in {wait:.1f}s",
+                file=sys.stderr,
+            )
+            time.sleep(wait)
 
 
 def _extract_next_start_values(html: str, *, current: int, recperpage: str) -> List[int]:
@@ -186,7 +207,7 @@ def _extract_next_start_values(html: str, *, current: int, recperpage: str) -> L
 def _scrape_paginated(
     session: requests.Session,
     recperpage: str,
-    timeout: int,
+    timeout: Optional[int],
     expected_total: Optional[int],
 ) -> Tuple[List[Dict[str, str]], List[str]]:
     aggregated: List[Dict[str, str]] = []
@@ -280,7 +301,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     parser.add_argument("--outdir", default="inputs", help="Directory for the processed CSV")
     parser.add_argument("--outfile", default="fda_food_products.csv", help="Processed output filename")
-    parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT, help="Request timeout (seconds)")
+    parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT, help="Optional per-request timeout (seconds)")
     parser.add_argument("--force", action="store_true", help="Force re-scraping even if output exists")
     args = parser.parse_args(argv)
 
