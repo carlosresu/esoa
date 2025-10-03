@@ -11,7 +11,7 @@ import time
 from datetime import datetime
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import parse_qs, urljoin, urlparse
 
 import requests
@@ -164,6 +164,24 @@ def _dedupe_rows(rows: Iterable[Dict[str, str]]) -> List[Dict[str, str]]:
     return unique
 
 
+def _load_existing_catalog(path: Path) -> List[Dict[str, str]]:
+    if not path.is_file():
+        return []
+    rows: List[Dict[str, str]] = []
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        for entry in reader:
+            rows.append(
+                {
+                    "brand_name": (entry.get("brand_name") or "").strip(),
+                    "product_name": (entry.get("product_name") or "").strip(),
+                    "company_name": (entry.get("company_name") or "").strip(),
+                    "registration_number": (entry.get("registration_number") or "").strip(),
+                }
+            )
+    return _dedupe_rows(rows)
+
+
 def _fetch_page(
     session: requests.Session,
     *,
@@ -200,6 +218,19 @@ def _fetch_page(
             if retries is not None and attempt >= retries:
                 raise
             wait = backoff * attempt
+            if isinstance(exc, requests.HTTPError) and exc.response is not None:
+                status = exc.response.status_code
+                if status == 429:
+                    retry_after = exc.response.headers.get("Retry-After")
+                    if retry_after:
+                        try:
+                            wait = max(wait, float(retry_after))
+                        except ValueError:
+                            wait = max(wait, backoff * (attempt + 1))
+                    else:
+                        wait = max(wait, backoff * (attempt + 1))
+                elif status >= 500:
+                    wait = max(wait, backoff * (attempt + 2))
             if verbose:
                 print(
                     f"! Request failed (recperpage={recperpage}, start={start}): {exc}. Retrying in {wait:.1f}s",
@@ -234,10 +265,11 @@ def _scrape_paginated(
     timeout: Optional[int],
     expected_total: Optional[int],
     *,
+    seen: set[Tuple[str, str, str, str]],
+    aggregated: List[Dict[str, str]],
+    flush: Optional[Callable[[List[Dict[str, str]]], None]],
     verbose: bool,
-) -> Tuple[List[Dict[str, str]], List[str]]:
-    aggregated: List[Dict[str, str]] = []
-    seen: set[Tuple[str, str, str, str]] = set()
+) -> Tuple[Optional[int], List[str]]:
     html_pages: List[str] = []
     start = 1
     previous_first_reg: Optional[str] = None
@@ -263,12 +295,17 @@ def _scrape_paginated(
             break
         previous_first_reg = first_reg
 
+        new_rows = 0
         for row in rows:
             key = _row_key(row)
             if key in seen:
                 continue
             seen.add(key)
             aggregated.append(row)
+            new_rows += 1
+
+        if new_rows and flush:
+            flush(aggregated)
 
         now = time.monotonic()
         if now - last_report >= 1:
@@ -301,36 +338,52 @@ def _scrape_paginated(
             verbose=verbose,
         )
 
-    return aggregated, html_pages
+    return expected_total, html_pages
 
 
 def scrape_food_catalog(
     timeout: Optional[int] = DEFAULT_TIMEOUT,
     *,
     verbose: bool = True,
+    existing_rows: Optional[List[Dict[str, str]]] = None,
+    flush: Optional[Callable[[List[Dict[str, str]]], None]] = None,
 ) -> Tuple[List[Dict[str, str]], List[str], str]:
     with requests.Session() as session:
+        aggregated: List[Dict[str, str]] = list(existing_rows or [])
+        seen: set[Tuple[str, str, str, str]] = {_row_key(row) for row in aggregated}
+        if verbose and aggregated:
+            print(f"Loaded {len(aggregated):,} existing rows; continuing scrape.", flush=True)
+
         expected_total: Optional[int] = None
+        html_pages_all: List[str] = []
+
         for size in PAGE_SIZES:
             if verbose:
                 print(f"=== Starting scrape with recperpage={size}", flush=True)
-            rows, html_pages = _scrape_paginated(
+            expected_total, html_pages = _scrape_paginated(
                 session,
                 size,
                 timeout,
                 expected_total,
+                seen=seen,
+                aggregated=aggregated,
+                flush=flush,
                 verbose=verbose,
             )
-            if rows:
-                expected_total = expected_total or _parse_record_summary("".join(html_pages))
-                if expected_total is None or len(rows) >= expected_total:
-                    if verbose:
-                        print(
-                            f"=== Completed scrape with recperpage={size} (rows={len(rows):,})",
-                            flush=True,
-                        )
-                    return _dedupe_rows(rows), html_pages, size
-        raise RuntimeError("Unable to scrape FDA PH food products list (no rows captured).")
+            html_pages_all.extend(html_pages)
+
+            if expected_total is not None and len(aggregated) >= expected_total:
+                if verbose:
+                    print(
+                        f"=== Completed scrape with recperpage={size} (rows={len(aggregated):,}/{expected_total:,})",
+                        flush=True,
+                    )
+                break
+
+        if not aggregated:
+            raise RuntimeError("Unable to scrape FDA PH food products list (no rows captured).")
+
+        return list(aggregated), html_pages_all, size
 
 
 def build_catalog(rows: Iterable[Dict[str, str]]) -> List[Dict[str, str]]:
@@ -366,26 +419,49 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     outdir = Path(args.outdir)
     out_csv = outdir / args.outfile
-    if out_csv.exists() and not args.force:
-        print(f"Existing catalog found at {out_csv}; use --force to refresh.")
-        return 0
 
     RAW_DIR.mkdir(parents=True, exist_ok=True)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    rows, html_pages, page_size = scrape_food_catalog(timeout=args.timeout, verbose=not args.quiet)
+    existing_rows: List[Dict[str, str]] = []
+    if out_csv.exists():
+        if args.force:
+            if not args.quiet:
+                print(f"Discarding existing catalog at {out_csv} (--force).", flush=True)
+            out_csv.unlink()
+        else:
+            existing_rows = _load_existing_catalog(out_csv)
+            if not args.quiet:
+                print(
+                    f"Resuming from {len(existing_rows):,} previously scraped rows at {out_csv}.",
+                    flush=True,
+                )
+
+    fieldnames = ["brand_name", "product_name", "company_name", "registration_number"]
+
+    def _flush(rows: List[Dict[str, str]]) -> None:
+        catalog_snapshot = build_catalog(rows)
+        tmp_path = out_csv.with_suffix(out_csv.suffix + ".tmp")
+        with tmp_path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(catalog_snapshot)
+        tmp_path.replace(out_csv)
+
+    rows, html_pages, page_size = scrape_food_catalog(
+        timeout=args.timeout,
+        verbose=not args.quiet,
+        existing_rows=existing_rows,
+        flush=_flush,
+    )
+
     catalog = build_catalog(rows)
+    _flush(catalog)
 
     timestamp = datetime.utcnow().strftime("%Y-%m-%dT%H%M%SZ")
     raw_path = RAW_DIR / f"FDA_PH_FOOD_PRODUCTS_{page_size}_{timestamp}.html"
     raw_content = "\n<!-- page break -->\n".join(html_pages) if html_pages else ""
     raw_path.write_text(raw_content, encoding="utf-8")
-
-    fieldnames = ["brand_name", "product_name", "company_name", "registration_number"]
-    with out_csv.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(catalog)
 
     print(
         "FDA PH food catalog scraped via recperpage={page} (raw={raw}, processed={processed}, entries={count})".format(
