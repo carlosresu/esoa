@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import csv
 import re
+import sys
+import time
 from urllib.parse import parse_qs, urljoin, urlparse
 from datetime import datetime
 from html.parser import HTMLParser
@@ -26,6 +28,18 @@ RAW_DIR = Path(__file__).resolve().parent.parent / "raw"
 DEFAULT_TIMEOUT = 300  # Allow up to 5 minutes; page render is notably slow.
 
 RECORD_SUMMARY_RX = re.compile(r"Records\s+\d+\s+to\s+([\d,]+)\s+of\s+([\d,]+)", re.IGNORECASE)
+
+
+def _render_progress(prefix: str, current: int, total: Optional[int], *, done: bool = False) -> None:
+    if total and total > 0:
+        msg = f"{prefix}: {current:,}/{total:,}"
+    else:
+        msg = f"{prefix}: {current:,}"
+    sys.stdout.write("\r" + msg.ljust(80))
+    sys.stdout.flush()
+    if done:
+        sys.stdout.write("\n")
+        sys.stdout.flush()
 
 
 class _FoodTableParser(HTMLParser):
@@ -88,6 +102,31 @@ class _FoodTableParser(HTMLParser):
             self.current_text.append(data)
 
 
+def _row_key(row: Dict[str, str]) -> Tuple[str, str, str, str]:
+    return (
+        (row.get("brand_name") or "").strip().lower(),
+        (row.get("product_name") or "").strip().lower(),
+        (row.get("company_name") or "").strip().lower(),
+        (row.get("registration_number") or "").strip().lower(),
+    )
+
+
+def _cells_to_rows(cells_list: Iterable[List[str]]) -> List[Dict[str, str]]:
+    parsed: List[Dict[str, str]] = []
+    for cells in cells_list:
+        if len(cells) < 5:
+            continue
+        parsed.append(
+            {
+                "registration_number": cells[1].strip(),
+                "company_name": cells[2].strip(),
+                "product_name": cells[3].strip(),
+                "brand_name": cells[4].strip(),
+            }
+        )
+    return parsed
+
+
 def _parse_record_summary(html: str) -> Optional[int]:
     match = RECORD_SUMMARY_RX.search(html)
     if not match:
@@ -102,31 +141,14 @@ def _parse_record_summary(html: str) -> Optional[int]:
 def _parse_food_rows(html: str) -> List[Dict[str, str]]:
     parser = _FoodTableParser()
     parser.feed(html)
-    parsed: List[Dict[str, str]] = []
-    for cells in parser.rows:
-        if len(cells) < 5:
-            continue
-        parsed.append(
-            {
-                "registration_number": cells[1].strip(),
-                "company_name": cells[2].strip(),
-                "product_name": cells[3].strip(),
-                "brand_name": cells[4].strip(),
-            }
-        )
-    return parsed
+    return _cells_to_rows(parser.rows)
 
 
 def _dedupe_rows(rows: Iterable[Dict[str, str]]) -> List[Dict[str, str]]:
     seen: set[Tuple[str, str, str, str]] = set()
     unique: List[Dict[str, str]] = []
     for row in rows:
-        key = (
-            (row.get("brand_name") or "").strip().lower(),
-            (row.get("product_name") or "").strip().lower(),
-            (row.get("company_name") or "").strip().lower(),
-            (row.get("registration_number") or "").strip().lower(),
-        )
+        key = _row_key(row)
         if key in seen:
             continue
         seen.add(key)
@@ -164,17 +186,50 @@ def _extract_next_start_values(html: str, *, current: int) -> List[int]:
 
 
 def _scrape_all_mode(session: requests.Session, timeout: int) -> Tuple[List[Dict[str, str]], Optional[int], str]:
-    html = _fetch_page(session, recperpage="ALL", start=None, timeout=timeout)
-    rows = _parse_food_rows(html)
-    total = _parse_record_summary(html)
-    return rows, total, html
+    parser = _FoodTableParser()
+    html_chunks: List[str] = []
+    total_expected: Optional[int] = None
+    last_report = time.monotonic()
+    previous_count = -1
+
+    with session.get(FOOD_PRODUCTS_URL, params={"recperpage": "ALL"}, headers=HEADERS, timeout=timeout, stream=True) as response:
+        response.raise_for_status()
+        for chunk in response.iter_content(chunk_size=65536, decode_unicode=True):
+            if not chunk:
+                continue
+            html_chunks.append(chunk)
+            parser.feed(chunk)
+
+            if total_expected is None:
+                match = RECORD_SUMMARY_RX.search(chunk)
+                if match:
+                    total_expected = int(match.group(2).replace(",", ""))
+
+            current_count = len(parser.rows)
+            now = time.monotonic()
+            if current_count != previous_count and now - last_report >= 1:
+                _render_progress("Scraping ALL view", current_count, total_expected)
+                last_report = now
+                previous_count = current_count
+
+    html = "".join(html_chunks)
+    if total_expected is None:
+        match = RECORD_SUMMARY_RX.search(html)
+        if match:
+            total_expected = int(match.group(2).replace(",", ""))
+
+    rows = _cells_to_rows(parser.rows)
+    _render_progress("Scraping ALL view", len(rows), total_expected, done=True)
+    return rows, total_expected, html
 
 
 def _scrape_paginated(session: requests.Session, timeout: int, expected_total: Optional[int]) -> Tuple[List[Dict[str, str]], List[str]]:
     aggregated: List[Dict[str, str]] = []
+    seen: set[Tuple[str, str, str, str]] = set()
     html_pages: List[str] = []
     start = 1
     previous_first_reg: Optional[str] = None
+    last_report = time.monotonic()
 
     while True:
         html = _fetch_page(session, recperpage="100", start=start, timeout=timeout)
@@ -189,10 +244,20 @@ def _scrape_paginated(session: requests.Session, timeout: int, expected_total: O
             break
         previous_first_reg = first_reg
 
-        aggregated.extend(rows)
-        aggregated = _dedupe_rows(aggregated)
+        for row in rows:
+            key = _row_key(row)
+            if key in seen:
+                continue
+            seen.add(key)
+            aggregated.append(row)
 
-        if expected_total is not None and len(aggregated) >= expected_total:
+        current_count = len(aggregated)
+        now = time.monotonic()
+        if now - last_report >= 1:
+            _render_progress("Scraping paginated view", current_count, expected_total)
+            last_report = now
+
+        if expected_total is not None and current_count >= expected_total:
             break
 
         if len(rows) < 100:
@@ -203,6 +268,9 @@ def _scrape_paginated(session: requests.Session, timeout: int, expected_total: O
             start = min(next_candidates)
         else:
             start += len(rows)
+
+    if aggregated:
+        _render_progress("Scraping paginated view", len(aggregated), expected_total, done=True)
 
     return aggregated, html_pages
 
