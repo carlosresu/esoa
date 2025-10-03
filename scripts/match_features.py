@@ -229,6 +229,7 @@ def build_features(
         brand_df[0] = load_latest_brandmap(inputs_dir)
     _timed("Load FDA brand map", _load_brand)
     has_brandmap = brand_df[0] is not None and not brand_df[0].empty
+    brand_token_lookup: Set[str] = set()
     if has_brandmap:
         B_norm = [None]; B_comp = [None]; brand_lookup = [{}]; fda_gens = [set()]
         _timed("Build brand automata", lambda: (
@@ -236,10 +237,18 @@ def build_features(
         ))
         _timed("Index FDA generics", lambda: fda_gens.__setitem__(0, fda_generics_set(brand_df[0])))
         B_norm, B_comp, brand_lookup, fda_gens = B_norm[0], B_comp[0], brand_lookup[0], fda_gens[0]
+
+        brand_series = brand_df[0].get("brand_name")
+        if brand_series is not None:
+            for name in brand_series.fillna("").astype(str):
+                norm = _normalize_text_basic(_base_name(name))
+                if norm:
+                    brand_token_lookup.update(_tokenize_unknowns(norm))
     else:
         B_norm = B_comp = None
         brand_lookup = {}
         fda_gens = set()
+        brand_token_lookup = set()
 
     # 4b) FDA food/non-therapeutic catalog (optional, may not exist locally)
     nonthera_lookup: Dict[str, List[Dict[str, str]]] = {}
@@ -781,7 +790,11 @@ def build_features(
         for name in fda_gens:
             fda_token_lookup.update(_tokenize_unknowns(name))
 
-        def _unknown_kind_and_list(text_norm: str, matched_tokens: set[str], nonthera_tokens: Set[str]) -> Tuple[str, List[str]]:
+        def _unknown_kind_and_list(
+            text_norm: str,
+            matched_tokens: set[str],
+            nonthera_tokens: Set[str],
+        ) -> Tuple[str, List[str]]:
             s = _segment_norm(text_norm)
             all_toks = _tokenize_unknowns(s)
             unknowns: list[str] = []
@@ -793,6 +806,7 @@ def build_features(
                     and t not in fda_token_lookup
                     and t not in STOPWORD_TOKENS
                     and t not in nonthera_tokens
+                    and t not in brand_token_lookup
                 ):
                     unknowns.append(t)
             seen: set[str] = set()
