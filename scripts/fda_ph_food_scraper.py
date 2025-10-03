@@ -192,25 +192,35 @@ def _scrape_all_mode(session: requests.Session, timeout: int) -> Tuple[List[Dict
     last_report = time.monotonic()
     previous_count = -1
 
-    with session.get(FOOD_PRODUCTS_URL, params={"recperpage": "ALL"}, headers=HEADERS, timeout=timeout, stream=True) as response:
-        response.raise_for_status()
-        for chunk in response.iter_content(chunk_size=65536, decode_unicode=True):
-            if not chunk:
-                continue
-            html_chunks.append(chunk)
-            parser.feed(chunk)
+    try:
+        with session.get(
+            FOOD_PRODUCTS_URL,
+            params={"recperpage": "ALL"},
+            headers=HEADERS,
+            timeout=timeout,
+            stream=True,
+        ) as response:
+            response.raise_for_status()
+            for chunk in response.iter_content(chunk_size=65536, decode_unicode=True):
+                if not chunk:
+                    continue
+                html_chunks.append(chunk)
+                parser.feed(chunk)
 
-            if total_expected is None:
-                match = RECORD_SUMMARY_RX.search(chunk)
-                if match:
-                    total_expected = int(match.group(2).replace(",", ""))
+                if total_expected is None:
+                    match = RECORD_SUMMARY_RX.search(chunk)
+                    if match:
+                        total_expected = int(match.group(2).replace(",", ""))
 
-            current_count = len(parser.rows)
-            now = time.monotonic()
-            if current_count != previous_count and now - last_report >= 1:
-                _render_progress("Scraping ALL view", current_count, total_expected)
-                last_report = now
-                previous_count = current_count
+                current_count = len(parser.rows)
+                now = time.monotonic()
+                if current_count != previous_count and now - last_report >= 1:
+                    _render_progress("Scraping ALL view", current_count, total_expected)
+                    last_report = now
+                    previous_count = current_count
+    except requests.HTTPError:
+        _render_progress("Scraping ALL view", len(parser.rows), total_expected, done=True)
+        raise
 
     html = "".join(html_chunks)
     if total_expected is None:
@@ -277,8 +287,16 @@ def _scrape_paginated(session: requests.Session, timeout: int, expected_total: O
 
 def scrape_food_catalog(timeout: int = DEFAULT_TIMEOUT) -> Tuple[List[Dict[str, str]], List[str], bool]:
     with requests.Session() as session:
-        rows_all, total_expected, html_all = _scrape_all_mode(session, timeout)
-        html_pages = [html_all]
+        try:
+            rows_all, total_expected, html_all = _scrape_all_mode(session, timeout)
+        except requests.HTTPError as exc:
+            print(
+                "! Failed to load ALL view (HTTP error); falling back to paginated scraping",
+                file=sys.stderr,
+            )
+            rows_all, total_expected, html_all = [], None, ""
+
+        html_pages = [html_all] if html_all else []
         loaded_all = bool(total_expected) and len(rows_all) == total_expected
 
         if loaded_all:
@@ -342,7 +360,8 @@ def main() -> None:
     timestamp = datetime.utcnow().strftime("%Y-%m-%dT%H%M%SZ")
     raw_suffix = "ALL" if used_all else "PAGED"
     raw_path = RAW_DIR / f"FDA_PH_FOOD_PRODUCTS_{raw_suffix}_{timestamp}.html"
-    raw_path.write_text(html_pages[0], encoding="utf-8")
+    raw_content = "\n<!-- page break -->\n".join(html_pages) if html_pages else ""
+    raw_path.write_text(raw_content, encoding="utf-8")
 
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
