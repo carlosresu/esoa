@@ -26,7 +26,7 @@ HEADERS = {
 RAW_DIR = Path(__file__).resolve().parent.parent / "raw"
 
 PAGE_SIZES = ("100",)
-DEFAULT_TIMEOUT = 300
+DEFAULT_TIMEOUT = 600
 
 RECORD_SUMMARY_RX = re.compile(r"Records\s+\d+\s+to\s+([\d,]+)\s+of\s+([\d,]+)", re.IGNORECASE)
 
