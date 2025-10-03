@@ -173,6 +173,26 @@ def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
         for _, row in grouped_oth.iterrows():
             lines.append(f"  {row['why_final']}: {row['reason_final']}: {row['n']:,} ({row['pct']}%)")
 
+    # Any remaining buckets (e.g., specialized Others buckets)
+    handled_buckets = {"Auto-Accept", "Needs review", "Others"}
+    for bucket in sorted(out_small["bucket_final"].dropna().unique()):
+        if bucket in handled_buckets:
+            continue
+        bucket_rows = out_small.loc[out_small["bucket_final"].eq(bucket)].copy()
+        count = int(len(bucket_rows))
+        pct = round(count / float(total) * 100, 2) if total else 0.0
+        lines.append(f"{bucket}: {count:,} ({pct}%)")
+        if count:
+            grp = (
+                bucket_rows.groupby(["why_final", "reason_final"], dropna=False)
+                .size()
+                .reset_index(name="n")
+            )
+            grp["pct"] = (grp["n"] / float(total) * 100).round(2) if total else 0.0
+            grp = grp.sort_values(by=["n", "why_final", "reason_final"], ascending=[False, True, True])
+            for _, row in grp.iterrows():
+                lines.append(f"  {row['why_final']}: {row['reason_final']}: {row['n']:,} ({row['pct']}%)")
+
     return lines
 
 
