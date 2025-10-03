@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import random
 import re
 import sys
 import time
@@ -19,9 +20,27 @@ import requests
 BASE_URL = "https://verification.fda.gov.ph"
 FOOD_PRODUCTS_URL = f"{BASE_URL}/All_FoodProductslist.php"
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (compatible; eSOA-BrandMap/1.0; +https://github.com/)"
+BASE_HEADERS = {
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Connection": "close",
 }
+
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_3_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; rv:109.0) Gecko/20100101 Firefox/109.0",
+    "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:124.0) Gecko/20100101 Firefox/124.0",
+]
+
+ACCEPT_LANGUAGES = [
+    "en-US,en;q=0.9",
+    "en-GB,en;q=0.8",
+    "en-US,en;q=0.9,fil;q=0.4",
+    "en-SG,en;q=0.9",
+]
 
 RAW_DIR = Path(__file__).resolve().parent.parent / "raw"
 
@@ -164,6 +183,16 @@ def _dedupe_rows(rows: Iterable[Dict[str, str]]) -> List[Dict[str, str]]:
     return unique
 
 
+def _random_headers() -> Dict[str, str]:
+    headers = BASE_HEADERS.copy()
+    headers["User-Agent"] = random.choice(USER_AGENTS)
+    headers["Accept-Language"] = random.choice(ACCEPT_LANGUAGES)
+    headers["Referer"] = FOOD_PRODUCTS_URL
+    headers["Cache-Control"] = "no-cache"
+    headers["Pragma"] = "no-cache"
+    return headers
+
+
 def _load_existing_catalog(path: Path) -> List[Dict[str, str]]:
     if not path.is_file():
         return []
@@ -205,7 +234,17 @@ def _fetch_page(
                     f"→ Fetch recperpage={recperpage} start={start or 1} (attempt {attempt})",
                     flush=True,
                 )
-            response = session.get(FOOD_PRODUCTS_URL, params=params, headers=HEADERS, timeout=timeout)
+            timeout_value = timeout if timeout is not None else None
+            delay = random.uniform(1.5, 4.0)
+            if verbose:
+                print(f"   waiting {delay:.2f}s before request", flush=True)
+            time.sleep(delay)
+            response = session.get(
+                FOOD_PRODUCTS_URL,
+                params=params,
+                headers=_random_headers(),
+                timeout=timeout_value,
+            )
             response.raise_for_status()
             if verbose:
                 elapsed = time.perf_counter() - t0
@@ -231,12 +270,15 @@ def _fetch_page(
                         wait = max(wait, backoff * (attempt + 1))
                 elif status >= 500:
                     wait = max(wait, backoff * (attempt + 2))
+                elif status == 403:
+                    wait = max(wait, backoff * (attempt + 2))
             if verbose:
                 print(
                     f"! Request failed (recperpage={recperpage}, start={start}): {exc}. Retrying in {wait:.1f}s",
                     file=sys.stderr,
                     flush=True,
                 )
+            session.cookies.clear()
             time.sleep(wait)
 
 
