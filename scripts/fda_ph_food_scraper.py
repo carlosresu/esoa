@@ -25,7 +25,7 @@ HEADERS = {
 
 RAW_DIR = Path(__file__).resolve().parent.parent / "raw"
 
-PAGE_SIZES = ("1000", "100")
+PAGE_SIZES = ("100",)
 DEFAULT_TIMEOUT = 300
 
 RECORD_SUMMARY_RX = re.compile(r"Records\s+\d+\s+to\s+([\d,]+)\s+of\s+([\d,]+)", re.IGNORECASE)
@@ -320,4 +320,3 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
