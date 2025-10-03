@@ -13,20 +13,71 @@ File outputs:
 """
 from __future__ import annotations
 
-import argparse
-import csv
+import ensurepip
 import os
-import re
-import shutil
 import subprocess
 import sys
 import time
-import threading
-from datetime import datetime
 from pathlib import Path
-from typing import Callable, Iterable
 
 THIS_DIR: Path = Path(__file__).resolve().parent
+
+
+def _bootstrap_requirements(req_file: Path | None = None) -> None:
+    req_path = req_file if req_file is not None else THIS_DIR / "requirements.txt"
+    if not req_path.is_file():
+        return
+
+    def _run(cmd: list[str], devnull: object) -> None:
+        subprocess.check_call(cmd, cwd=str(THIS_DIR), stdout=devnull, stderr=devnull)
+
+    with open(os.devnull, "w") as devnull:
+        try:
+            _run([sys.executable, "-m", "pip", "--version"], devnull)
+        except subprocess.CalledProcessError:
+            try:
+                ensurepip.bootstrap()
+            except Exception:
+                pass
+            try:
+                _run([sys.executable, "-m", "pip", "--version"], devnull)
+            except subprocess.CalledProcessError:
+                try:
+                    _run([sys.executable, "-m", "ensurepip", "--default-pip"], devnull)
+                except subprocess.CalledProcessError as exc:
+                    raise RuntimeError("pip is unavailable and could not be bootstrapped.") from exc
+
+        try:
+            _run([sys.executable, "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"], devnull)
+        except subprocess.CalledProcessError:
+            pass
+
+        install_cmd = [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--disable-pip-version-check",
+            "-r",
+            str(req_path),
+        ]
+        try:
+            _run(install_cmd, devnull)
+        except subprocess.CalledProcessError:
+            time.sleep(3)
+            _run(install_cmd, devnull)
+
+
+_bootstrap_requirements()
+
+import argparse
+import csv
+import re
+import shutil
+import threading
+from datetime import datetime
+from typing import Callable, Iterable
+
 DEFAULT_INPUTS_DIR = "inputs"
 OUTPUTS_DIR = "outputs"
 ATCD_SUBDIR = Path("dependencies") / "atcd"
@@ -367,16 +418,9 @@ def _print_grouped_summary(timings: TimingCollector) -> None:
 def install_requirements(req_path: str | os.PathLike[str]) -> None:
     """Install pinned dependencies quietly so repeated runs stay deterministic."""
     req = Path(req_path) if req_path else None
-    if not req or not req.is_file():
+    if req is not None and not req.is_file():
         return
-    with open(os.devnull, "w") as devnull:
-        # Delegate to pip while silencing noisy progress output.
-        subprocess.check_call(
-            [sys.executable, "-m", "pip", "install", "--disable-pip-version-check", "-r", str(req)],
-            cwd=str(THIS_DIR),
-            stdout=devnull,
-            stderr=devnull,
-        )
+    _bootstrap_requirements(req)
 
 
 def run_r_scripts() -> None:
