@@ -2,8 +2,11 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 import sys, time
+import glob
 import os, pandas as pd
-from typing import Callable, List
+import re
+from pathlib import Path
+from typing import Callable, List, Optional, Set
 
 # Local lightweight spinner so this module is self-contained
 def _run_with_spinner(label: str, func: Callable[[], None]) -> float:
@@ -69,6 +72,77 @@ COMMON_UNKNOWN_STOPWORDS = {
     "syringe",
     "syringes",
 }
+
+_TOKEN_RE = re.compile(r"[a-z0-9]+")
+_KNOWN_TOKENS_CACHE: Optional[Set[str]] = None
+
+
+def _extract_tokens(values: Iterable[object]) -> Set[str]:
+    tokens: Set[str] = set()
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        for match in _TOKEN_RE.findall(value.lower()):
+            tokens.add(match)
+    return tokens
+
+
+def _known_tokens() -> Set[str]:
+    global _KNOWN_TOKENS_CACHE
+    if _KNOWN_TOKENS_CACHE is not None:
+        return _KNOWN_TOKENS_CACHE
+
+    tokens: Set[str] = set()
+    project_root = Path(__file__).resolve().parent.parent
+    inputs_dir = project_root / "inputs"
+
+    # PNF prepared
+    pnf_prepared = inputs_dir / "pnf_prepared.csv"
+    if pnf_prepared.is_file():
+        try:
+            df_pnf = pd.read_csv(pnf_prepared, usecols=["generic_name", "synonyms"], dtype=str)
+            tokens.update(_extract_tokens(df_pnf.get("generic_name", [])))
+            tokens.update(_extract_tokens(df_pnf.get("synonyms", [])))
+        except Exception:
+            pass
+
+    # FDA brand map (latest)
+    brand_maps = sorted(glob.glob(str(inputs_dir / "fda_brand_map_*.csv")))
+    if brand_maps:
+        try:
+            df_brand = pd.read_csv(brand_maps[-1], usecols=["brand_name", "generic_name"], dtype=str)
+            tokens.update(_extract_tokens(df_brand.get("brand_name", [])))
+            tokens.update(_extract_tokens(df_brand.get("generic_name", [])))
+        except Exception:
+            pass
+
+    # FDA food catalog (optional)
+    food_catalog = inputs_dir / "fda_food_products.csv"
+    if food_catalog.is_file():
+        try:
+            df_food = pd.read_csv(
+                food_catalog,
+                usecols=["brand_name", "product_name", "company_name"],
+                dtype=str,
+            )
+            tokens.update(_extract_tokens(df_food.get("brand_name", [])))
+            tokens.update(_extract_tokens(df_food.get("product_name", [])))
+            tokens.update(_extract_tokens(df_food.get("company_name", [])))
+        except Exception:
+            pass
+
+    # WHO molecules (latest)
+    who_dir = project_root / "dependencies" / "atcd" / "output"
+    who_files = sorted(glob.glob(str(who_dir / "who_atc_*_molecules.csv")))
+    if who_files:
+        try:
+            df_who = pd.read_csv(who_files[-1], usecols=["atc_name"], dtype=str)
+            tokens.update(_extract_tokens(df_who.get("atc_name", [])))
+        except Exception:
+            pass
+
+    _KNOWN_TOKENS_CACHE = tokens
+    return _KNOWN_TOKENS_CACHE
 
 def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
     """Produce human-readable distribution summaries for review files."""
@@ -263,12 +337,15 @@ def write_outputs(
             ["unknown_words"]
         ].copy()
         words = []
+        known_tokens = _known_tokens()
         for s in unknown["unknown_words"]:
             for w in str(s).split("|"):
                 w = w.strip()
                 if not w:
                     continue
                 if w.lower() in COMMON_UNKNOWN_STOPWORDS:
+                    continue
+                if w.lower() in known_tokens:
                     continue
                 words.append(w)
         if words:
