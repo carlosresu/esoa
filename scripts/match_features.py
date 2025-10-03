@@ -361,18 +361,21 @@ def build_features(
             df["non_therapeutic_hits"] = [[] for _ in range(len(df))]
             df["non_therapeutic_tokens"] = [[] for _ in range(len(df))]
             df["non_therapeutic_summary"] = ["" for _ in range(len(df))]
+            df["non_therapeutic_detail"] = ["" for _ in range(len(df))]
             return
 
         auto = nonthera_automaton[0]
         hits_col: List[List[Dict[str, str]]] = []
         tokens_col: List[List[str]] = []
         summary_col: List[str] = []
+        detail_col: List[str] = []
 
         for norm_text in df["normalized"].astype(str).tolist():
             if not norm_text:
                 hits_col.append([])
                 tokens_col.append([])
                 summary_col.append("")
+                detail_col.append("")
                 continue
 
             matched_keys = {key for _, key in auto.iter(norm_text)}  # type: ignore[attr-defined]
@@ -380,6 +383,7 @@ def build_features(
                 hits_col.append([])
                 tokens_col.append([])
                 summary_col.append("")
+                detail_col.append("")
                 continue
 
             details: List[Dict[str, str]] = []
@@ -402,10 +406,12 @@ def build_features(
             hits_col.append(details)
             tokens_col.append(sorted(token_set))
             summary_col.append(summary)
+            detail_col.append(summary)
 
         df["non_therapeutic_hits"] = hits_col
         df["non_therapeutic_tokens"] = tokens_col
         df["non_therapeutic_summary"] = summary_col
+        df["non_therapeutic_detail"] = detail_col
 
     _timed("Detect non-therapeutic brands", _detect_non_therapeutic)
 
@@ -462,6 +468,7 @@ def build_features(
         existing_summary = df.get("non_therapeutic_summary", pd.Series(["" for _ in range(len(df))])).tolist()
         best_entries: List[Dict[str, str]] = []
         summaries: List[str] = []
+        details: List[str] = []
 
         for idx, (hits, norm_text, form_raw, route_raw) in enumerate(
             zip(
@@ -474,6 +481,7 @@ def build_features(
             if not hits:
                 best_entries.append({})
                 summaries.append(existing_summary[idx] if idx < len(existing_summary) else "")
+                details.append("")
                 continue
 
             scores = []
@@ -485,6 +493,7 @@ def build_features(
             if best_score <= 0.0:
                 best_entries.append(best_entry)
                 summaries.append(existing_summary[idx] if idx < len(existing_summary) else "")
+                details.append("")
                 continue
 
             display = best_entry.get("brand_name") or best_entry.get("product_name") or best_entry.get("company_name") or "FDA Food item"
@@ -496,13 +505,15 @@ def build_features(
             if best_entry.get("registration_number"):
                 detail_parts.append(f"Reg {best_entry['registration_number'].strip()}")
             detail = "; ".join(part for part in detail_parts if part)
-            summary = f"FDA Food match: {display}" + (f" ({detail})" if detail else "")
+            detail_string = f"FDA Food match: {display}" + (f" ({detail})" if detail else "")
 
             best_entries.append(best_entry)
-            summaries.append(summary)
+            summaries.append("non_therapeutic_detected")
+            details.append(detail_string)
 
         df["non_therapeutic_best"] = best_entries
         df["non_therapeutic_summary"] = summaries
+        df["non_therapeutic_detail"] = details
 
     # 7) Dose/route/form on original normalized text
     def _dose_route_form_raw():

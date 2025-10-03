@@ -56,7 +56,7 @@ OUTPUT_COLUMNS = [
     "selected_dose_kind","selected_strength","selected_unit","selected_strength_mg",
     "selected_per_val","selected_per_unit","selected_ratio_mg_per_ml","selected_pct",
     "dose_sim","looks_combo_final","combo_reason","combo_known_generics_count",
-    "non_therapeutic_summary",
+    "non_therapeutic_summary","non_therapeutic_detail",
     "unknown_kind","unknown_words_list","unknown_words",
     "atc_code_final","confidence",
     "match_molecule(s)","match_quality",

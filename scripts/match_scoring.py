@@ -877,12 +877,8 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
         if nonthera_here.any():
             out.loc[nonthera_here, "bucket_final"] = "Others"
             out.loc[nonthera_here, "why_final"] = "Non-Therapeutic Medical Products"
-            summary_series = nonthera_summary[nonthera_here].fillna("").astype(str)
-            fallback_summary = "Identified in FDA food catalog"
-            out.loc[nonthera_here, "reason_final"] = summary_series.where(
-                summary_series.str.strip().ne(""),
-                other=fallback_summary,
-            )
+            reason_tag = "non_therapeutic_detected"
+            out.loc[nonthera_here, "reason_final"] = reason_tag
 
         if others_mask.any():
             out.loc[others_mask, "bucket_final"] = "Others"
