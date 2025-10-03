@@ -28,27 +28,32 @@ def _bootstrap_requirements(req_file: Path | None = None) -> None:
     if not req_path.is_file():
         return
 
-    def _run(cmd: list[str], devnull: object) -> None:
-        subprocess.check_call(cmd, cwd=str(THIS_DIR), stdout=devnull, stderr=devnull)
+    def _run(cmd: list[str], *, devnull: object, suppress: bool = True) -> None:
+        stdout = devnull if suppress else None
+        stderr = devnull if suppress else None
+        subprocess.check_call(cmd, cwd=str(THIS_DIR), stdout=stdout, stderr=stderr)
 
     with open(os.devnull, "w") as devnull:
         try:
-            _run([sys.executable, "-m", "pip", "--version"], devnull)
+            _run([sys.executable, "-m", "pip", "--version"], devnull=devnull)
         except subprocess.CalledProcessError:
             try:
                 ensurepip.bootstrap()
             except Exception:
                 pass
             try:
-                _run([sys.executable, "-m", "pip", "--version"], devnull)
+                _run([sys.executable, "-m", "pip", "--version"], devnull=devnull)
             except subprocess.CalledProcessError:
                 try:
-                    _run([sys.executable, "-m", "ensurepip", "--default-pip"], devnull)
+                    _run([sys.executable, "-m", "ensurepip", "--default-pip"], devnull=devnull)
                 except subprocess.CalledProcessError as exc:
                     raise RuntimeError("pip is unavailable and could not be bootstrapped.") from exc
 
         try:
-            _run([sys.executable, "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"], devnull)
+            _run(
+                [sys.executable, "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"],
+                devnull=devnull,
+            )
         except subprocess.CalledProcessError:
             pass
 
@@ -62,10 +67,14 @@ def _bootstrap_requirements(req_file: Path | None = None) -> None:
             str(req_path),
         ]
         try:
-            _run(install_cmd, devnull)
+            _run(install_cmd, devnull=devnull)
         except subprocess.CalledProcessError:
             time.sleep(3)
-            _run(install_cmd, devnull)
+            print(
+                "! Initial dependency install failed; retrying with verbose output...",
+                file=sys.stderr,
+            )
+            _run(install_cmd, devnull=devnull, suppress=False)
 
 
 _bootstrap_requirements()
