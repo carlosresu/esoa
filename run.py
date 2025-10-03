@@ -228,6 +228,7 @@ GROUP_DEFINITIONS: list[tuple[str, tuple[str, ...]]] = [
             "Install requirements",
             "ATC R preprocessing",
             "Build FDA brand map",
+            "Scrape FDA food catalog",
             "Prepare inputs",
         ),
     ),
@@ -445,6 +446,40 @@ def build_brand_map(inputs_dir: Path, outfile: Path | None) -> Path:
     return out_csv
 
 
+def scrape_food_catalog(inputs_dir: Path, *, force_refresh: bool = False) -> Path:
+    """Ensure the scraped FDA food catalog CSV exists, invoking the scraper when needed."""
+    out_csv = inputs_dir / "fda_food_products.csv"
+    if out_csv.exists() and not force_refresh:
+        return out_csv
+
+    existing = out_csv if out_csv.exists() else None
+    cmd = [
+        sys.executable,
+        "-m",
+        "scripts.fda_ph_food_scraper",
+        "--enable-download",
+        "--outdir",
+        str(inputs_dir),
+        "--outfile",
+        out_csv.name,
+    ]
+    try:
+        subprocess.run(cmd, check=True, cwd=str(THIS_DIR))
+    except subprocess.CalledProcessError as exc:
+        if existing is not None:
+            print(
+                "! Scraping FDA food catalog failed; reusing existing file "
+                f"{existing.name}. Run with --skip-food to bypass this step if the portal is unreachable.",
+                file=sys.stderr,
+            )
+            return existing
+        raise RuntimeError(
+            "Scraping FDA food catalog failed and no prior catalog is available. "
+            "Re-run with --skip-food if the FDA portal is unreachable."
+        ) from exc
+    return out_csv
+
+
 def run_resolve_unknowns() -> None:
     """Run resolve_unknowns.py if present (either at project root or under scripts/)."""
     # Prefer scripts/resolve_unknowns.py when available, otherwise fallback to root-level resolve_unknowns.py
@@ -484,6 +519,12 @@ def main_entry() -> None:
     parser.add_argument("--skip-install", action="store_true", help="Skip pip install of requirements")
     parser.add_argument("--skip-r", action="store_true", help="Skip running ATC R preprocessing scripts")
     parser.add_argument("--skip-brandmap", action="store_true", help="Skip building FDA brand map CSV")
+    parser.add_argument("--skip-food", action="store_true", help="Skip scraping the FDA food catalog")
+    parser.add_argument(
+        "--force-food-refresh",
+        action="store_true",
+        help="Force re-scraping the FDA food catalog even if a cached CSV exists",
+    )
     parser.add_argument("--skip-excel", action="store_true", help="Skip writing XLSX output (CSV and summaries still produced)")
     args = parser.parse_args()
 
@@ -513,6 +554,11 @@ def main_entry() -> None:
         # Generate or reuse the FDA brand map that feeds the feature builder.
         t = run_with_spinner("Build FDA brand map", lambda: build_brand_map(inputs_dir, outfile=None))
         timings.add("Build FDA brand map", t)
+
+    if not args.skip_food:
+        t0 = time.perf_counter()
+        scrape_food_catalog(inputs_dir, force_refresh=args.force_food_refresh)
+        timings.add("Scrape FDA food catalog", time.perf_counter() - t0)
 
     # Prepare inputs prior to matching (PNF normalization + eSOA renaming).
     t = run_with_spinner("Prepare inputs", lambda: _prepare(str(pnf_path), str(esoa_path), str(inputs_dir)))
