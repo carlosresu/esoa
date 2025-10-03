@@ -31,7 +31,16 @@ DEFAULT_TIMEOUT = None
 RECORD_SUMMARY_RX = re.compile(r"Records\s+\d+\s+to\s+([\d,]+)\s+of\s+([\d,]+)", re.IGNORECASE)
 
 
-def _render_progress(prefix: str, current: int, total: Optional[int], *, done: bool = False) -> None:
+def _render_progress(
+    prefix: str,
+    current: int,
+    total: Optional[int],
+    *,
+    done: bool = False,
+    verbose: bool = True,
+) -> None:
+    if not verbose:
+        return
     if total and total > 0:
         msg = f"{prefix}: {current:,}/{total:,}"
     else:
@@ -163,6 +172,7 @@ def _fetch_page(
     timeout: Optional[int],
     retries: Optional[int] = None,
     backoff: float = 5.0,
+    verbose: bool = True,
 ) -> str:
     params: Dict[str, str] = {"recperpage": recperpage}
     if start is not None:
@@ -171,17 +181,31 @@ def _fetch_page(
     while True:
         attempt += 1
         try:
+            t0 = time.perf_counter()
+            if verbose:
+                print(
+                    f"→ Fetch recperpage={recperpage} start={start or 1} (attempt {attempt})",
+                    flush=True,
+                )
             response = session.get(FOOD_PRODUCTS_URL, params=params, headers=HEADERS, timeout=timeout)
             response.raise_for_status()
+            if verbose:
+                elapsed = time.perf_counter() - t0
+                print(
+                    f"← Done  recperpage={recperpage} start={start or 1} in {elapsed:.2f}s",
+                    flush=True,
+                )
             return response.text
         except Exception as exc:  # noqa: BLE001
             if retries is not None and attempt >= retries:
                 raise
             wait = backoff * attempt
-            print(
-                f"! Request failed (recperpage={recperpage}, start={start}): {exc}. Retrying in {wait:.1f}s",
-                file=sys.stderr,
-            )
+            if verbose:
+                print(
+                    f"! Request failed (recperpage={recperpage}, start={start}): {exc}. Retrying in {wait:.1f}s",
+                    file=sys.stderr,
+                    flush=True,
+                )
             time.sleep(wait)
 
 
@@ -209,6 +233,8 @@ def _scrape_paginated(
     recperpage: str,
     timeout: Optional[int],
     expected_total: Optional[int],
+    *,
+    verbose: bool,
 ) -> Tuple[List[Dict[str, str]], List[str]]:
     aggregated: List[Dict[str, str]] = []
     seen: set[Tuple[str, str, str, str]] = set()
@@ -218,7 +244,13 @@ def _scrape_paginated(
     last_report = time.monotonic()
 
     while True:
-        html = _fetch_page(session, recperpage=recperpage, start=start, timeout=timeout)
+        html = _fetch_page(
+            session,
+            recperpage=recperpage,
+            start=start,
+            timeout=timeout,
+            verbose=verbose,
+        )
         html_pages.append(html)
         rows, total = _parse_food_rows(html)
         if expected_total is None and total is not None:
@@ -240,7 +272,12 @@ def _scrape_paginated(
 
         now = time.monotonic()
         if now - last_report >= 1:
-            _render_progress(f"Scraping recperpage={recperpage}", len(aggregated), expected_total)
+            _render_progress(
+                f"Scraping recperpage={recperpage}",
+                len(aggregated),
+                expected_total,
+                verbose=verbose,
+            )
             last_report = now
 
         if expected_total is not None and len(aggregated) >= expected_total:
@@ -256,19 +293,42 @@ def _scrape_paginated(
             start += len(rows)
 
     if aggregated:
-        _render_progress(f"Scraping recperpage={recperpage}", len(aggregated), expected_total, done=True)
+        _render_progress(
+            f"Scraping recperpage={recperpage}",
+            len(aggregated),
+            expected_total,
+            done=True,
+            verbose=verbose,
+        )
 
     return aggregated, html_pages
 
 
-def scrape_food_catalog(timeout: int = DEFAULT_TIMEOUT) -> Tuple[List[Dict[str, str]], List[str], str]:
+def scrape_food_catalog(
+    timeout: Optional[int] = DEFAULT_TIMEOUT,
+    *,
+    verbose: bool = True,
+) -> Tuple[List[Dict[str, str]], List[str], str]:
     with requests.Session() as session:
         expected_total: Optional[int] = None
         for size in PAGE_SIZES:
-            rows, html_pages = _scrape_paginated(session, size, timeout, expected_total)
+            if verbose:
+                print(f"=== Starting scrape with recperpage={size}", flush=True)
+            rows, html_pages = _scrape_paginated(
+                session,
+                size,
+                timeout,
+                expected_total,
+                verbose=verbose,
+            )
             if rows:
                 expected_total = expected_total or _parse_record_summary("".join(html_pages))
                 if expected_total is None or len(rows) >= expected_total:
+                    if verbose:
+                        print(
+                            f"=== Completed scrape with recperpage={size} (rows={len(rows):,})",
+                            flush=True,
+                        )
                     return _dedupe_rows(rows), html_pages, size
         raise RuntimeError("Unable to scrape FDA PH food products list (no rows captured).")
 
@@ -295,14 +355,13 @@ def build_catalog(rows: Iterable[Dict[str, str]]) -> List[Dict[str, str]]:
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
-        description=(
-            "Scrape the FDA Philippines food product catalog by iterating paginated views (1000 first, then 100)."
-        )
+        description="Scrape the FDA Philippines food product catalog via paginated 100-row views."
     )
     parser.add_argument("--outdir", default="inputs", help="Directory for the processed CSV")
     parser.add_argument("--outfile", default="fda_food_products.csv", help="Processed output filename")
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT, help="Optional per-request timeout (seconds)")
     parser.add_argument("--force", action="store_true", help="Force re-scraping even if output exists")
+    parser.add_argument("--quiet", action="store_true", help="Suppress verbose progress output")
     args = parser.parse_args(argv)
 
     outdir = Path(args.outdir)
@@ -314,7 +373,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     RAW_DIR.mkdir(parents=True, exist_ok=True)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    rows, html_pages, page_size = scrape_food_catalog(timeout=args.timeout)
+    rows, html_pages, page_size = scrape_food_catalog(timeout=args.timeout, verbose=not args.quiet)
     catalog = build_catalog(rows)
 
     timestamp = datetime.utcnow().strftime("%Y-%m-%dT%H%M%SZ")

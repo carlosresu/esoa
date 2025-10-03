@@ -461,6 +461,7 @@ def scrape_food_catalog(inputs_dir: Path, *, force_refresh: bool = False) -> Pat
         str(inputs_dir),
         "--outfile",
         out_csv.name,
+        "--quiet",
     ]
     if force_refresh:
         cmd.append("--force")
