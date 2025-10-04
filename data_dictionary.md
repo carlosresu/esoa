@@ -27,6 +27,7 @@ table when validating new data or onboarding reviewers.
 | `did_brand_swap` | Indicates whether any FDA brand token was replaced with its generic. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | `True` even if the resulting text already contained the generic. |
 | `fda_dose_corroborated` | `True` when FDA metadata confirms the detected dose. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Requires both a brand swap and matching FDA dose string. |
 | `fda_generics_list` | Canonical FDA generics surfaced during brand swaps. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Serialized as a pipe-delimited string during export; informs `generic_final` fallback. |
+| `reference_match_details_json` | JSON string summarizing every raw-text token that matched PNF, WHO, FDA brand map, or FDA food references. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Each entry lists the identified word, category, source reference, and dose/form/route metadata (or `none`/`not applicable`). |
 
 ## Dose, Route, and Form Parsing
 
