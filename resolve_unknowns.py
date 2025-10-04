@@ -18,7 +18,7 @@ Input:
   ./outputs/unknown_words.parquet  (columns: word,count)
 
 Search lists:
-  • PNF: ./inputs/pnf_prepared.parquet (generic_name)
+  • PNF: ./inputs/pnf_prepared.csv (generic_name)
   • FDA brand map: newest of ./inputs/fda_brand_map_*.csv OR ./inputs/brand_map_*.csv (generic_name)
   • WHO ATC: newest of ./dependencies/atcd/output/who_atc_*_molecules.csv (atc_name)
 
@@ -28,6 +28,9 @@ Output:
 
 Priority:
   PNF over WHO over FDA (i.e., if an unknown matches in PNF, ignore WHO/FDA; if not, use WHO; else FDA).
+
+Note: When `ESOA_WRITE_PREPARED_PARQUET=1` is set for the pipeline, the resolver
+will automatically fall back to the `.parquet` variants of the prepared inputs.
 """
 import argparse
 import glob
@@ -237,7 +240,13 @@ def main(argv: Optional[List[str]] = None) -> None:
         )
         write_parquet(empty_df, outpath)
         if args.export_csv:
-            empty_df.to_csv(outpath.with_suffix(".csv"), index=False, encoding="utf-8")
+            empty_df.to_csv(
+                outpath.with_suffix(".csv"),
+                index=False,
+                encoding="utf-8",
+                doublequote=False,
+                escapechar="\\",
+            )
         print(str(outpath))
         return
 
@@ -326,7 +335,13 @@ def main(argv: Optional[List[str]] = None) -> None:
     result_df = pd.DataFrame(rows)
     write_parquet(result_df, outpath)
     if args.export_csv:
-        result_df.to_csv(outpath.with_suffix(".csv"), index=False, encoding="utf-8")
+        result_df.to_csv(
+            outpath.with_suffix(".csv"),
+            index=False,
+            encoding="utf-8",
+            doublequote=False,
+            escapechar="\\",
+        )
 
     # Print the output path for automation hooks and quick discovery.
     print(str(outpath))

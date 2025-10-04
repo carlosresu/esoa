@@ -6,7 +6,7 @@
 main.py — Dose/form-aware preparation + dose-aware matching.
 
 Exports:
-- prepare(pnf_csv, esoa_csv, outdir) -> (pnf_prepared.parquet, esoa_prepared.parquet)
+- prepare(pnf_csv, esoa_csv, outdir) -> (pnf_prepared.csv, esoa_prepared.csv)
 - match(pnf_prepared, esoa_prepared, out_path) -> out_path
 - run_all(pnf_csv, esoa_csv, outdir, out_path) -> out_path
 """

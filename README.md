@@ -305,6 +305,11 @@ Optional flags
 - --export-csv — Also write CSV copies of the Parquet outputs
 - --export-excel — Also write an XLSX workbook of the matched dataset
 
+Environment toggle
+
+- Set `ESOA_WRITE_PREPARED_PARQUET=1` if you also want `pnf_prepared.parquet`
+  and `esoa_prepared.parquet` written alongside the default CSV intermediates.
+
 ### Minimal/local run
 
 For incremental testing without touching external data sources or emitting Excel, use:

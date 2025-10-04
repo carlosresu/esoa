@@ -12,7 +12,7 @@ table when validating new data or onboarding reviewers.
 | Column | Meaning | First Assigned | Notes |
 | --- | --- | --- | --- |
 | `esoa_idx` | Stable index of the eSOA row inside the processed frame. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Useful when cross-referencing intermediate artifacts. |
-| `raw_text` | Original eSOA string as provided in the prepared eSOA dataset (`esoa_prepared.parquet`). | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Canonical source for downstream parsing. |
+| `raw_text` | Original eSOA string as provided in the prepared eSOA dataset (`esoa_prepared.csv`). | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Canonical source for downstream parsing. |
 | `parentheticals` | List of phrases extracted from parentheses in `raw_text`. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Stored as Python list; serialized to string in CSV. |
 | `normalized` | Lower-cased, punctuation-normalized version of `raw_text`. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Serves as the baseline for dose and route parsing. |
 | `norm_compact` | `normalized` without whitespace/hyphens to aid automata scans. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Supports brand and molecule detection. |

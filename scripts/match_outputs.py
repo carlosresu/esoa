@@ -366,7 +366,16 @@ def write_outputs(
 
     if export_csv:
         csv_path = parquet_path.with_suffix(".csv")
-        _timed("Write matched CSV", lambda: out_small.to_csv(csv_path, index=False, encoding="utf-8"))
+        _timed(
+            "Write matched CSV",
+            lambda: out_small.to_csv(
+                csv_path,
+                index=False,
+                encoding="utf-8",
+                doublequote=False,
+                escapechar="\\",
+            ),
+        )
 
     if export_excel:
         xlsx_out = parquet_path.with_suffix(".xlsx")
@@ -421,7 +430,13 @@ def write_outputs(
             write_parquet(unk_df, unk_path)
             if export_csv:
                 csv_path = unk_path.with_suffix(".csv")
-                unk_df.to_csv(csv_path, index=False, encoding="utf-8")
+                unk_df.to_csv(
+                    csv_path,
+                    index=False,
+                    encoding="utf-8",
+                    doublequote=False,
+                    escapechar="\\",
+                )
             # Feeds resolve_unknowns.py to produce the missed_generics report highlighted in README.
     _timed("Write unknown words", _write_unknowns)
 

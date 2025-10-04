@@ -19,7 +19,12 @@ from .io_utils import read_dataframe, write_parquet
 
 
 def prepare(pnf_csv: str, esoa_csv: str, outdir: str = ".") -> tuple[str, str]:
-    """Normalize PNF and eSOA inputs, deriving helper columns and writing prepared Parquet tables."""
+    """Normalize PNF and eSOA inputs, deriving helper columns and writing prepared CSVs (with optional Parquet mirror).
+
+    Set the environment variable ``ESOA_WRITE_PREPARED_PARQUET=1`` to emit
+    ``pnf_prepared.parquet`` / ``esoa_prepared.parquet`` alongside the default CSV
+    artifacts so downstream tooling can opt into columnar intermediates.
+    """
     os.makedirs(outdir, exist_ok=True)
 
     # Load and immediately validate the PNF payload so downstream assumptions
@@ -84,8 +89,10 @@ def prepare(pnf_csv: str, esoa_csv: str, outdir: str = ".") -> tuple[str, str]:
         "strength_mg", "ratio_mg_per_ml",
     ]].copy()
 
-    pnf_out = os.path.join(outdir, "pnf_prepared.parquet")
-    write_parquet(pnf_prepared, pnf_out)
+    pnf_out_csv = os.path.join(outdir, "pnf_prepared.csv")
+    pnf_prepared.to_csv(pnf_out_csv, index=False, encoding="utf-8")
+    if os.getenv("ESOA_WRITE_PREPARED_PARQUET") == "1":
+        write_parquet(pnf_prepared, os.path.join(outdir, "pnf_prepared.parquet"))
 
     # eSOA preparation is intentionally light-weight: only rename the primary
     # text column but still validate that the source CSV carries it.
@@ -93,7 +100,9 @@ def prepare(pnf_csv: str, esoa_csv: str, outdir: str = ".") -> tuple[str, str]:
     if "DESCRIPTION" not in esoa.columns:
         raise ValueError("esoa.csv is missing required column: DESCRIPTION")
     esoa_prepared = esoa.rename(columns={"DESCRIPTION": "raw_text"}).copy()
-    esoa_out = os.path.join(outdir, "esoa_prepared.parquet")
-    write_parquet(esoa_prepared, esoa_out)
+    esoa_out_csv = os.path.join(outdir, "esoa_prepared.csv")
+    esoa_prepared.to_csv(esoa_out_csv, index=False, encoding="utf-8")
+    if os.getenv("ESOA_WRITE_PREPARED_PARQUET") == "1":
+        write_parquet(esoa_prepared, os.path.join(outdir, "esoa_prepared.parquet"))
 
-    return pnf_out, esoa_out
+    return pnf_out_csv, esoa_out_csv

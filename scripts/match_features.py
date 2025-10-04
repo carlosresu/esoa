@@ -376,6 +376,7 @@ def build_features(
     reference_hits_who: List[List[Dict[str, str]]] = [[] for _ in range(row_count)]
     reference_hits_brand: List[List[Dict[str, str]]] = [[] for _ in range(row_count)]
     reference_hits_food: List[List[Dict[str, str]]] = [[] for _ in range(row_count)]
+    MAX_FOOD_REFERENCE_HITS = 10
 
     @lru_cache(maxsize=8192)
     def _candidate_pattern(candidate: str) -> re.Pattern[str]:
@@ -425,9 +426,9 @@ def build_features(
         source_reference: str,
         category: str,
         candidate_for_identified: Optional[str] = None,
-        dose: str = "not applicable",
-        form: str = "not applicable",
-        route: str = "not applicable",
+        dose: Optional[str] = None,
+        form: Optional[str] = None,
+        route: Optional[str] = None,
     ) -> None:
         if idx < 0 or idx >= row_count:
             return
@@ -436,15 +437,18 @@ def build_features(
             return
         candidate = candidate_for_identified if candidate_for_identified is not None else display_text
         identified = _word_in_raw(idx, candidate)
-        detail = {
+        detail: Dict[str, str] = {
             "identified_word": identified,
             "category": str(category),
             "matched_text": display_text,
             "source_reference": str(source_reference),
-            "dose_matched": str(dose),
-            "form_matched": str(form),
-            "route_matched": str(route),
         }
+        if dose:
+            detail["dose_matched"] = str(dose)
+        if form:
+            detail["form_matched"] = str(form)
+        if route:
+            detail["route_matched"] = str(route)
         target[idx].append(detail)
 
     def _set_pnf_reference(idx: int, tokens: List[str], gids: List[str]) -> None:
@@ -531,6 +535,8 @@ def build_features(
                         key = ("brand", brand_name.lower())
                         if key not in seen_food:
                             seen_food.add(key)
+                            if len(reference_hits_food[idx]) >= MAX_FOOD_REFERENCE_HITS:
+                                continue
                             _append_reference(
                                 reference_hits_food,
                                 idx,
@@ -538,7 +544,11 @@ def build_features(
                                 source_reference="FDA Philippines food catalog",
                                 category="brand of a food",
                             )
-                    if product_name and product_name.lower() != brand_name.lower():
+                    if (
+                        product_name
+                        and product_name.lower() != brand_name.lower()
+                        and len(reference_hits_food[idx]) < MAX_FOOD_REFERENCE_HITS
+                    ):
                         key = ("generic", product_name.lower())
                         if key not in seen_food:
                             seen_food.add(key)
@@ -854,9 +864,12 @@ def build_features(
                     if not display_label or key in seen_brand_pairs:
                         continue
                     seen_brand_pairs.add(key)
-                    dose_value = str(entry.get("dosage_strength", "") or "").strip() or "none"
-                    form_value = str(entry.get("dosage_form", "") or "").strip() or "none"
-                    route_value = str(entry.get("route", "") or "").strip() or "none"
+                    dose_raw = str(entry.get("dosage_strength", "") or "").strip()
+                    form_raw = str(entry.get("dosage_form", "") or "").strip()
+                    route_raw = str(entry.get("route", "") or "").strip()
+                    dose_value = dose_raw or None
+                    form_value = form_raw or None
+                    route_value = route_raw or None
                     _append_reference(
                         reference_hits_brand,
                         idx,
@@ -1255,7 +1268,19 @@ def build_features(
             combined.extend(reference_hits_who[idx])
             combined.extend(reference_hits_brand[idx])
             combined.extend(reference_hits_food[idx])
-            combined_json.append(json.dumps(combined, ensure_ascii=False))
+
+            deduped: List[Dict[str, str]] = []
+            seen: set[tuple[tuple[str, str], ...]] = set()
+            for detail in combined:
+                if not detail:
+                    continue
+                key = tuple(sorted(detail.items()))
+                if key in seen:
+                    continue
+                seen.add(key)
+                deduped.append(detail)
+
+            combined_json.append(json.dumps(deduped, ensure_ascii=False))
 
         df["reference_match_details_json"] = combined_json
         if "brand_match_details" in df.columns:
