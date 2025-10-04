@@ -2,6 +2,11 @@
 
 Detailed end-to-end view of the matching pipeline, from CLI invocation in [run.py](https://github.com/carlosresu/esoa/blob/main/run.py) through feature building in [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py), scoring in [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py), and export logic in [scripts/match_outputs.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_outputs.py).
 
+🆕 **Inline documentation refresh** – the Python modules referenced below now
+include descriptive docstrings and comments that mirror this walkthrough.  When
+deep-diving into a particular step, the code comments explain the exact
+transformations performed and why policy constants are set the way they are.
+
 1. **Load Prepared Inputs**  
    Resolve CLI paths (defaults under `inputs/`), verify the files exist, and read the prepared PNF and eSOA CSVs (`pnf_prepared.csv`, `esoa_prepared.csv`) into pandas data frames (see [run.py](https://github.com/carlosresu/esoa/blob/main/run.py) and [scripts/match.py](https://github.com/carlosresu/esoa/blob/main/scripts/match.py)).
 

@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+"""Feature engineering stage responsible for every signal used by scoring."""
+
 from __future__ import annotations
 import sys, time, glob, os, re
 from collections import defaultdict
@@ -22,6 +24,9 @@ from .brand_map import load_latest_brandmap, build_brand_automata, fda_generics_
 from .pnf_aliases import expand_generic_aliases, SPECIAL_GENERIC_ALIASES, apply_spelling_rules
 from .pnf_partial import PnfTokenIndex
 
+# Reference dictionaries describing canonical route/form mappings leveraged
+# throughout the feature builder.  Keeping them in one place simplifies policy
+# reviews when clinicians update acceptable substitutions.
 WHO_ADM_ROUTE_MAP: dict[str, set[str]] = {
     "o": {"oral"},
     "oral": {"oral"},

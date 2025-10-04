@@ -2,6 +2,11 @@
 
 Each record in `esoa_matched.csv` represents one normalized eSOA free-text row, enriched with features, reference lookups, and classification signals produced by [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py), [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py), and [scripts/match_outputs.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_outputs.py).
 
+📘 **Where to find implementation notes:** the modules listed above now start
+with docstrings summarizing their responsibilities and contain refreshed inline
+comments that describe how each column is derived.  Use them alongside this
+table when validating new data or onboarding reviewers.
+
 ## Text & Normalization
 
 | Column | Meaning | First Assigned | Notes |
