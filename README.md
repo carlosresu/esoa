@@ -34,6 +34,16 @@ It prepares raw CSVs, parses text into structured features, detects candidate ge
 - `tibble`
 - `stringr`
 
+## Documentation maintenance
+
+Recent housekeeping added explicit module docstrings and refreshed inline
+comments across the preparation (`scripts/prepare.py`), feature engineering
+(`scripts/match_features.py`), scoring (`scripts/match_scoring.py`), output
+(`scripts/match_outputs.py`), and shared text utility (`scripts/text_utils.py`)
+layers.  Refer to those modules directly when you need an authoritative
+explanation of a transformation or policy constant; the comments call out why a
+field exists and how it is consumed downstream.
+
 ---
 
 ## 🚀 Pipeline Overview

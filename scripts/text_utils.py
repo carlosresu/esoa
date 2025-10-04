@@ -1,6 +1,7 @@
 
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+"""Shared text normalization helpers used across preparation and matching."""
 
 import re
 import unicodedata
