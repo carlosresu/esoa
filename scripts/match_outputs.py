@@ -5,6 +5,7 @@
 from __future__ import annotations
 import sys, time
 import glob
+import json
 import os, pandas as pd
 import re
 from pathlib import Path
@@ -45,7 +46,7 @@ def _run_with_spinner(label: str, func: Callable[[], None]) -> float:
 OUTPUT_COLUMNS = [
     "esoa_idx","raw_text","parentheticals",
     "normalized","norm_compact","match_basis","match_basis_norm_basic",
-    "probable_brands","did_brand_swap","fda_dose_corroborated",
+    "probable_brands","did_brand_swap","fda_dose_corroborated","fda_generics_list",
     "molecules_recognized","molecules_recognized_list","molecules_recognized_count",
     "dose_recognized","dosage_parsed_raw","dosage_parsed",
     "route_raw","form_raw","route_evidence_raw",
@@ -58,7 +59,7 @@ OUTPUT_COLUMNS = [
     "selected_dose_kind","selected_strength","selected_unit","selected_strength_mg",
     "selected_per_val","selected_per_unit","selected_ratio_mg_per_ml","selected_pct",
     "dose_sim","looks_combo_final","combo_reason","combo_known_generics_count",
-    "non_therapeutic_summary","non_therapeutic_detail",
+    "non_therapeutic_summary","non_therapeutic_detail","non_therapeutic_tokens","non_therapeutic_hits","non_therapeutic_best",
     "unknown_kind","unknown_words_list","unknown_words",
     "atc_code_final","confidence",
     "match_molecule(s)","match_quality",
@@ -303,6 +304,39 @@ def write_outputs(
         return elapsed
 
     out_small = out_df.copy()
+    list_to_pipe = ["fda_generics_list", "non_therapeutic_tokens"]
+    json_columns = ["non_therapeutic_hits", "non_therapeutic_best"]
+
+    def _join_list(value: object) -> str:
+        if isinstance(value, (list, tuple, set)):
+            parts = []
+            for item in value:
+                if item is None:
+                    continue
+                text = str(item).strip()
+                if text:
+                    parts.append(text)
+            return "|".join(parts)
+        if value is None:
+            return ""
+        return str(value)
+
+    def _jsonify(value: object) -> str:
+        if isinstance(value, (list, dict)):
+            if not value:
+                return ""
+            return json.dumps(value, ensure_ascii=False, sort_keys=True)
+        if value is None:
+            return ""
+        return str(value)
+
+    for col in list_to_pipe:
+        if col in out_small.columns:
+            out_small[col] = out_small[col].map(_join_list)
+
+    for col in json_columns:
+        if col in out_small.columns:
+            out_small[col] = out_small[col].map(_jsonify)
     if "match_basis" not in out_small.columns:
         out_small["match_basis"] = out_small.get("normalized", "")
     out_small = out_small[[c for c in OUTPUT_COLUMNS if c in out_small.columns]].copy()

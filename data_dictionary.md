@@ -26,6 +26,7 @@ table when validating new data or onboarding reviewers.
 | `probable_brands` | Pipe-delimited display names of FDA brands detected in the row. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Blank when no brand triggered; helps auditors trace swaps. |
 | `did_brand_swap` | Indicates whether any FDA brand token was replaced with its generic. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | `True` even if the resulting text already contained the generic. |
 | `fda_dose_corroborated` | `True` when FDA metadata confirms the detected dose. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Requires both a brand swap and matching FDA dose string. |
+| `fda_generics_list` | Canonical FDA generics surfaced during brand swaps. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Serialized as a pipe-delimited string during export; informs `generic_final` fallback. |
 
 ## Dose, Route, and Form Parsing
 
@@ -111,6 +112,16 @@ table when validating new data or onboarding reviewers.
 | `unknown_kind` | Qualifies unresolved tokens (`None`, `Single - Unknown`, etc.). | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Guides reviewer triage. |
 | `unknown_words_list` | List of normalized tokens not recognized in PNF/WHO/FDA vocabularies. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Used by [resolve_unknowns.py](https://github.com/carlosresu/esoa/blob/main/resolve_unknowns.py); serialized to string. |
 | `unknown_words` | Pipe-delimited string version of `unknown_words_list`. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Empty when every token is known. |
+
+## FDA Food / Non-Therapeutic Detection
+
+| Column | Meaning | First Assigned | Notes |
+| --- | --- | --- | --- |
+| `non_therapeutic_summary` | High-level marker when FDA food/non-therapeutic hits were found. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | `non_therapeutic_detected` signals promotion to the Others bucket. |
+| `non_therapeutic_detail` | Human-readable detail of the highest scoring catalog match. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Includes brand/product/company/registration data pulled from the FDA catalog. |
+| `non_therapeutic_tokens` | Canonical tokens extracted from matching catalog entries. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Exported as a pipe-delimited string; excluded from `unknown_words`. |
+| `non_therapeutic_hits` | JSON list of every catalog row that matched the text. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Preserved for debugging score choices and catalog coverage. |
+| `non_therapeutic_best` | JSON object for the highest scoring catalog row. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Mirrors `non_therapeutic_detail` but keeps the original structured fields. |
 
 ## Confidence & Final Classification
 
