@@ -871,7 +871,16 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
         if not mask.any():
             continue
 
-        nonthera_here = mask & nonthera_mask
+        # Only fall back to the FDA food catalog when no molecule was identified in
+        # PNF, WHO, or the FDA drug mappings. This preserves the desired
+        # prioritization order (PNF → WHO → FDA drug → FDA food).
+        nonthera_here = (
+            mask
+            & nonthera_mask
+            & (~present_in_pnf)
+            & (~present_in_who)
+            & (~present_in_fda)
+        )
         others_mask = mask & (~nonthera_mask)
 
         if nonthera_here.any():
