@@ -46,7 +46,7 @@ def _run_with_spinner(label: str, func: Callable[[], None]) -> float:
 OUTPUT_COLUMNS = [
     "esoa_idx","raw_text","parentheticals",
     "normalized","norm_compact","match_basis","match_basis_norm_basic",
-    "probable_brands","did_brand_swap","fda_dose_corroborated","fda_generics_list",
+    "probable_brands","did_brand_swap","fda_dose_corroborated","fda_generics_list","reference_match_details_json",
     "molecules_recognized","molecules_recognized_list","molecules_recognized_count",
     "dose_recognized","dosage_parsed_raw","dosage_parsed",
     "route_raw","form_raw","route_evidence_raw",

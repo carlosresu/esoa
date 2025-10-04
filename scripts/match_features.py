@@ -3,7 +3,7 @@
 """Feature engineering stage responsible for every signal used by scoring."""
 
 from __future__ import annotations
-import sys, time, glob, os, re
+import sys, time, glob, os, re, json
 from collections import defaultdict
 from typing import Tuple, Optional, List, Dict, Set, Callable
 import difflib
@@ -198,6 +198,7 @@ def build_features(
     pnf_name_to_gid: Dict[str, Tuple[str, str]] = {}
     pnf_alias_keys: List[str] = []
     pnf_trigram_holder: List[Dict[str, Set[str]] | None] = [None]
+    pnf_gid_to_display: Dict[str, str] = {}
     def _generate_trigrams(value: str) -> Set[str]:
         segment = re.sub(r"\s+", "", value)
         if not segment:
@@ -229,21 +230,26 @@ def build_features(
     _timed("Index PNF names", _pnf_map)
     pnf_name_set: Set[str] = set(pnf_name_to_gid.keys())
     pnf_trigram_index: Dict[str, Set[str]] = pnf_trigram_holder[0] or {}
+    for gid, gname in pnf_df[["generic_id", "generic_name"]].drop_duplicates().itertuples(index=False):
+        if pd.notna(gid):
+            pnf_gid_to_display[str(gid)] = str(gname)
 
     # 3) WHO molecules (names + regex)
     codes_by_name, candidate_names = ({}, [])
     who_details_by_code: Dict[str, List[dict]] = {}
+    who_display_by_name: Dict[str, str] = {}
     who_name_set: Set[str] = set()
     who_regex_box = [None]
     def _load_who():
         root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
         who_file = load_latest_who_dir(root_dir)
         if who_file and os.path.exists(who_file):
-            cbn, cand, details = load_who_molecules(who_file)
+            cbn, cand, details, display_map = load_who_molecules(who_file)
             codes_by_name.update(cbn)
             candidate_names.extend(cand)
             who_name_set.update(cbn.keys())
             who_details_by_code.update(details)
+            who_display_by_name.update(display_map)
             if candidate_names:
                 # Compile a single regex that captures any candidate name at word boundaries.
                 who_regex_box[0] = re.compile(r"\b(" + "|".join(map(re.escape, candidate_names)) + r")\b")
@@ -529,13 +535,19 @@ def build_features(
     _timed("Parse dose/route/form (raw)", _dose_route_form_raw)
 
     # 8) Brand → Generic swap (if brand map available)
+    brand_match_details: List[List[Dict[str, str]]] = []
+
     def _brand_swap():
+        brand_match_details.clear()
         if not has_brandmap:
             df["match_basis"] = df["normalized"]
             df["did_brand_swap"] = False
             df["fda_dose_corroborated"] = False
             df["probable_brands"] = ""
             df["fda_generics_list"] = [[] for _ in range(len(df))]
+            empty_details = [[] for _ in range(len(df))]
+            brand_match_details.extend(empty_details)
+            df["brand_match_details"] = empty_details
             return
         mb_list, swapped = [], []
         fda_hits = []
@@ -559,12 +571,13 @@ def build_features(
             lengths: Dict[str, int] = {}
             row_brand_labels: set[str] = set()
             row_generics_raw: List[str] = []
+            row_brand_detail: List[Dict[str, str]] = []
             for _, bn in B_norm.iter(norm):  # type: ignore
                 found_keys.append(bn); lengths[bn] = max(lengths.get(bn, 0), len(bn))
             for _, bn in B_comp.iter(comp):  # type: ignore
                 found_keys.append(bn); lengths[bn] = max(lengths.get(bn, 0), len(bn))
             if not found_keys:
-                mb_list.append(norm); swapped.append(False); fda_hits.append(False); probable_brand_hits.append(""); fda_generics_lists.append([]); continue
+                mb_list.append(norm); swapped.append(False); fda_hits.append(False); probable_brand_hits.append(""); fda_generics_lists.append([]); brand_match_details.append([]); continue
             uniq_keys = list(dict.fromkeys(found_keys))
             # Prioritize longer matches first to favor more specific brand tokens.
             uniq_keys.sort(key=lambda k: (-lengths.get(k, len(k)), k))
@@ -574,6 +587,7 @@ def build_features(
             for bn in uniq_keys:
                 options = brand_lookup.get(bn, [])
                 chosen_generic = None
+                selected_option = None
                 if options:
                     for opt in options:
                         if getattr(opt, "brand", None):
@@ -589,8 +603,10 @@ def build_features(
                     # Prefer candidates that align on dose, form, and PNF membership.
                     options = sorted(options, key=_score, reverse=True)
                     if options:
-                        primary_option = options[0]
-                        chosen_generic = primary_option.generic
+                        selected_option = options[0]
+                        if primary_option is None:
+                            primary_option = selected_option
+                        chosen_generic = selected_option.generic
                 if not chosen_generic:
                     continue
                 clean_generic = _clean_generic_for_swap(chosen_generic)
@@ -601,6 +617,18 @@ def build_features(
                 canonical_generic = _normalize_text_basic(_base_name(chosen_generic))
                 if canonical_generic:
                     row_generics_raw.append(canonical_generic)
+
+                if selected_option is not None:
+                    row_brand_detail.append(
+                        {
+                            "brand_name": str(getattr(selected_option, "brand", "") or bn),
+                            "generic_name": str(getattr(selected_option, "generic", "")),
+                            "dosage_strength": str(getattr(selected_option, "dosage_strength", "")),
+                            "dosage_form": str(getattr(selected_option, "dosage_form", "")),
+                            "route": str(getattr(selected_option, "route", "")),
+                            "brand_key": bn,
+                        }
+                    )
 
                 norm_basic_current = _normalize_text_basic(out)
                 generic_basic = _normalize_text_basic(clean_generic)
@@ -642,11 +670,13 @@ def build_features(
                 if g and g not in uniq_generics:
                     uniq_generics.append(g)
             fda_generics_lists.append(uniq_generics)
+            brand_match_details.append(row_brand_detail)
         df["match_basis"] = mb_list
         df["did_brand_swap"] = swapped
         df["fda_dose_corroborated"] = fda_hits
         df["probable_brands"] = probable_brand_hits
         df["fda_generics_list"] = fda_generics_lists
+        df["brand_match_details"] = brand_match_details
     _timed("Apply brand→generic swaps", _brand_swap)
 
     _timed("Summarize non-therapeutic", _choose_best_nonthera)
@@ -996,5 +1026,147 @@ def build_features(
         df["present_in_who"] = df["who_atc_codes"].astype(str).str.len().gt(0)
         df["present_in_fda_generic"] = df["match_basis"].map(lambda s: any(tok in fda_gens for tok in _tokenize_unknowns(_segment_norm(s))))
     _timed("Compute presence flags", _presence_flags)
+
+    def _reference_hit_details():
+        brand_seq = df["brand_match_details"].tolist() if "brand_match_details" in df else [[] for _ in range(len(df))]
+        food_seq = df["non_therapeutic_hits"].tolist() if "non_therapeutic_hits" in df else [[] for _ in range(len(df))]
+        pnf_tokens_seq = df["pnf_hits_tokens"].tolist() if "pnf_hits_tokens" in df else [[] for _ in range(len(df))]
+        pnf_gid_seq = df["pnf_hits_gids"].tolist() if "pnf_hits_gids" in df else [[] for _ in range(len(df))]
+        who_seq = df["who_molecules_list"].tolist() if "who_molecules_list" in df else [[] for _ in range(len(df))]
+
+        def _word_in_raw(raw_text: object, candidate: str) -> str:
+            if not isinstance(candidate, str):
+                return ""
+            candidate_clean = candidate.strip()
+            if not candidate_clean:
+                return ""
+            raw = str(raw_text) if isinstance(raw_text, str) else ""
+            if raw:
+                pattern = re.compile(re.escape(candidate_clean), re.IGNORECASE)
+                match = pattern.search(raw)
+                if match:
+                    return match.group(0)
+                base = _base_name(candidate_clean)
+                if base and base.lower() != candidate_clean.lower():
+                    pattern = re.compile(re.escape(base), re.IGNORECASE)
+                    match = pattern.search(raw)
+                    if match:
+                        return match.group(0)
+            return candidate_clean
+
+        details_json: List[str] = []
+        for pos, (_, row) in enumerate(df.iterrows()):
+            row_hits: List[Dict[str, str]] = []
+            raw_text = row.get("raw_text", "")
+
+            pnf_tokens = pnf_tokens_seq[pos] if pos < len(pnf_tokens_seq) else []
+            pnf_gids = pnf_gid_seq[pos] if pos < len(pnf_gid_seq) else []
+            for tok, gid in zip(pnf_tokens or [], pnf_gids or []):
+                if not tok:
+                    continue
+                gid_key = str(gid) if gid is not None else None
+                generic_display = pnf_gid_to_display.get(gid_key or "", str(tok))
+                row_hits.append(
+                    {
+                        "identified_word": _word_in_raw(raw_text, str(tok)),
+                        "category": "generic molecule",
+                        "matched_text": generic_display,
+                        "source_reference": "PNF",
+                        "dose_matched": "not applicable",
+                        "form_matched": "not applicable",
+                        "route_matched": "not applicable",
+                    }
+                )
+
+            who_names = who_seq[pos] if pos < len(who_seq) else []
+            for name in who_names or []:
+                name_str = str(name)
+                norm_key = _normalize_text_basic(_base_name(name_str))
+                display = who_display_by_name.get(name_str) or who_display_by_name.get(norm_key) or name_str
+                row_hits.append(
+                    {
+                        "identified_word": _word_in_raw(raw_text, display),
+                        "category": "generic molecule",
+                        "matched_text": display,
+                        "source_reference": "WHO ATC",
+                        "dose_matched": "not applicable",
+                        "form_matched": "not applicable",
+                        "route_matched": "not applicable",
+                    }
+                )
+
+            brand_entries = brand_seq[pos] if pos < len(brand_seq) else []
+            seen_brand: set[tuple[str, str]] = set()
+            if isinstance(brand_entries, list):
+                for entry in brand_entries:
+                    if not isinstance(entry, dict):
+                        continue
+                    brand_label = str(entry.get("brand_name", "") or entry.get("brand_key", ""))
+                    generic_label = str(entry.get("generic_name", ""))
+                    key = (brand_label.lower(), generic_label.lower())
+                    if key in seen_brand:
+                        continue
+                    seen_brand.add(key)
+                    dose_value = str(entry.get("dosage_strength", "") or "").strip() or "none"
+                    form_value = str(entry.get("dosage_form", "") or "").strip() or "none"
+                    route_value = str(entry.get("route", "") or "").strip() or "none"
+                    row_hits.append(
+                        {
+                            "identified_word": _word_in_raw(raw_text, brand_label),
+                            "category": "brand of a generic",
+                            "matched_text": brand_label,
+                            "source_reference": "FDA brand map",
+                            "dose_matched": dose_value,
+                            "form_matched": form_value,
+                            "route_matched": route_value,
+                        }
+                    )
+
+            food_entries = food_seq[pos] if pos < len(food_seq) else []
+            seen_food: set[tuple[str, str]] = set()
+            if isinstance(food_entries, list):
+                for entry in food_entries:
+                    if not isinstance(entry, dict):
+                        continue
+                    brand_name = str(entry.get("brand_name", "")).strip()
+                    product_name = str(entry.get("product_name", "")).strip()
+                    if brand_name:
+                        key = ("brand", brand_name.lower())
+                        if key not in seen_food:
+                            seen_food.add(key)
+                            row_hits.append(
+                                {
+                                    "identified_word": _word_in_raw(raw_text, brand_name),
+                                    "category": "brand of a food",
+                                    "matched_text": brand_name,
+                                    "source_reference": "FDA Philippines food catalog",
+                                    "dose_matched": "not applicable",
+                                    "form_matched": "not applicable",
+                                    "route_matched": "not applicable",
+                                }
+                            )
+                    if product_name and product_name.lower() != brand_name.lower():
+                        key = ("generic", product_name.lower())
+                        if key not in seen_food:
+                            seen_food.add(key)
+                            row_hits.append(
+                                {
+                                    "identified_word": _word_in_raw(raw_text, product_name),
+                                    "category": "generic of a food",
+                                    "matched_text": product_name,
+                                    "source_reference": "FDA Philippines food catalog",
+                                    "dose_matched": "not applicable",
+                                    "form_matched": "not applicable",
+                                    "route_matched": "not applicable",
+                                }
+                            )
+
+            details_json.append(json.dumps(row_hits, ensure_ascii=False))
+
+        df["reference_match_details_json"] = details_json
+        if "brand_match_details" in df.columns:
+            df.drop(columns=["brand_match_details"], inplace=True)
+
+    _timed("Assemble reference hit details", _reference_hit_details)
 
     return df

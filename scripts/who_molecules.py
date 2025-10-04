@@ -12,7 +12,7 @@ import pandas as pd
 from .text_utils import _base_name, _normalize_text_basic
 
 
-def load_who_molecules(who_csv: str) -> Tuple[Dict[str, set], List[str], Dict[str, List[dict]]]:
+def load_who_molecules(who_csv: str) -> Tuple[Dict[str, set], List[str], Dict[str, List[dict]], Dict[str, str]]:
     """Load WHO exports, providing lookup dictionaries and candidate name lists."""
     who = pd.read_csv(who_csv)
     who["name_base"] = who["atc_name"].fillna("").map(_base_name)
@@ -21,10 +21,15 @@ def load_who_molecules(who_csv: str) -> Tuple[Dict[str, set], List[str], Dict[st
 
     codes_by_name = defaultdict(set)
     details_by_code: Dict[str, List[dict]] = defaultdict(list)
+    display_by_name: Dict[str, str] = {}
     for _, r in who.iterrows():
         # Store both base and fully normalized variants for lookup flexibility.
         codes_by_name[r["name_base_norm"]].add(r["atc_code"])
         codes_by_name[r["name_norm"]].add(r["atc_code"])
+        if r["name_base_norm"] and r["name_base_norm"] not in display_by_name:
+            display_by_name[r["name_base_norm"]] = r["atc_name"]
+        if r["name_norm"] and r["name_norm"] not in display_by_name:
+            display_by_name[r["name_norm"]] = r["atc_name"]
 
         details_by_code[r["atc_code"]].append(
             {
@@ -41,7 +46,7 @@ def load_who_molecules(who_csv: str) -> Tuple[Dict[str, set], List[str], Dict[st
         key=len, reverse=True
     )
     candidate_names = [n for n in candidate_names if len(n) > 2]
-    return codes_by_name, candidate_names, details_by_code
+    return codes_by_name, candidate_names, details_by_code, display_by_name
 
 
 def detect_all_who_molecules(
