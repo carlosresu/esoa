@@ -9,6 +9,13 @@ from typing import Any
 
 import pandas as pd
 
+try:
+    import pyarrow
+    from pyarrow.lib import ArrowKeyError as _ArrowKeyError  # type: ignore[attr-defined]
+except ImportError:  # pragma: no cover - optional dependency at runtime
+    pyarrow = None  # type: ignore[assignment]
+    _ArrowKeyError = RuntimeError  # type: ignore[assignment]
+
 _PARQUET_SUFFIXES = {".parquet", ".pq", ".ipc", ".arrow"}
 _FEATHER_SUFFIXES = {".feather", ".ft"}
 _CSV_SUFFIXES = {".csv"}
@@ -47,4 +54,51 @@ def write_parquet(df: pd.DataFrame, path: str | Path, *, compression: str = "sna
     """Persist a DataFrame as Parquet with a sane default compression codec."""
     p = ensure_parquet_suffix(Path(path))
     p.parent.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(p, index=False, compression=compression, **kwargs)
+    try:
+        df.to_parquet(p, index=False, compression=compression, **kwargs)
+    except _ArrowKeyError as exc:
+        if _needs_pyarrow_extension_patch(exc):
+            _install_pyarrow_extension_hotfix()
+            df.to_parquet(p, index=False, compression=compression, **kwargs)
+        else:
+            raise
+
+
+def _needs_pyarrow_extension_patch(exc: Exception) -> bool:
+    return "arrow.py_extension_type" in str(exc)
+
+
+def _install_pyarrow_extension_hotfix() -> None:
+    if pyarrow is None:
+        raise RuntimeError(
+            "pyarrow is required to write parquet files but is not installed."
+        )
+
+    if getattr(pyarrow, "_esoa_extension_patched", False):
+        return
+
+    class _SentinelExtensionType(pyarrow.ExtensionType):  # type: ignore[misc]
+        def __arrow_ext_serialize__(self) -> bytes:
+            return b""
+
+        @classmethod
+        def __arrow_ext_deserialize__(
+            cls, storage_type: pyarrow.DataType, serialized: bytes
+        ) -> "pyarrow.ExtensionType":
+            raise RuntimeError(
+                "Unexpected attempt to deserialize placeholder extension type."
+            )
+
+    try:
+        pyarrow.register_extension_type(
+            _SentinelExtensionType(pyarrow.null(), "arrow.py_extension_type")
+        )
+    except pyarrow.ArrowKeyError:
+        pass
+
+    try:
+        pyarrow.unregister_extension_type("arrow.py_extension_type")
+    except pyarrow.ArrowKeyError:
+        pass
+
+    pyarrow._esoa_extension_patched = True
