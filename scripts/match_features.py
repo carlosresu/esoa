@@ -5,10 +5,11 @@
 from __future__ import annotations
 import sys, time, glob, os, re, json
 from collections import defaultdict
-from typing import Tuple, Optional, List, Dict, Set, Callable
+from typing import Tuple, Optional, List, Dict, Set, Callable, Any
 import difflib
 import numpy as np, pandas as pd
 import ahocorasick  # type: ignore
+from functools import lru_cache
 from .aho import build_molecule_automata, scan_pnf_all
 from .combos import SALT_TOKENS, looks_like_combination, split_combo_segments
 from .routes_forms import extract_route_and_form
@@ -342,6 +343,7 @@ def build_features(
             nonthera_loaded[0] = True
 
     _timed("Load FDA non-therapeutic catalog", _load_nontherapeutic_catalog)
+    food_entry_cache: Dict[int, Dict[str, Any]] = {}
 
     # 5) PNF automata + partial index
     A_norm = [None]; A_comp = [None]
@@ -367,6 +369,87 @@ def build_features(
     _timed("Normalize ESOA text", _mk_base)
     df = df[-1]
 
+    row_count = len(df)
+    raw_texts: List[str] = [str(val) if isinstance(val, str) else "" for val in df["raw_text"].tolist()]
+    reference_hits_pnf: List[List[Dict[str, str]]] = [[] for _ in range(row_count)]
+    reference_hits_who: List[List[Dict[str, str]]] = [[] for _ in range(row_count)]
+    reference_hits_brand: List[List[Dict[str, str]]] = [[] for _ in range(row_count)]
+    reference_hits_food: List[List[Dict[str, str]]] = [[] for _ in range(row_count)]
+
+    @lru_cache(maxsize=8192)
+    def _candidate_pattern(candidate: str) -> re.Pattern[str]:
+        return re.compile(re.escape(candidate), re.IGNORECASE)
+
+    def _word_in_raw(idx: int, candidate: str) -> str:
+        if not isinstance(candidate, str):
+            return ""
+        candidate_clean = candidate.strip()
+        if not candidate_clean:
+            return ""
+        raw = raw_texts[idx] if 0 <= idx < len(raw_texts) else ""
+        if raw:
+            pattern = _candidate_pattern(candidate_clean)
+            match = pattern.search(raw)
+            if match:
+                return match.group(0)
+            base = _base_name(candidate_clean)
+            if base and base.lower() != candidate_clean.lower():
+                pattern = _candidate_pattern(base)
+                match = pattern.search(raw)
+                if match:
+                    return match.group(0)
+        return candidate_clean
+
+    def _append_reference(
+        target: List[List[Dict[str, str]]],
+        idx: int,
+        *,
+        matched_text: str,
+        source_reference: str,
+        category: str,
+        candidate_for_identified: Optional[str] = None,
+        dose: str = "not applicable",
+        form: str = "not applicable",
+        route: str = "not applicable",
+    ) -> None:
+        if idx < 0 or idx >= row_count:
+            return
+        display_text = str(matched_text or "").strip()
+        if not display_text:
+            return
+        candidate = candidate_for_identified if candidate_for_identified is not None else display_text
+        identified = _word_in_raw(idx, candidate)
+        detail = {
+            "identified_word": identified,
+            "category": str(category),
+            "matched_text": display_text,
+            "source_reference": str(source_reference),
+            "dose_matched": str(dose),
+            "form_matched": str(form),
+            "route_matched": str(route),
+        }
+        target[idx].append(detail)
+
+    def _set_pnf_reference(idx: int, tokens: List[str], gids: List[str]) -> None:
+        if idx < 0 or idx >= row_count:
+            return
+        reference_hits_pnf[idx] = []
+        if not isinstance(tokens, list) or not isinstance(gids, list):
+            return
+        for tok, gid in zip(tokens, gids):
+            if not tok:
+                continue
+            gid_key = str(gid) if gid is not None else ""
+            matched_text = pnf_gid_to_display.get(gid_key, str(tok))
+            _append_reference(
+                reference_hits_pnf,
+                idx,
+                matched_text=matched_text,
+                source_reference="PNF",
+                category="generic molecule",
+                candidate_for_identified=str(tok),
+            )
+
     def _detect_non_therapeutic():
         if not nonthera_loaded[0] or not nonthera_automaton[0]:
             df["non_therapeutic_hits"] = [[] for _ in range(len(df))]
@@ -381,7 +464,8 @@ def build_features(
         summary_col: List[str] = []
         detail_col: List[str] = []
 
-        for norm_text in df["normalized"].astype(str).tolist():
+        normalized_values = df["normalized"].astype(str).tolist()
+        for idx, norm_text in enumerate(normalized_values):
             if not norm_text:
                 hits_col.append([])
                 tokens_col.append([])
@@ -419,6 +503,36 @@ def build_features(
             summary_col.append(summary)
             detail_col.append(summary)
 
+            if details:
+                seen_food: set[tuple[str, str]] = set()
+                for entry in details:
+                    if not isinstance(entry, dict):
+                        continue
+                    brand_name = str(entry.get("brand_name", "") or "").strip()
+                    product_name = str(entry.get("product_name", "") or "").strip()
+                    if brand_name:
+                        key = ("brand", brand_name.lower())
+                        if key not in seen_food:
+                            seen_food.add(key)
+                            _append_reference(
+                                reference_hits_food,
+                                idx,
+                                matched_text=brand_name,
+                                source_reference="FDA Philippines food catalog",
+                                category="brand of a food",
+                            )
+                    if product_name and product_name.lower() != brand_name.lower():
+                        key = ("generic", product_name.lower())
+                        if key not in seen_food:
+                            seen_food.add(key)
+                            _append_reference(
+                                reference_hits_food,
+                                idx,
+                                matched_text=product_name,
+                                source_reference="FDA Philippines food catalog",
+                                category="generic of a food",
+                            )
+
         df["non_therapeutic_hits"] = hits_col
         df["non_therapeutic_tokens"] = tokens_col
         df["non_therapeutic_summary"] = summary_col
@@ -426,47 +540,74 @@ def build_features(
 
     _timed("Detect non-therapeutic brands", _detect_non_therapeutic)
 
-    def _score_food_entry(entry: Dict[str, str], norm_text: str, form_raw: Optional[str], route_raw: Optional[str]) -> float:
-        norm_lower = norm_text.lower()
-        norm_tokens = set(GENERIC_TOKEN_RX.findall(norm_lower))
+    def _score_food_entry(
+        entry: Dict[str, str],
+        norm_lower: str,
+        norm_tokens: Set[str],
+        form_lower: str,
+        route_lower: str,
+    ) -> float:
+        entry_id = id(entry)
+        cached = food_entry_cache.get(entry_id)
+        if cached is None:
+            brand = str(entry.get("brand_name", "") or "")
+            product = str(entry.get("product_name", "") or "")
+            company = str(entry.get("company_name", "") or "")
+            brand_lower = brand.lower()
+            product_lower = product.lower()
+            company_lower = company.lower()
+            combined_lower = " ".join(part for part in (brand_lower, product_lower, company_lower) if part)
+            numbers = tuple(re.findall(r"\d+(?:\.\d+)?", " ".join(filter(None, [brand, product, company]))))
+            cached = {
+                "brand_lower": brand_lower,
+                "product_lower": product_lower,
+                "company_lower": company_lower,
+                "combined_lower": combined_lower,
+                "brand_tokens": set(GENERIC_TOKEN_RX.findall(brand_lower)) if brand_lower else set(),
+                "product_tokens": set(GENERIC_TOKEN_RX.findall(product_lower)) if product_lower else set(),
+                "company_tokens": set(GENERIC_TOKEN_RX.findall(company_lower)) if company_lower else set(),
+                "numbers": numbers,
+                "has_registration": bool(str(entry.get("registration_number", "") or "").strip()),
+            }
+            food_entry_cache[entry_id] = cached
+
         score = 0.0
+        brand_tokens: Set[str] = cached["brand_tokens"]
+        if brand_tokens:
+            score += 3.0 * len(brand_tokens & norm_tokens)
+            if cached["brand_lower"] and cached["brand_lower"] in norm_lower:
+                score += 6.0
 
-        def _token_score(text: Optional[str], weight: float) -> float:
-            if not text:
-                return 0.0
-            text_lower = text.lower()
-            tokens = set(GENERIC_TOKEN_RX.findall(text_lower))
-            overlap = len(tokens & norm_tokens)
-            bonus = weight * 2 if text_lower and text_lower in norm_lower else 0.0
-            return weight * overlap + bonus
+        product_tokens: Set[str] = cached["product_tokens"]
+        if product_tokens:
+            score += 2.0 * len(product_tokens & norm_tokens)
+            if cached["product_lower"] and cached["product_lower"] in norm_lower:
+                score += 4.0
 
-        brand = entry.get("brand_name", "")
-        product = entry.get("product_name", "")
-        company = entry.get("company_name", "")
-        combined = " ".join(filter(None, [brand, product, company])).lower()
+        company_tokens: Set[str] = cached["company_tokens"]
+        if company_tokens:
+            score += 1.0 * len(company_tokens & norm_tokens)
+            if cached["company_lower"] and cached["company_lower"] in norm_lower:
+                score += 2.0
 
-        score += _token_score(brand, 3.0)
-        score += _token_score(product, 2.0)
-        score += _token_score(company, 1.0)
+        combined_lower: str = cached["combined_lower"]
+        if combined_lower:
+            for kw, candidates in FOOD_FORM_KEYWORDS.items():
+                if kw in combined_lower:
+                    if any(cand in form_lower for cand in candidates):
+                        score += 4.0
+                    elif any(cand in norm_lower for cand in candidates):
+                        score += 2.0
 
-        form_lower = (form_raw or "").lower()
-        for kw, candidates in FOOD_FORM_KEYWORDS.items():
-            if kw in combined:
-                if any(cand in form_lower for cand in candidates):
-                    score += 4.0
-                elif any(cand in norm_lower for cand in candidates):
-                    score += 2.0
+            for kw, routes in FOOD_ROUTE_KEYWORDS.items():
+                if kw in combined_lower and route_lower in routes:
+                    score += 3.0
 
-        route_lower = (route_raw or "").lower()
-        for kw, routes in FOOD_ROUTE_KEYWORDS.items():
-            if kw in combined and route_lower in routes:
-                score += 3.0
-
-        for num in re.findall(r"\d+(?:\.\d+)?", combined):
+        for num in cached["numbers"]:
             if num and num in norm_lower:
                 score += 1.0
 
-        if entry.get("registration_number"):
+        if cached["has_registration"]:
             score += 1.0
 
         return score
@@ -496,8 +637,13 @@ def build_features(
                 continue
 
             scores = []
+            norm_text_str = str(norm_text)
+            norm_lower = norm_text_str.lower()
+            norm_tokens = set(GENERIC_TOKEN_RX.findall(norm_lower))
+            form_lower = str(form_raw or "").lower()
+            route_lower = str(route_raw or "").lower()
             for entry in hits:
-                scores.append((entry, _score_food_entry(entry, str(norm_text), form_raw, route_raw)))
+                scores.append((entry, _score_food_entry(entry, norm_lower, norm_tokens, form_lower, route_lower)))
             scores.sort(key=lambda item: (-item[1], item[0].get("brand_name", ""), item[0].get("product_name", "")))
             best_entry, best_score = scores[0] if scores else ({}, 0.0)
 
@@ -562,8 +708,14 @@ def build_features(
             # Strips parenthetical brand annotations so swaps don't rewrite contextual notes (README: avoid touching parentheses when generic already present).
             return base or _base_name(name)
 
-        for norm, comp, form, friendly, parens in zip(
-            df["normalized"], df["norm_compact"], df["form_raw"], df["dose_recognized"], df["parentheticals"]
+        for idx, (norm, comp, form, friendly, parens) in enumerate(
+            zip(
+                df["normalized"],
+                df["norm_compact"],
+                df["form_raw"],
+                df["dose_recognized"],
+                df["parentheticals"],
+            )
         ):
             # Scan each row for brand hits across both normalized and compact automatons.
             # Inline selection/scoring identical to prior implementation
@@ -671,6 +823,34 @@ def build_features(
                     uniq_generics.append(g)
             fda_generics_lists.append(uniq_generics)
             brand_match_details.append(row_brand_detail)
+
+            if row_brand_detail:
+                seen_brand_pairs: set[tuple[str, str]] = set()
+                for entry in row_brand_detail:
+                    if not isinstance(entry, dict):
+                        continue
+                    brand_label = str(entry.get("brand_name", "") or "").strip()
+                    brand_key = str(entry.get("brand_key", "") or "").strip()
+                    generic_label = str(entry.get("generic_name", "") or "").strip()
+                    display_label = brand_label or brand_key
+                    key = (display_label.lower(), generic_label.lower())
+                    if not display_label or key in seen_brand_pairs:
+                        continue
+                    seen_brand_pairs.add(key)
+                    dose_value = str(entry.get("dosage_strength", "") or "").strip() or "none"
+                    form_value = str(entry.get("dosage_form", "") or "").strip() or "none"
+                    route_value = str(entry.get("route", "") or "").strip() or "none"
+                    _append_reference(
+                        reference_hits_brand,
+                        idx,
+                        matched_text=display_label,
+                        source_reference="FDA brand map",
+                        category="brand of a generic",
+                        candidate_for_identified=display_label,
+                        dose=dose_value,
+                        form=form_value,
+                        route=route_value,
+                    )
         df["match_basis"] = mb_list
         df["did_brand_swap"] = swapped
         df["fda_dose_corroborated"] = fda_hits
@@ -692,7 +872,7 @@ def build_features(
     # 10) PNF hits (Aho-Corasick) on match_basis
     def _pnf_hits():
         primary_gid, primary_token, pnf_hits_gids, pnf_hits_tokens, pnf_hits_count = [], [], [], [], []
-        for s_norm, s_comp in zip(df["match_basis"], df["norm_compact"]):
+        for idx, (s_norm, s_comp) in enumerate(zip(df["match_basis"], df["norm_compact"])):
             gids, tokens = scan_pnf_all(s_norm, s_comp, A_norm, A_comp)
             if tokens:
                 salt_flags = []
@@ -706,6 +886,7 @@ def build_features(
             pnf_hits_gids.append(gids); pnf_hits_tokens.append(tokens); pnf_hits_count.append(len(gids))
             if gids: primary_gid.append(gids[0]); primary_token.append(tokens[0])
             else: primary_gid.append(None); primary_token.append(None)
+            _set_pnf_reference(idx, tokens, gids)
         df["pnf_hits_gids"] = pnf_hits_gids; df["pnf_hits_tokens"] = pnf_hits_tokens; df["pnf_hits_count"] = pnf_hits_count
         df["generic_id"] = primary_gid; df["molecule_token"] = primary_token
     _timed("Scan PNF hits", _pnf_hits)
@@ -848,6 +1029,10 @@ def build_features(
                 except Exception:
                     current_count = 0
                 df.at[idx, "pnf_hits_count"] = current_count + 1 if current_count >= 0 else 1
+                tokens_list = df.at[idx, "pnf_hits_tokens"] if "pnf_hits_tokens" in df.columns else None
+                gids_list = df.at[idx, "pnf_hits_gids"] if "pnf_hits_gids" in df.columns else None
+                if isinstance(tokens_list, list) and isinstance(gids_list, list):
+                    _set_pnf_reference(idx, tokens_list, gids_list)
     _timed("Fuzzy PNF fallback", _pnf_fuzzy)
 
     # 12) WHO molecule detection
@@ -858,7 +1043,7 @@ def build_features(
             who_adm_r_cols: List[str] = []
             who_route_cols: List[List[str]] = []
             who_form_cols: List[List[str]] = []
-            for txt, txt_norm in zip(df["match_basis"].tolist(), df["match_basis_norm_basic"].tolist()):
+            for idx, (txt, txt_norm) in enumerate(zip(df["match_basis"].tolist(), df["match_basis_norm_basic"].tolist())):
                 names, codes = detect_all_who_molecules(txt, who_regex, codes_by_name, pre_normalized=txt_norm)
                 who_names_all.append(names)
                 sorted_codes = sorted(codes)
@@ -895,6 +1080,22 @@ def build_features(
                 who_route_cols.append(sorted(route_tokens))
                 who_form_cols.append(sorted(form_tokens))
 
+                reference_hits_who[idx] = []
+                for name in names or []:
+                    if not name:
+                        continue
+                    name_str = str(name)
+                    norm_key = _normalize_text_basic(_base_name(name_str))
+                    display = who_display_by_name.get(name_str) or who_display_by_name.get(norm_key) or name_str
+                    _append_reference(
+                        reference_hits_who,
+                        idx,
+                        matched_text=display,
+                        source_reference="WHO ATC",
+                        category="generic molecule",
+                        candidate_for_identified=display,
+                    )
+
             df["who_molecules_list"] = who_names_all
             df["who_atc_codes_list"] = who_atc_all
             df["who_molecules"] = df["who_molecules_list"].map(lambda xs: "|".join(xs) if xs else "")
@@ -912,6 +1113,8 @@ def build_features(
             df["who_atc_adm_r"] = ""
             df["who_route_tokens"] = [[] for _ in range(len(df))]
             df["who_form_tokens"] = [[] for _ in range(len(df))]
+            for idx in range(row_count):
+                reference_hits_who[idx] = []
     _timed("Detect WHO molecules", _who_detect)
 
     # 13) Combination detection helpers
@@ -1028,142 +1231,16 @@ def build_features(
     _timed("Compute presence flags", _presence_flags)
 
     def _reference_hit_details():
-        brand_seq = df["brand_match_details"].tolist() if "brand_match_details" in df else [[] for _ in range(len(df))]
-        food_seq = df["non_therapeutic_hits"].tolist() if "non_therapeutic_hits" in df else [[] for _ in range(len(df))]
-        pnf_tokens_seq = df["pnf_hits_tokens"].tolist() if "pnf_hits_tokens" in df else [[] for _ in range(len(df))]
-        pnf_gid_seq = df["pnf_hits_gids"].tolist() if "pnf_hits_gids" in df else [[] for _ in range(len(df))]
-        who_seq = df["who_molecules_list"].tolist() if "who_molecules_list" in df else [[] for _ in range(len(df))]
+        combined_json: List[str] = []
+        for idx in range(row_count):
+            combined: List[Dict[str, str]] = []
+            combined.extend(reference_hits_pnf[idx])
+            combined.extend(reference_hits_who[idx])
+            combined.extend(reference_hits_brand[idx])
+            combined.extend(reference_hits_food[idx])
+            combined_json.append(json.dumps(combined, ensure_ascii=False))
 
-        def _word_in_raw(raw_text: object, candidate: str) -> str:
-            if not isinstance(candidate, str):
-                return ""
-            candidate_clean = candidate.strip()
-            if not candidate_clean:
-                return ""
-            raw = str(raw_text) if isinstance(raw_text, str) else ""
-            if raw:
-                pattern = re.compile(re.escape(candidate_clean), re.IGNORECASE)
-                match = pattern.search(raw)
-                if match:
-                    return match.group(0)
-                base = _base_name(candidate_clean)
-                if base and base.lower() != candidate_clean.lower():
-                    pattern = re.compile(re.escape(base), re.IGNORECASE)
-                    match = pattern.search(raw)
-                    if match:
-                        return match.group(0)
-            return candidate_clean
-
-        details_json: List[str] = []
-        for pos, (_, row) in enumerate(df.iterrows()):
-            row_hits: List[Dict[str, str]] = []
-            raw_text = row.get("raw_text", "")
-
-            pnf_tokens = pnf_tokens_seq[pos] if pos < len(pnf_tokens_seq) else []
-            pnf_gids = pnf_gid_seq[pos] if pos < len(pnf_gid_seq) else []
-            for tok, gid in zip(pnf_tokens or [], pnf_gids or []):
-                if not tok:
-                    continue
-                gid_key = str(gid) if gid is not None else None
-                generic_display = pnf_gid_to_display.get(gid_key or "", str(tok))
-                row_hits.append(
-                    {
-                        "identified_word": _word_in_raw(raw_text, str(tok)),
-                        "category": "generic molecule",
-                        "matched_text": generic_display,
-                        "source_reference": "PNF",
-                        "dose_matched": "not applicable",
-                        "form_matched": "not applicable",
-                        "route_matched": "not applicable",
-                    }
-                )
-
-            who_names = who_seq[pos] if pos < len(who_seq) else []
-            for name in who_names or []:
-                name_str = str(name)
-                norm_key = _normalize_text_basic(_base_name(name_str))
-                display = who_display_by_name.get(name_str) or who_display_by_name.get(norm_key) or name_str
-                row_hits.append(
-                    {
-                        "identified_word": _word_in_raw(raw_text, display),
-                        "category": "generic molecule",
-                        "matched_text": display,
-                        "source_reference": "WHO ATC",
-                        "dose_matched": "not applicable",
-                        "form_matched": "not applicable",
-                        "route_matched": "not applicable",
-                    }
-                )
-
-            brand_entries = brand_seq[pos] if pos < len(brand_seq) else []
-            seen_brand: set[tuple[str, str]] = set()
-            if isinstance(brand_entries, list):
-                for entry in brand_entries:
-                    if not isinstance(entry, dict):
-                        continue
-                    brand_label = str(entry.get("brand_name", "") or entry.get("brand_key", ""))
-                    generic_label = str(entry.get("generic_name", ""))
-                    key = (brand_label.lower(), generic_label.lower())
-                    if key in seen_brand:
-                        continue
-                    seen_brand.add(key)
-                    dose_value = str(entry.get("dosage_strength", "") or "").strip() or "none"
-                    form_value = str(entry.get("dosage_form", "") or "").strip() or "none"
-                    route_value = str(entry.get("route", "") or "").strip() or "none"
-                    row_hits.append(
-                        {
-                            "identified_word": _word_in_raw(raw_text, brand_label),
-                            "category": "brand of a generic",
-                            "matched_text": brand_label,
-                            "source_reference": "FDA brand map",
-                            "dose_matched": dose_value,
-                            "form_matched": form_value,
-                            "route_matched": route_value,
-                        }
-                    )
-
-            food_entries = food_seq[pos] if pos < len(food_seq) else []
-            seen_food: set[tuple[str, str]] = set()
-            if isinstance(food_entries, list):
-                for entry in food_entries:
-                    if not isinstance(entry, dict):
-                        continue
-                    brand_name = str(entry.get("brand_name", "")).strip()
-                    product_name = str(entry.get("product_name", "")).strip()
-                    if brand_name:
-                        key = ("brand", brand_name.lower())
-                        if key not in seen_food:
-                            seen_food.add(key)
-                            row_hits.append(
-                                {
-                                    "identified_word": _word_in_raw(raw_text, brand_name),
-                                    "category": "brand of a food",
-                                    "matched_text": brand_name,
-                                    "source_reference": "FDA Philippines food catalog",
-                                    "dose_matched": "not applicable",
-                                    "form_matched": "not applicable",
-                                    "route_matched": "not applicable",
-                                }
-                            )
-                    if product_name and product_name.lower() != brand_name.lower():
-                        key = ("generic", product_name.lower())
-                        if key not in seen_food:
-                            seen_food.add(key)
-                            row_hits.append(
-                                {
-                                    "identified_word": _word_in_raw(raw_text, product_name),
-                                    "category": "generic of a food",
-                                    "matched_text": product_name,
-                                    "source_reference": "FDA Philippines food catalog",
-                                    "dose_matched": "not applicable",
-                                    "form_matched": "not applicable",
-                                    "route_matched": "not applicable",
-                                }
-                            )
-
-            details_json.append(json.dumps(row_hits, ensure_ascii=False))
-
-        df["reference_match_details_json"] = details_json
+        df["reference_match_details_json"] = combined_json
         if "brand_match_details" in df.columns:
             df.drop(columns=["brand_match_details"], inplace=True)
 
