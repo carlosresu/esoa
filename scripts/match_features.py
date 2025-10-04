@@ -370,7 +370,8 @@ def build_features(
     df = df[-1]
 
     row_count = len(df)
-    raw_texts: List[str] = [str(val) if isinstance(val, str) else "" for val in df["raw_text"].tolist()]
+    raw_text_values = df["raw_text"].to_numpy(copy=False)
+    raw_text_cache: List[Optional[str]] = [None] * row_count
     reference_hits_pnf: List[List[Dict[str, str]]] = [[] for _ in range(row_count)]
     reference_hits_who: List[List[Dict[str, str]]] = [[] for _ in range(row_count)]
     reference_hits_brand: List[List[Dict[str, str]]] = [[] for _ in range(row_count)]
@@ -380,13 +381,29 @@ def build_features(
     def _candidate_pattern(candidate: str) -> re.Pattern[str]:
         return re.compile(re.escape(candidate), re.IGNORECASE)
 
+    def _raw_text_for(idx: int) -> str:
+        if idx < 0 or idx >= row_count:
+            return ""
+        cached = raw_text_cache[idx]
+        if cached is not None:
+            return cached
+        value = raw_text_values[idx] if idx < len(raw_text_values) else ""
+        if isinstance(value, str):
+            text = value
+        elif value is None or pd.isna(value):
+            text = ""
+        else:
+            text = str(value)
+        raw_text_cache[idx] = text
+        return text
+
     def _word_in_raw(idx: int, candidate: str) -> str:
         if not isinstance(candidate, str):
             return ""
         candidate_clean = candidate.strip()
         if not candidate_clean:
             return ""
-        raw = raw_texts[idx] if 0 <= idx < len(raw_texts) else ""
+        raw = _raw_text_for(idx)
         if raw:
             pattern = _candidate_pattern(candidate_clean)
             match = pattern.search(raw)
