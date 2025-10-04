@@ -4,6 +4,7 @@ This repository implements the **eSOA (electronic Statement of Account) drug mat
 
 - **Philippine National Formulary (PNF)**
 - **FDA brand map** (brand → generic links from FDA PH online export)
+- **FDA Philippines food product catalog** (non-therapeutic identification and debug trail)
 - **WHO ATC classification** (international codes)
 
 It prepares raw CSVs, parses text into structured features, detects candidate generics, scores/classifies matches, and outputs a labeled dataset with a detailed distribution summary and unknown token report. The goal is to support **public health operations and oversight**, not commercial decision-making.
@@ -64,12 +65,14 @@ flowchart TD
     E --> I
     H --> I
     I --> J[Brand to generic swaps]
+    I --> J2[FDA food / non-therapeutic detection]
     I --> K[Dose, route, form parsing]
     I --> L[PNF and WHO molecule detection]
     I --> M[Combination detection]
     I --> N[Unknown token extraction]
 
     J --> O[Scoring and classification]
+    J2 --> O
     K --> O
     L --> O
     M --> O
@@ -151,7 +154,25 @@ Supervisor input needed
 
 ---
 
-4. Lexical Normalization & Phonetic Matching ([scripts/pnf_aliases.py](https://github.com/carlosresu/esoa/blob/main/scripts/pnf_aliases.py), [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py))
+4. FDA Food / Non-therapeutic Catalog Detection ([scripts/fda_ph_food_scraper.py](https://github.com/carlosresu/esoa/blob/main/scripts/fda_ph_food_scraper.py), [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py), [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py))
+
+- Optionally loads `inputs/fda_food_products.csv` (scraped via `scripts/fda_ph_food_scraper.py`) and builds an automaton of brand and product strings.
+- Captures every hit in `non_therapeutic_hits`, distills canonical tokens in `non_therapeutic_tokens`, and highlights the highest scoring entry in `non_therapeutic_best`/`non_therapeutic_detail` so reviewers can see which registration number or company triggered the flag.
+- When a line resolves to an FDA food/non-therapeutic item and no PNF/WHO/FDA-drug molecule exists, scoring routes the row to the `Others` bucket with `why_final = "Non-Therapeutic Medical Products"` and `reason_final = "non_therapeutic_detected"`.
+- Tokens from the catalog are excluded from `unknown_words` so food-only strings don’t pollute the missed-generic report.
+
+Public health/program implications
+
+Identifying non-therapeutic entries early keeps food supplements and supply items from inflating medicine utilization metrics while still surfacing rich metadata for investigation (brand, product, company, registration number).
+
+Supervisor input needed
+
+- Confirm whether additional FDA or DOH catalogs should be merged to expand the non-therapeutic detection net.
+- Decide if certain borderline items (e.g., nutraceuticals) should escalate to review instead of landing directly in the Others bucket.
+
+---
+
+5. Lexical Normalization & Phonetic Matching ([scripts/pnf_aliases.py](https://github.com/carlosresu/esoa/blob/main/scripts/pnf_aliases.py), [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py))
 
 - Performs “hard” normalization on every PNF name and detected text fragment: ASCII fold, strip punctuation/whitespace, collapse separators, drop trailing salt/form suffixes (HCl, SR, tab, inj, etc.), and sort tokens for combination products.
 - Applies a focused set of pharma spelling transforms to cover UK↔US and historical spellings (ceph→cef, sulph→sulf, oes→es, haem→hem, amoxycill→amoxicill, etc.), emitting both the raw-normalized and rule-adjusted variants as lookup keys.
@@ -168,7 +189,7 @@ Supervisor input needed
 
 ---
 
-5. Combination vs. Salt Detection ([scripts/combos.py](https://github.com/carlosresu/esoa/blob/main/scripts/combos.py))
+6. Combination vs. Salt Detection ([scripts/combos.py](https://github.com/carlosresu/esoa/blob/main/scripts/combos.py))
 
 - Splits on +, /, with, but masks dose ratios (mg/mL) to avoid false positives.
 - Treats known salt/ester/hydrate tails (e.g., hydrochloride, hemisuccinate, palmitate, pamoate, decanoate) as formulation modifiers and not separate molecules.
@@ -184,7 +205,7 @@ Supervisor input needed
 
 ---
 
-6. Best-Variant Selection & Scoring ([scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py))
+7. Best-Variant Selection & Scoring ([scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py))
 
 For each eSOA entry with at least one PNF candidate:
 
