@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+"""Output writers for matched eSOA records, summaries, and review artifacts."""
+
 from __future__ import annotations
 import sys, time
 import glob

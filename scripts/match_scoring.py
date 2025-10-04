@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+"""Scoring and selection logic for the eSOA ↔ PNF matching pipeline."""
+
 from __future__ import annotations
 
 import ast
@@ -7,6 +9,8 @@ import ast
 import numpy as np
 import pandas as pd
 
+# Policy constants that determine when a detected route/form pairing is acceptable
+# for auto-acceptance.  These mirror the definitions explained in README.md.
 APPROVED_ROUTE_FORMS: dict[str, set[str]] = {
     "oral": {"tablet", "capsule", "sachet", "suspension", "solution", "syrup", "suppository"},
     "nasal": {"solution"},
@@ -41,6 +45,8 @@ WHO_METADATA_GAP_REASON = "who_metadata_insufficient_review_required"
 
 # WHO ATC administration route codes mapped to canonical route tokens
 # (WHO ATC/DDD Index – Adm.R definitions)
+# WHO and ATC metadata is used as a fallback when PNF coverage is missing; the
+# mappings below mirror the feature builder so scoring decisions stay aligned.
 WHO_ADM_ROUTE_MAP: dict[str, set[str]] = {
     "o": {"oral"},
     "oral": {"oral"},

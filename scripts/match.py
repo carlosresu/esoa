@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+"""Thin orchestration layer that chains feature building, scoring, and outputs."""
+
 from __future__ import annotations
 import sys, time
 import os, pandas as pd
@@ -63,8 +65,8 @@ def match(
     _timed("Load PNF prepared CSV", lambda: pnf_df.__setitem__(0, pd.read_csv(pnf_prepared_csv)))
     _timed("Load eSOA prepared CSV", lambda: esoa_df.__setitem__(0, pd.read_csv(esoa_prepared_csv)))
 
-    # Build features — inner function prints its own sub-spinners; do not show outer spinner
-    # Feed the matcher-specific feature engineering step.
+    # Build features — inner function prints its own sub-spinners; do not show outer spinner.
+    # Feeding the matcher-specific feature engineering step ties together all reference data.
     features_df = build_features(pnf_df[0], esoa_df[0], timing_hook=timing_hook)
 
     # Score & classify
