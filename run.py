@@ -20,6 +20,8 @@ import sys
 import time
 from pathlib import Path
 
+from scripts.io_utils import ensure_parquet_suffix
+
 
 THIS_DIR: Path = Path(__file__).resolve().parent
 
@@ -475,7 +477,7 @@ def build_brand_map(inputs_dir: Path, outfile: Path | None) -> Path:
             ) from exc
     return out_csv
 
-def run_resolve_unknowns() -> None:
+def run_resolve_unknowns(*, export_csv: bool = False) -> None:
     """Run resolve_unknowns.py if present (either at project root or under scripts/)."""
     # Prefer scripts/resolve_unknowns.py when available, otherwise fallback to root-level resolve_unknowns.py
     mod_name = None
@@ -488,8 +490,11 @@ def run_resolve_unknowns() -> None:
         return
     with open(os.devnull, "w") as devnull:
         # Invoke the module via python -m so relative imports resolve correctly.
+        cmd = [sys.executable, "-m", mod_name]
+        if export_csv:
+            cmd.append("--export-csv")
         subprocess.run(
-            [sys.executable, "-m", mod_name],
+            cmd,
             check=True,
             cwd=str(THIS_DIR),
             stdout=devnull,
@@ -506,12 +511,13 @@ def main_entry() -> None:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     # Flags align with README guidance: allow skipping R preprocessing or FDA brand rebuilds when rerunning.
-    parser.add_argument("--pnf", default=f"{DEFAULT_INPUTS_DIR}/pnf.csv", help="Path to PNF CSV")
-    parser.add_argument("--esoa", default=f"{DEFAULT_INPUTS_DIR}/esoa.csv", help="Path to eSOA CSV")
-    parser.add_argument("--out", default="esoa_matched.csv", help="Output CSV filename (saved under ./outputs)")
+    parser.add_argument("--pnf", default=f"{DEFAULT_INPUTS_DIR}/pnf.csv", help="Path to PNF input file")
+    parser.add_argument("--esoa", default=f"{DEFAULT_INPUTS_DIR}/esoa.csv", help="Path to eSOA input file")
+    parser.add_argument("--out", default="esoa_matched.parquet", help="Output Parquet filename (saved under ./outputs)")
     parser.add_argument("--skip-r", action="store_true", help="Skip running ATC R preprocessing scripts")
     parser.add_argument("--skip-brandmap", action="store_true", help="Skip building FDA brand map CSV")
-    parser.add_argument("--skip-excel", action="store_true", help="Skip writing XLSX output (CSV and summaries still produced)")
+    parser.add_argument("--export-csv", action="store_true", help="Also export CSV copies of generated tables")
+    parser.add_argument("--export-excel", action="store_true", help="Also export XLSX copies of the matched dataset")
     args = parser.parse_args()
 
     outdir = _ensure_outputs_dir()
@@ -519,7 +525,7 @@ def main_entry() -> None:
     # Resolve the requested raw inputs, enforcing the fallback search behavior.
     pnf_path = _resolve_input_path(args.pnf)
     esoa_path = _resolve_esoa_path(args.esoa)
-    out_path = outdir / Path(args.out).name
+    out_path = ensure_parquet_suffix(outdir / Path(args.out).name)
 
     from scripts.prepare import prepare as _prepare
     from scripts.match import match as _match
@@ -536,21 +542,32 @@ def main_entry() -> None:
         t = run_with_spinner("Build FDA brand map", lambda: build_brand_map(inputs_dir, outfile=None))
         timings.add("Build FDA brand map", t)
 
+    prepared_paths: dict[str, str] = {}
+
+    def _do_prepare() -> None:
+        pnf_prepared, esoa_prepared = _prepare(str(pnf_path), str(esoa_path), str(inputs_dir))
+        prepared_paths["pnf"] = pnf_prepared
+        prepared_paths["esoa"] = esoa_prepared
+
     # Prepare inputs prior to matching (PNF normalization + eSOA renaming).
-    t = run_with_spinner("Prepare inputs", lambda: _prepare(str(pnf_path), str(esoa_path), str(inputs_dir)))
+    t = run_with_spinner("Prepare inputs", _do_prepare)
     timings.add("Prepare inputs", t)
+
+    pnf_prepared_path = prepared_paths.get("pnf", str(inputs_dir / "pnf_prepared.parquet"))
+    esoa_prepared_path = prepared_paths.get("esoa", str(inputs_dir / "esoa_prepared.parquet"))
 
     # Let tqdm own the console for matching; no outer spinner here.
     _match(
-        str(inputs_dir / "pnf_prepared.csv"),
-        str(inputs_dir / "esoa_prepared.csv"),
+        pnf_prepared_path,
+        esoa_prepared_path,
         str(out_path),
         timing_hook=timings.add,
-        skip_excel=args.skip_excel,
+        export_csv=args.export_csv,
+        export_excel=args.export_excel,
     )
 
     # Run the follow-up enrichment step to analyze unknown tokens.
-    t = run_with_spinner("Resolve unknowns", run_resolve_unknowns)
+    t = run_with_spinner("Resolve unknowns", lambda: run_resolve_unknowns(export_csv=args.export_csv))
     timings.add("Resolve unknowns", t)
 
     # Final timing summary (console only)

@@ -15,9 +15,9 @@ def main(argv: list[str] | None = None) -> None:
         description="Run minimal ESOA pipeline (skips R/brand map rebuild, no Excel output)",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--pnf", default=f"{run.DEFAULT_INPUTS_DIR}/pnf.csv", help="Path to PNF CSV")
-    parser.add_argument("--esoa", default=f"{run.DEFAULT_INPUTS_DIR}/esoa.csv", help="Path to eSOA CSV")
-    parser.add_argument("--out", default="esoa_matched.csv", help="Output CSV filename (stored under ./outputs)")
+    parser.add_argument("--pnf", default=f"{run.DEFAULT_INPUTS_DIR}/pnf.csv", help="Path to PNF input file")
+    parser.add_argument("--esoa", default=f"{run.DEFAULT_INPUTS_DIR}/esoa.csv", help="Path to eSOA input file")
+    parser.add_argument("--out", default="esoa_matched.parquet", help="Output Parquet filename (stored under ./outputs)")
     args = parser.parse_args(argv)
 
     minimal_args = [
@@ -27,7 +27,6 @@ def main(argv: list[str] | None = None) -> None:
         "--out", args.out,
         "--skip-r",
         "--skip-brandmap",
-        "--skip-excel",
     ]
 
     original_argv = sys.argv

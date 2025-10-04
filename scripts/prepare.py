@@ -15,15 +15,16 @@ import pandas as pd
 from .routes_forms import map_route_token, parse_form_from_text
 from .dose import parse_dose_struct_from_text, to_mg, safe_ratio_mg_per_ml
 from .text_utils import clean_atc, normalize_text, slug_id
+from .io_utils import read_dataframe, write_parquet
 
 
 def prepare(pnf_csv: str, esoa_csv: str, outdir: str = ".") -> tuple[str, str]:
-    """Normalize PNF and eSOA inputs, deriving helper columns and writing prepared CSVs."""
+    """Normalize PNF and eSOA inputs, deriving helper columns and writing prepared Parquet tables."""
     os.makedirs(outdir, exist_ok=True)
 
     # Load and immediately validate the PNF payload so downstream assumptions
     # remain explicit and testable.
-    pnf = pd.read_csv(pnf_csv)
+    pnf = read_dataframe(pnf_csv)
     for col in ["Molecule", "Route", "ATC Code"]:
         if col not in pnf.columns:
             raise ValueError(f"pnf.csv is missing required column: {col}")
@@ -83,16 +84,16 @@ def prepare(pnf_csv: str, esoa_csv: str, outdir: str = ".") -> tuple[str, str]:
         "strength_mg", "ratio_mg_per_ml",
     ]].copy()
 
-    pnf_out = os.path.join(outdir, "pnf_prepared.csv")
-    pnf_prepared.to_csv(pnf_out, index=False, encoding="utf-8")
+    pnf_out = os.path.join(outdir, "pnf_prepared.parquet")
+    write_parquet(pnf_prepared, pnf_out)
 
     # eSOA preparation is intentionally light-weight: only rename the primary
     # text column but still validate that the source CSV carries it.
-    esoa = pd.read_csv(esoa_csv)
+    esoa = read_dataframe(esoa_csv)
     if "DESCRIPTION" not in esoa.columns:
         raise ValueError("esoa.csv is missing required column: DESCRIPTION")
     esoa_prepared = esoa.rename(columns={"DESCRIPTION": "raw_text"}).copy()
-    esoa_out = os.path.join(outdir, "esoa_prepared.csv")
-    esoa_prepared.to_csv(esoa_out, index=False, encoding="utf-8")
+    esoa_out = os.path.join(outdir, "esoa_prepared.parquet")
+    write_parquet(esoa_prepared, esoa_out)
 
     return pnf_out, esoa_out

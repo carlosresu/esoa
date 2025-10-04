@@ -9,7 +9,9 @@ import json
 import os, pandas as pd
 import re
 from pathlib import Path
-from typing import Callable, List, Optional, Set
+from typing import Callable, Dict, Iterable, List, Optional, Set
+
+from .io_utils import ensure_parquet_suffix, read_dataframe, write_parquet
 
 # Local lightweight spinner so this module is self-contained
 def _run_with_spinner(label: str, func: Callable[[], None]) -> float:
@@ -100,14 +102,15 @@ def _known_tokens() -> Set[str]:
     inputs_dir = project_root / "inputs"
 
     # PNF prepared
-    pnf_prepared = inputs_dir / "pnf_prepared.csv"
-    if pnf_prepared.is_file():
-        try:
-            df_pnf = pd.read_csv(pnf_prepared, usecols=["generic_name", "synonyms"], dtype=str)
-            tokens.update(_extract_tokens(df_pnf.get("generic_name", [])))
-            tokens.update(_extract_tokens(df_pnf.get("synonyms", [])))
-        except Exception:
-            pass
+    for candidate in [inputs_dir / "pnf_prepared.parquet", inputs_dir / "pnf_prepared.csv"]:
+        if candidate.is_file():
+            try:
+                df_pnf = read_dataframe(candidate)
+                tokens.update(_extract_tokens(df_pnf.get("generic_name", [])))
+                tokens.update(_extract_tokens(df_pnf.get("synonyms", [])))
+            except Exception:
+                pass
+            break
 
     # FDA brand map (latest)
     brand_maps = sorted(glob.glob(str(inputs_dir / "fda_brand_map_*.csv")))
@@ -273,9 +276,9 @@ def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
     return lines
 
 
-def _write_summary_text(out_small: pd.DataFrame, out_csv: str) -> None:
+def _write_summary_text(out_small: pd.DataFrame, out_path: Path, metrics: Dict[str, object]) -> None:
     """Write multiple summary text files that slice the results by molecule or match quality."""
-    base_dir = os.path.dirname(out_csv)
+    base_dir = str(out_path.parent)
     summaries = [
         ("summary.txt", "default"),
         ("summary_molecule.txt", "molecule"),
@@ -285,17 +288,33 @@ def _write_summary_text(out_small: pd.DataFrame, out_csv: str) -> None:
     for filename, mode in summaries:
         summary_path = os.path.join(base_dir, filename)
         lines = _generate_summary_lines(out_small, mode)
+        if mode == "default":
+            header = [
+                "Dataset Metrics",
+                f"Rows: {metrics.get('row_count', 'n/a'):,}",
+            ]
+            if "unique_esoa_idx" in metrics:
+                header.append(f"Unique eSOA rows: {metrics['unique_esoa_idx']:,}")
+                header.append(f"Duplicate rows: {metrics.get('duplicate_rows', 0):,}")
+            json_stats = metrics.get("reference_match_details_json")
+            if isinstance(json_stats, dict):
+                header.append(
+                    "reference_match_details_json length — "
+                    f"avg {json_stats['mean']:.0f}, p95 {json_stats['p95']:.0f}, max {json_stats['max']}"
+                )
+            lines = header + [""] + lines
         with open(summary_path, "w", encoding="utf-8") as f:
             f.write("\n".join(lines) + "\n")
 
 def write_outputs(
     out_df: pd.DataFrame,
-    out_csv: str,
+    out_path: str,
     *,
     timing_hook: Callable[[str, float], None] | None = None,
-    skip_excel: bool = False,
+    export_csv: bool = False,
+    export_excel: bool = False,
 ) -> str:
-    """Persist the canonical CSV output (and optionally XLSX) plus text summaries described in README."""
+    """Persist the canonical Parquet output (with optional CSV/XLSX) plus text summaries."""
 
     def _timed(label: str, func: Callable[[], None]) -> float:
         elapsed = _run_with_spinner(label, func)
@@ -341,10 +360,16 @@ def write_outputs(
         out_small["match_basis"] = out_small.get("normalized", "")
     out_small = out_small[[c for c in OUTPUT_COLUMNS if c in out_small.columns]].copy()
 
-    _timed("Write matched CSV", lambda: out_small.to_csv(out_csv, index=False, encoding="utf-8"))
+    parquet_path = ensure_parquet_suffix(Path(out_path))
 
-    if not skip_excel:
-        xlsx_out = os.path.splitext(out_csv)[0] + ".xlsx"
+    _timed("Write matched Parquet", lambda: write_parquet(out_small, parquet_path))
+
+    if export_csv:
+        csv_path = parquet_path.with_suffix(".csv")
+        _timed("Write matched CSV", lambda: out_small.to_csv(csv_path, index=False, encoding="utf-8"))
+
+    if export_excel:
+        xlsx_out = parquet_path.with_suffix(".xlsx")
 
         def _to_excel():
             try:
@@ -386,12 +411,34 @@ def write_outputs(
                 words.append(w)
         if words:
             unk_df = pd.DataFrame({"word": words})
-            unk_df = unk_df.groupby("word").size().reset_index(name="count").sort_values("count", ascending=False)
-            unk_path = os.path.join(os.path.dirname(out_csv), "unknown_words.csv")
-            unk_df.to_csv(unk_path, index=False, encoding="utf-8")
+            unk_df = (
+                unk_df.groupby("word")
+                .size()
+                .reset_index(name="count")
+                .sort_values("count", ascending=False)
+            )
+            unk_path = parquet_path.parent / "unknown_words.parquet"
+            write_parquet(unk_df, unk_path)
+            if export_csv:
+                csv_path = unk_path.with_suffix(".csv")
+                unk_df.to_csv(csv_path, index=False, encoding="utf-8")
             # Feeds resolve_unknowns.py to produce the missed_generics report highlighted in README.
-    _timed("Write unknown words CSV", _write_unknowns)
+    _timed("Write unknown words", _write_unknowns)
 
-    _timed("Write summary.txt", lambda: _write_summary_text(out_small, out_csv))
+    metrics: Dict[str, object] = {"row_count": int(len(out_small))}
+    if "esoa_idx" in out_small.columns:
+        uniq = int(out_small["esoa_idx"].nunique(dropna=True))
+        metrics["unique_esoa_idx"] = uniq
+        metrics["duplicate_rows"] = metrics["row_count"] - uniq
+    if "reference_match_details_json" in out_small.columns:
+        lengths = out_small["reference_match_details_json"].astype(str).map(len)
+        if not lengths.empty:
+            metrics["reference_match_details_json"] = {
+                "mean": float(lengths.mean()),
+                "p95": float(lengths.quantile(0.95)),
+                "max": int(lengths.max()),
+            }
 
-    return out_csv
+    _timed("Write summary.txt", lambda: _write_summary_text(out_small, parquet_path, metrics))
+
+    return str(parquet_path)

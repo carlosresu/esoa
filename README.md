@@ -229,14 +229,14 @@ Supervisor input needed
 
 ---
 
-7. Unknown Handling ([scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) → unknown_words.csv)
+7. Unknown Handling ([scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) → unknown_words.parquet)
 
 - Extracts tokens not recognized in PNF/WHO/FDA sets.
 - Categorizes:
   - Single - Unknown
   - Multiple - All Unknown
   - Multiple - Some Unknown
-- Post-processing via [resolve_unknowns.py](https://github.com/carlosresu/esoa/blob/main/resolve_unknowns.py) scans those tokens against PNF/WHO/FDA catalogues (token n-grams) and writes `missed_generics.csv` with suggested reference hits.
+- Post-processing via [resolve_unknowns.py](https://github.com/carlosresu/esoa/blob/main/resolve_unknowns.py) scans those tokens against PNF/WHO/FDA catalogues (token n-grams) and writes `missed_generics.parquet` with suggested reference hits.
 
 Public health/program implications  
 Frequent unknowns may mean missing formulary entries, local shorthand, or data quality issues.
@@ -251,15 +251,16 @@ Supervisor input needed
 
 ---
 
-## 📊 Outputs
+-## 📊 Outputs
 
-- outputs/esoa_matched.csv — Main matched dataset (includes `route_form_imputations`, `dose_sim`, `confidence`, etc.)
-- outputs/esoa_matched.xlsx — Filterable Excel view of the same records
+- outputs/esoa_matched.parquet — Main matched dataset (includes `route_form_imputations`, `dose_sim`, `confidence`, etc.)
+- outputs/esoa_matched.csv — Optional CSV export when `--export-csv` is supplied
+- outputs/esoa_matched.xlsx — Optional Excel workbook when `--export-excel` is supplied
 - outputs/summary.txt — Default bucket breakdown; `summary_molecule.txt` and `summary_match.txt` provide molecule- and reason-focused pivots
-- outputs/unknown_words.csv — Frequency of unmatched tokens (fed into post-processing)
-- outputs/missed_generics.csv — Suggestions from [resolve_unknowns.py](https://github.com/carlosresu/esoa/blob/main/resolve_unknowns.py) that map unknown tokens back to PNF/WHO/FDA references (whole or partial n-gram matches)
+- outputs/unknown_words.parquet — Frequency of unmatched tokens (fed into post-processing)
+- outputs/missed_generics.parquet — Suggestions from [resolve_unknowns.py](https://github.com/carlosresu/esoa/blob/main/resolve_unknowns.py) that map unknown tokens back to PNF/WHO/FDA references (whole or partial n-gram matches)
 
-Key columns to review inside `outputs/esoa_matched.csv` include:
+Key columns to review inside `outputs/esoa_matched.parquet` include:
 
 - `molecules_recognized` — the canonical pipe-delimited list of generics the scorer accepts for ATC alignment and downstream matching
 - `generic_final` — the normalized molecule identifier(s) the pipeline ultimately relied on (PNF `generic_id`, WHO molecule, or FDA generic fallback)
@@ -293,7 +294,7 @@ Others: 18,295 (16.23%)
 pip install -r requirements.txt
 
 # Run full pipeline (writes to ./outputs)
-python run.py --pnf inputs/pnf.csv --esoa inputs/esoa.csv --out esoa_matched.csv
+python run.py --pnf inputs/pnf.csv --esoa inputs/esoa.csv --out esoa_matched.parquet
 ```
 
 Optional flags
@@ -301,24 +302,25 @@ Optional flags
 - --skip-install — Skip pip install
 - --skip-r — Skip ATC preprocessing
 - --skip-brandmap — Reuse existing FDA brand map
-- --skip-excel — Skip writing the XLSX workbook (CSV and summaries only)
+- --export-csv — Also write CSV copies of the Parquet outputs
+- --export-excel — Also write an XLSX workbook of the matched dataset
 
 ### Minimal/local run
 
 For incremental testing without touching external data sources or emitting Excel, use:
 
 ```bash
-python run_minimal.py --pnf inputs/pnf.csv --esoa inputs/esoa.csv --out esoa_matched.csv
+python run_minimal.py --pnf inputs/pnf.csv --esoa inputs/esoa.csv --out esoa_matched.parquet
 ```
 
-This wrapper invokes `run.py` with `--skip-install --skip-r --skip-brandmap --skip-excel`, leaving only the CSV and summary outputs.
+This wrapper invokes `run.py` with `--skip-install --skip-r --skip-brandmap`, leaving only the Parquet and summary outputs.
 
 ### Profiling the pipeline
 
 To inspect runtime hotspots, execute the profiled wrapper:
 
 ```bash
-python debug.py --pnf inputs/pnf.csv --esoa inputs/esoa.csv --out esoa_matched.csv
+python debug.py --pnf inputs/pnf.csv --esoa inputs/esoa.csv --out esoa_matched.parquet
 ```
 
 `debug.py` mirrors `run.py` but wraps execution with [pyinstrument](https://github.com/joerick/pyinstrument). Profiling reports are saved to `./outputs/pyinstrument_profile_<timestamp>.html` and `.txt`, allowing you to review the call tree in a browser or terminal.
@@ -372,7 +374,7 @@ python debug.py --pnf inputs/pnf.csv --esoa inputs/esoa.csv --out esoa_matched.c
    Should certain salt or ester forms (e.g., hydrochloride, hemisuccinate, palmitate) be treated as distinct actives for surveillance, or grouped with the base molecule as the current salt-list logic does? Clarifying this determines how combination detection and aggregation behave.
 
 5. Unknowns triage  
-   `unknown_words.csv` plus `missed_generics.csv` flag candidate additions for the PNF/WHO/FDA dictionaries. Which buckets trigger formulary enrichment, local alias mapping, or data-quality remediation, and who owns each follow-up loop?
+  `unknown_words.parquet` plus `missed_generics.parquet` flag candidate additions for the PNF/WHO/FDA dictionaries. Which buckets trigger formulary enrichment, local alias mapping, or data-quality remediation, and who owns each follow-up loop?
 
 6. FDA brand map cadence  
    `probable_brands` and brand-swap scoring depend on the freshness of `fda_brand_map_*.csv`. Confirm how often the brand export should be refreshed and who validates multi-generic mappings before they enter production.
@@ -389,7 +391,7 @@ python debug.py --pnf inputs/pnf.csv --esoa inputs/esoa.csv --out esoa_matched.c
 
 ## 📚 Documentation
 
-- `data_dictionary.md` — Column-level definitions and provenance for `outputs/esoa_matched.csv`.
+- `data_dictionary.md` — Column-level definitions and provenance for `outputs/esoa_matched.parquet`.
 - `pipeline.md` — Step-by-step execution walkthrough of the matching pipeline with module references.
 
 These references stay in sync with the current pipeline logic in `scripts/` and can be used by reviewers or developers who need deeper traceability.

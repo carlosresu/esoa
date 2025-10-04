@@ -5,3 +5,5 @@ pyahocorasick>=2.0
 requests>=2.31
 XlsxWriter>=3.0
 pyinstrument>=4.4
+
+pyarrow>=12

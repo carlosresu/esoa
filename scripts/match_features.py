@@ -190,9 +190,9 @@ def build_features(
         }
         missing = required_pnf - set(pnf_df.columns)
         if missing:
-            raise ValueError(f"pnf_prepared.csv missing columns: {missing}")
+            raise ValueError(f"pnf_prepared dataset missing columns: {missing}")
         if "raw_text" not in esoa_df.columns:
-            raise ValueError("esoa_prepared.csv must contain a 'raw_text' column")
+            raise ValueError("Prepared eSOA dataset must contain a 'raw_text' column")
     _timed("Validate inputs", _validate)
 
     # 2) Map normalized PNF names to gid + original name

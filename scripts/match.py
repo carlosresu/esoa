@@ -7,6 +7,8 @@ import sys, time
 import os, pandas as pd
 from typing import Callable
 
+from .io_utils import read_dataframe
+
 # Local lightweight spinner so this module is self-contained
 def _run_with_spinner(label: str, func: Callable[[], None]) -> float:
     """Wrap a callable with a lightweight spinner to show progress inside module-level scripts."""
@@ -44,12 +46,13 @@ from .match_scoring import score_and_classify
 from .match_outputs import write_outputs
 
 def match(
-    pnf_prepared_csv: str,
-    esoa_prepared_csv: str,
-    out_csv: str = "esoa_matched.csv",
+    pnf_prepared_path: str,
+    esoa_prepared_path: str,
+    out_path: str = "esoa_matched.parquet",
     *,
     timing_hook: Callable[[str, float], None] | None = None,
-    skip_excel: bool = False,
+    export_csv: bool = False,
+    export_excel: bool = False,
 ) -> str:
     """Run the feature build, scoring, and output-writing stages on prepared inputs exactly as outlined in pipeline.md steps 6–15."""
     def _timed(label: str, func: Callable[[], None]) -> float:
@@ -62,8 +65,8 @@ def match(
     # Use small mutable containers so closures can assign to outer scope by reference.
     pnf_df = [None]
     esoa_df = [None]
-    _timed("Load PNF prepared CSV", lambda: pnf_df.__setitem__(0, pd.read_csv(pnf_prepared_csv)))
-    _timed("Load eSOA prepared CSV", lambda: esoa_df.__setitem__(0, pd.read_csv(esoa_prepared_csv)))
+    _timed("Load PNF prepared data", lambda: pnf_df.__setitem__(0, read_dataframe(pnf_prepared_path)))
+    _timed("Load eSOA prepared data", lambda: esoa_df.__setitem__(0, read_dataframe(esoa_prepared_path)))
 
     # Build features — inner function prints its own sub-spinners; do not show outer spinner.
     # Feeding the matcher-specific feature engineering step ties together all reference data.
@@ -75,8 +78,14 @@ def match(
     _timed("Score & classify", lambda: out_df.__setitem__(0, score_and_classify(features_df, pnf_df[0])))
 
     # Write outputs — inner module prints its own sub-spinners; do not show outer spinner
-    out_path = os.path.abspath(out_csv)
-    # Persist the outputs (CSV, XLSX, summaries) while capturing timing metrics.
-    write_outputs(out_df[0], out_path, timing_hook=timing_hook, skip_excel=skip_excel)
+    out_path = os.path.abspath(out_path)
+    # Persist the outputs (Parquet, optional CSV/XLSX, summaries) while capturing timing metrics.
+    write_outputs(
+        out_df[0],
+        out_path,
+        timing_hook=timing_hook,
+        export_csv=export_csv,
+        export_excel=export_excel,
+    )
 
     return out_path
