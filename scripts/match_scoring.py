@@ -932,13 +932,8 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
             parts.append(unk_label)
         nonthera_summary_val = nonthera_label.at[idx] if idx in nonthera_label.index else ""
         if nonthera_summary_val:
-            label = f"Non-Therapeutic Medical Products: {nonthera_summary_val}"
-            detail_text = nonthera_detail_text.at[idx] if idx in nonthera_detail_text.index else ""
-            detail_text = str(detail_text).strip()
-            if detail_text:
-                label = f"{label} – {detail_text}"
-            parts.append(label)
-        detail_values.append(" | ".join(parts))
+            parts.append("Non-Therapeutic Medical Products")
+        detail_values.append(" | ".join(part for part in parts if part))
     out["detail_final"] = detail_values
 
     remaining = out["bucket_final"].eq("")

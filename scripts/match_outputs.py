@@ -223,9 +223,14 @@ def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
         else:
             nr_rows["match_quality"] = _normalize_summary_field(pd.Series(["" for _ in range(len(nr_rows))], index=nr_rows.index))
         if "detail_final" in nr_rows.columns:
-            nr_rows["detail_final"] = _normalize_summary_field(nr_rows["detail_final"])
+            nr_rows["detail_final"] = _normalize_summary_field(
+                nr_rows["detail_final"].replace({
+                    "": "N/A",
+                    "N/A": "N/A",
+                })
+            )
         else:
-            nr_rows["detail_final"] = _normalize_summary_field(pd.Series(["" for _ in range(len(nr_rows))], index=nr_rows.index))
+            nr_rows["detail_final"] = pd.Series(["N/A" for _ in range(len(nr_rows))], index=nr_rows.index)
 
         if mode == "default":
             grp = (
@@ -278,9 +283,14 @@ def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
         else:
             oth_rows["match_quality"] = _normalize_summary_field(pd.Series(["" for _ in range(len(oth_rows))], index=oth_rows.index))
         if "detail_final" in oth_rows.columns:
-            oth_rows["detail_final"] = _normalize_summary_field(oth_rows["detail_final"])
+            oth_rows["detail_final"] = _normalize_summary_field(
+                oth_rows["detail_final"].replace({
+                    "": "N/A",
+                    "N/A": "N/A",
+                })
+            )
         else:
-            oth_rows["detail_final"] = _normalize_summary_field(pd.Series(["" for _ in range(len(oth_rows))], index=oth_rows.index))
+            oth_rows["detail_final"] = pd.Series(["N/A" for _ in range(len(oth_rows))], index=oth_rows.index)
 
         grouped_oth = (
             oth_rows.groupby(["match_molecule(s)", "match_quality", "detail_final"], dropna=False)
