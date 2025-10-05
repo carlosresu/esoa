@@ -228,6 +228,9 @@ def build_features(
         pnf_trigram_holder[0] = {tri: values for tri, values in trigram_map.items()}
     _timed("Index PNF names", _pnf_map)
     pnf_name_set: Set[str] = set(pnf_name_to_gid.keys())
+    pnf_tokens: Set[str] = set()
+    for name in pnf_name_set:
+        pnf_tokens.update(_tokenize_unknowns(name))
     pnf_trigram_index: Dict[str, Set[str]] = pnf_trigram_holder[0] or {}
 
     # 3) WHO molecules (names + regex)
@@ -249,6 +252,9 @@ def build_features(
                 who_regex_box[0] = re.compile(r"\b(" + "|".join(map(re.escape, candidate_names)) + r")\b")
     _timed("Load WHO molecules", _load_who)
     who_regex = who_regex_box[0]
+    who_tokens: Set[str] = set()
+    for name in who_name_set:
+        who_tokens.update(_tokenize_unknowns(name))
 
     # 4) Brand map & FDA generics
     brand_df = [None]
@@ -279,6 +285,12 @@ def build_features(
         brand_lookup = {}
         fda_gens = set()
         brand_token_lookup = set()
+
+    fda_tokens: Set[str] = set()
+    for name in fda_gens:
+        fda_tokens.update(_tokenize_unknowns(name))
+
+    therapeutic_tokens: Set[str] = pnf_tokens | who_tokens | fda_tokens
 
     # 4b) FDA food/non-therapeutic catalog (optional, may not exist locally)
     nonthera_lookup: Dict[str, List[Dict[str, str]]] = {}
@@ -312,6 +324,17 @@ def build_features(
                 norm = _normalize_text_basic(_base_name(raw_value))
                 if not norm:
                     continue
+                tokens_raw = {m.group(0).lower() for m in GENERIC_TOKEN_RX.finditer(norm)}
+                filtered_tokens = {
+                    tok
+                    for tok in tokens_raw
+                    if len(tok) >= 3
+                    and tok not in therapeutic_tokens
+                    and tok not in STOPWORD_TOKENS
+                    and tok not in brand_token_lookup
+                }
+                if not filtered_tokens:
+                    continue
                 keys.add(norm)
                 detail = {
                     "brand_name": brand,
@@ -322,10 +345,8 @@ def build_features(
                     "match_value": raw_value,
                 }
                 nonthera_lookup.setdefault(norm, []).append(detail)
-                tokens = {m.group(0) for m in GENERIC_TOKEN_RX.finditer(norm)}
-                if tokens:
-                    existing = nonthera_token_lookup.setdefault(norm, set())
-                    existing.update(tokens)
+                existing = nonthera_token_lookup.setdefault(norm, set())
+                existing.update(filtered_tokens)
 
         if keys:
             auto = ahocorasick.Automaton()
@@ -383,7 +404,16 @@ def build_features(
                 detail_col.append("")
                 continue
 
-            matched_keys = {key for _, key in auto.iter(norm_text)}  # type: ignore[attr-defined]
+            matched_keys: Set[str] = set()
+            for end_idx, key in auto.iter(norm_text):  # type: ignore[attr-defined]
+                if key not in nonthera_token_lookup:
+                    continue
+                start_idx = end_idx - len(key) + 1
+                if start_idx > 0 and norm_text[start_idx - 1].isalnum():
+                    continue
+                if end_idx + 1 < len(norm_text) and norm_text[end_idx + 1].isalnum():
+                    continue
+                matched_keys.add(key)
             if not matched_keys:
                 hits_col.append([])
                 tokens_col.append([])
@@ -397,7 +427,9 @@ def build_features(
             for key in matched_keys:
                 for entry in nonthera_lookup.get(key, []):
                     details.append(entry)
-                    token_set.update(nonthera_token_lookup.get(key, {key}))
+                    tokens_for_key = nonthera_token_lookup.get(key)
+                    if tokens_for_key:
+                        token_set.update(tokens_for_key)
                     display = (entry.get("match_value") or entry.get("brand_name") or entry.get("product_name") or key).strip()
                     regno = (entry.get("registration_number") or "").strip()
                     if regno:
@@ -916,18 +948,6 @@ def build_features(
                 tokens.update(_tokenize_unknowns(_segment_norm(values)))
             return tokens
 
-        pnf_token_lookup: set[str] = set()
-        for name in pnf_name_set:
-            pnf_token_lookup.update(_tokenize_unknowns(name))
-
-        who_token_lookup: set[str] = set()
-        for name in who_name_set:
-            who_token_lookup.update(_tokenize_unknowns(name))
-
-        fda_token_lookup: set[str] = set()
-        for name in fda_gens:
-            fda_token_lookup.update(_tokenize_unknowns(name))
-
         def _unknown_kind_and_list(
             text_norm: str,
             matched_tokens: set[str],
@@ -939,9 +959,9 @@ def build_features(
             for t in all_toks:
                 if (
                     t not in matched_tokens
-                    and t not in pnf_token_lookup
-                    and t not in who_token_lookup
-                    and t not in fda_token_lookup
+                    and t not in pnf_tokens
+                    and t not in who_tokens
+                    and t not in fda_tokens
                     and t not in STOPWORD_TOKENS
                     and t not in nonthera_tokens
                     and t not in brand_token_lookup
