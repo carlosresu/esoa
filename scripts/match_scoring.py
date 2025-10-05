@@ -885,6 +885,10 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
         if not mask.any():
             continue
 
+        if reason == "Multiple - Some Unknown":
+            # Keep partial-unknown rows in the Needs review bucket; only annotate later via detail_final.
+            continue
+
         # Only fall back to the FDA food catalog when no molecule was identified in
         # PNF, WHO, or the FDA drug mappings. This preserves the desired
         # prioritization order (PNF → WHO → FDA drug → FDA food).
