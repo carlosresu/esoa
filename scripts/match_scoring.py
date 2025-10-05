@@ -634,8 +634,12 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     )
     # Confidence weights mirror README guidance: strong emphasis on generic (60), then dose/ATC proof points, with optional bonus for corroborated brand swaps.
     # Add a bonus for high-quality brand swaps that also satisfy form/route/dose checks.
+    if "brand_swap_added_generic" in out.columns:
+        brand_swap_added = out["brand_swap_added_generic"].astype(bool)
+    else:
+        brand_swap_added = out["did_brand_swap"].astype(bool)
     bonus_mask = (
-        out["did_brand_swap"].astype(bool)
+        brand_swap_added
         & out["form_ok"]
         & out["route_ok"]
         & (out["dose_sim"].fillna(0.0).astype(float) >= 1.0)
@@ -708,8 +712,8 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     out.loc[(~present_in_pnf) & present_in_who, "match_molecule(s)"] = "ValidMoleculeWithATCinWHO/NotInPNF"
     out.loc[(~present_in_pnf) & (~present_in_who) & present_in_fda, "match_molecule(s)"] = "ValidMoleculeNoATCinFDA/NotInPNF"
 
-    out.loc[out["did_brand_swap"].astype(bool) & present_in_who, "match_molecule(s)"] = "ValidBrandSwappedForMoleculeWithATCinWHO"
-    out.loc[out["did_brand_swap"].astype(bool) & present_in_pnf & has_atc_in_pnf, "match_molecule(s)"] = "ValidBrandSwappedForGenericInPNF"
+    out.loc[brand_swap_added & present_in_who, "match_molecule(s)"] = "ValidBrandSwappedForMoleculeWithATCinWHO"
+    out.loc[brand_swap_added & present_in_pnf & has_atc_in_pnf, "match_molecule(s)"] = "ValidBrandSwappedForGenericInPNF"
 
     def _unique_join(values: list[str]) -> str:
         seen: list[str] = []

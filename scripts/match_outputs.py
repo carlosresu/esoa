@@ -46,7 +46,7 @@ def _run_with_spinner(label: str, func: Callable[[], None]) -> float:
 OUTPUT_COLUMNS = [
     "esoa_idx","raw_text","parentheticals",
     "normalized","norm_compact","match_basis","match_basis_norm_basic",
-    "probable_brands","did_brand_swap","fda_dose_corroborated","fda_generics_list",
+    "probable_brands","did_brand_swap","brand_swap_added_generic","fda_dose_corroborated","fda_generics_list",
     "molecules_recognized","molecules_recognized_list","molecules_recognized_count",
     "dose_recognized","dosage_parsed_raw","dosage_parsed",
     "route_raw","form_raw","route_evidence_raw",
@@ -163,8 +163,12 @@ def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
             & aa_rows["route"].astype(str).ne("")
             & aa_rows["form"].astype(str).ne("")
         )
-        swapped_exact = aa_rows.loc[exact_mask & aa_rows["did_brand_swap"].astype(bool)]
-        clean_exact = aa_rows.loc[exact_mask & (~aa_rows["did_brand_swap"].astype(bool))]
+        if "brand_swap_added_generic" in aa_rows.columns:
+            swap_series = aa_rows["brand_swap_added_generic"].astype(bool)
+        else:
+            swap_series = aa_rows["did_brand_swap"].astype(bool)
+        swapped_exact = aa_rows.loc[exact_mask & swap_series]
+        clean_exact = aa_rows.loc[exact_mask & (~swap_series)]
 
         aa_breakdown = []
         if len(swapped_exact):
