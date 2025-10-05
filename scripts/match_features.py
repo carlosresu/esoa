@@ -565,6 +565,7 @@ def build_features(
         if not has_brandmap:
             df["match_basis"] = df["normalized"]
             df["did_brand_swap"] = False
+            df["brand_swap_added_generic"] = False
             df["fda_dose_corroborated"] = False
             df["probable_brands"] = ""
             df["fda_generics_list"] = [[] for _ in range(len(df))]
@@ -573,6 +574,7 @@ def build_features(
         fda_hits = []
         probable_brand_hits: List[str] = []
         fda_generics_lists: List[List[str]] = []
+        swap_inserted_flags: List[bool] = []
 
         def _clean_generic_for_swap(name: str) -> str:
             base = _base_name(name)
@@ -596,12 +598,12 @@ def build_features(
             for _, bn in B_comp.iter(comp):  # type: ignore
                 found_keys.append(bn); lengths[bn] = max(lengths.get(bn, 0), len(bn))
             if not found_keys:
-                mb_list.append(norm); swapped.append(False); fda_hits.append(False); probable_brand_hits.append(""); fda_generics_lists.append([]); continue
+                mb_list.append(norm); swapped.append(False); fda_hits.append(False); probable_brand_hits.append(""); fda_generics_lists.append([]); swap_inserted_flags.append(False); continue
             uniq_keys = list(dict.fromkeys(found_keys))
             # Prioritize longer matches first to favor more specific brand tokens.
             uniq_keys.sort(key=lambda k: (-lengths.get(k, len(k)), k))
 
-            out = norm; replaced_any = False
+            out = norm; replaced_any = False; inserted_generic = False
             primary_option = None
             for bn in uniq_keys:
                 options = brand_lookup.get(bn, [])
@@ -657,6 +659,7 @@ def build_features(
                 new_out = re.sub(rf"\b{re.escape(bn)}\b", gd_norm, out)
                 if new_out != out:
                     replaced_any = True
+                    inserted_generic = True
                     out = new_out
             out = re.sub(r"\s+", " ", out).strip()
             # FDA dose corroboration
@@ -668,7 +671,7 @@ def build_features(
             if not row_brand_labels and uniq_keys:
                 row_brand_labels.update(uniq_keys)
             labels_joined = "|".join(sorted(row_brand_labels)) if row_brand_labels else ""
-            mb_list.append(out); swapped.append(replaced_any); fda_hits.append(fda_hit); probable_brand_hits.append(labels_joined)
+            mb_list.append(out); swapped.append(replaced_any); swap_inserted_flags.append(inserted_generic); fda_hits.append(fda_hit); probable_brand_hits.append(labels_joined)
             uniq_generics: List[str] = []
             for g in row_generics_raw:
                 if g and g not in uniq_generics:
@@ -676,6 +679,7 @@ def build_features(
             fda_generics_lists.append(uniq_generics)
         df["match_basis"] = mb_list
         df["did_brand_swap"] = swapped
+        df["brand_swap_added_generic"] = swap_inserted_flags
         df["fda_dose_corroborated"] = fda_hits
         df["probable_brands"] = probable_brand_hits
         df["fda_generics_list"] = fda_generics_lists
