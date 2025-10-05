@@ -95,6 +95,7 @@ STOPWORD_TOKENS = (
     | {
         "ml","l","mg","g","mcg","ug","iu","lsu",
         "dose","dosing","unit","units","strength",
-        "solution","suspension","syrup"
+        "solution","suspension","syrup",
+        "bottle","bottles","box","boxes","sachet","sachets","container","containers"
     }
 )

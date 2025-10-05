@@ -913,37 +913,79 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
             out.loc[others_mask, "reason_final"] = _annotate_unknown_with_presence(reason, out.loc[others_mask].index)
 
     unknown_map = {
-        "Single - Unknown": "Unknown: Single - Unknown (unknown to PNF, WHO, FDA)",
-        "Multiple - All Unknown": "Unknown: Multiple - All Unknown (unknown to PNF, WHO, FDA)",
-        "Multiple - Some Unknown": "Unknown: Multiple - Some Unknown (some unknown to PNF, WHO, FDA)",
+        "Single - Unknown": "Unknown tokens present (Single - Unknown: term not found in PNF/WHO/FDA)",
+        "Multiple - All Unknown": "Unknown tokens present (Multiple - All Unknown: no tokens found in PNF/WHO/FDA)",
+        "Multiple - Some Unknown": "Unknown tokens present (Multiple - Some Unknown: some tokens missing from PNF/WHO/FDA)",
     }
     unknown_detail = out["unknown_kind"].map(unknown_map).fillna("")
 
-    if "non_therapeutic_detail" in out.columns:
-        nonthera_detail_text = (
-            out["non_therapeutic_detail"].fillna("").astype(str).replace({"nan": ""})
-        )
+    if "unknown_words_list" in out.columns:
+        unknown_tokens_col = out["unknown_words_list"]
     else:
-        nonthera_detail_text = pd.Series(["" for _ in range(len(out))], index=out.index)
+        unknown_tokens_col = pd.Series([[] for _ in range(len(out))], index=out.index)
 
     nonthera_label = nonthera_summary.fillna("").astype(str).replace({"nan": ""})
 
+    def _format_unknown_tokens(value: object) -> str:
+        tokens: list[str] = []
+        if isinstance(value, (list, tuple, set)):
+            for tok in value:
+                if isinstance(tok, str):
+                    token = tok.strip()
+                    if token and token.lower() != "nan" and token not in tokens:
+                        tokens.append(token)
+        return ", ".join(tokens[:5])
+
     detail_values: list[str] = []
-    for idx in out.index:
-        parts: list[str] = []
+    for pos, idx in enumerate(out.index):
+        descriptors: list[str] = []
         unk_label = unknown_detail.at[idx] if idx in unknown_detail.index else ""
         if unk_label:
-            parts.append(unk_label)
-        nonthera_summary_val = nonthera_label.at[idx] if idx in nonthera_label.index else ""
-        if nonthera_summary_val:
-            parts.append("Non-Therapeutic Medical Products")
-        detail_values.append(" | ".join(part for part in parts if part))
+            tokens_text = _format_unknown_tokens(unknown_tokens_col.iat[pos])  # type: ignore[index]
+            if tokens_text:
+                descriptors.append(f"{unk_label} [tokens: {tokens_text}]")
+            else:
+                descriptors.append(unk_label)
+        nonthera_flag = nonthera_label.at[idx] if idx in nonthera_label.index else ""
+        if nonthera_flag:
+            descriptors.append("Matches FDA food/non-therapeutic catalog")
+        detail_values.append("; ".join(descriptors))
     out["detail_final"] = detail_values
 
     remaining = out["bucket_final"].eq("")
     out.loc[remaining, "bucket_final"] = "Needs review"
     out.loc[remaining, "why_final"] = "Needs review"
     out.loc[remaining, "reason_final"] = _mk_reason(out.loc[remaining, "match_quality"], DEFAULT_METADATA_GAP_REASON)
+
+    residual_molecule = out["match_molecule(s)"].astype(str).str.strip().eq("")
+    residual_quality = out["match_quality"].astype(str).str.strip().eq("")
+    has_nonthera = nonthera_label.str.strip().ne("")
+    unknown_some = out["unknown_kind"].eq("Multiple - Some Unknown")
+    unknown_any = out["unknown_kind"].isin([
+        "Single - Unknown",
+        "Multiple - All Unknown",
+        "Multiple - Some Unknown",
+    ])
+
+    mask = residual_molecule & has_nonthera & unknown_some
+    if mask.any():
+        out.loc[mask, "match_molecule(s)"] = "NonTherapeuticFoodWithUnknownTokens"
+        out.loc[mask & residual_quality, "match_quality"] = "nontherapeutic_and_unknown_tokens"
+
+    mask = residual_molecule & has_nonthera & (~unknown_any)
+    if mask.any():
+        out.loc[mask, "match_molecule(s)"] = "NonTherapeuticFoodNoMolecule"
+        out.loc[mask & residual_quality, "match_quality"] = "nontherapeutic_catalog_match"
+
+    mask = residual_molecule & (~has_nonthera) & unknown_some
+    if mask.any():
+        out.loc[mask, "match_molecule(s)"] = "PartialUnknownTokens"
+        out.loc[mask & residual_quality, "match_quality"] = "unknown_tokens_present"
+
+    mask = residual_molecule & (~has_nonthera) & (~unknown_any)
+    if mask.any():
+        out.loc[mask, "match_molecule(s)"] = "NoStructuredSignalsDetected"
+        out.loc[mask & residual_quality, "match_quality"] = "manual_review_required"
 
     if "dose_recognized" in out.columns:
         out["dose_recognized"] = np.where(out["dose_sim"].astype(float) == 1.0, out["dose_recognized"], "N/A")
