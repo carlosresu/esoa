@@ -678,6 +678,7 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     out["reason_final"] = ""
     out["match_quality"] = ""
     out["match_molecule(s)"] = ""
+    out["detail_final"] = ""
 
     missing_strings: list[str] = []
     for has_dose, has_form, has_route in zip(dose_present, form_present, route_present):
@@ -711,6 +712,9 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     out.loc[present_in_pnf & has_atc_in_pnf, "match_molecule(s)"] = "ValidMoleculeWithATCinPNF"
     out.loc[(~present_in_pnf) & present_in_who, "match_molecule(s)"] = "ValidMoleculeWithATCinWHO/NotInPNF"
     out.loc[(~present_in_pnf) & (~present_in_who) & present_in_fda, "match_molecule(s)"] = "ValidMoleculeNoATCinFDA/NotInPNF"
+
+    pnf_without_atc = present_in_pnf & (~has_atc_in_pnf) & out["match_molecule(s)"].eq("")
+    out.loc[pnf_without_atc, "match_molecule(s)"] = "ValidMoleculeNoATCinPNF"
 
     out.loc[brand_swap_added & present_in_who, "match_molecule(s)"] = "ValidBrandSwappedForMoleculeWithATCinWHO"
     out.loc[brand_swap_added & present_in_pnf & has_atc_in_pnf, "match_molecule(s)"] = "ValidBrandSwappedForGenericInPNF"
@@ -903,6 +907,39 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
             out.loc[others_mask, "bucket_final"] = "Others"
             out.loc[others_mask, "why_final"] = "Unknown"
             out.loc[others_mask, "reason_final"] = _annotate_unknown_with_presence(reason, out.loc[others_mask].index)
+
+    unknown_map = {
+        "Single - Unknown": "Unknown: Single - Unknown (unknown to PNF, WHO, FDA)",
+        "Multiple - All Unknown": "Unknown: Multiple - All Unknown (unknown to PNF, WHO, FDA)",
+        "Multiple - Some Unknown": "Unknown: Multiple - Some Unknown (some unknown to PNF, WHO, FDA)",
+    }
+    unknown_detail = out["unknown_kind"].map(unknown_map).fillna("")
+
+    if "non_therapeutic_detail" in out.columns:
+        nonthera_detail_text = (
+            out["non_therapeutic_detail"].fillna("").astype(str).replace({"nan": ""})
+        )
+    else:
+        nonthera_detail_text = pd.Series(["" for _ in range(len(out))], index=out.index)
+
+    nonthera_label = nonthera_summary.fillna("").astype(str).replace({"nan": ""})
+
+    detail_values: list[str] = []
+    for idx in out.index:
+        parts: list[str] = []
+        unk_label = unknown_detail.at[idx] if idx in unknown_detail.index else ""
+        if unk_label:
+            parts.append(unk_label)
+        nonthera_summary_val = nonthera_label.at[idx] if idx in nonthera_label.index else ""
+        if nonthera_summary_val:
+            label = f"Non-Therapeutic Medical Products: {nonthera_summary_val}"
+            detail_text = nonthera_detail_text.at[idx] if idx in nonthera_detail_text.index else ""
+            detail_text = str(detail_text).strip()
+            if detail_text:
+                label = f"{label} – {detail_text}"
+            parts.append(label)
+        detail_values.append(" | ".join(parts))
+    out["detail_final"] = detail_values
 
     remaining = out["bucket_final"].eq("")
     out.loc[remaining, "bucket_final"] = "Needs review"
