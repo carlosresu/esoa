@@ -926,26 +926,12 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
 
     nonthera_label = nonthera_summary.fillna("").astype(str).replace({"nan": ""})
 
-    def _format_unknown_tokens(value: object) -> str:
-        tokens: list[str] = []
-        if isinstance(value, (list, tuple, set)):
-            for tok in value:
-                if isinstance(tok, str):
-                    token = tok.strip()
-                    if token and token.lower() != "nan" and token not in tokens:
-                        tokens.append(token)
-        return ", ".join(tokens[:5])
-
     detail_values: list[str] = []
     for pos, idx in enumerate(out.index):
         descriptors: list[str] = []
         unk_label = unknown_detail.at[idx] if idx in unknown_detail.index else ""
         if unk_label:
-            tokens_text = _format_unknown_tokens(unknown_tokens_col.iat[pos])  # type: ignore[index]
-            if tokens_text:
-                descriptors.append(f"{unk_label} [tokens: {tokens_text}]")
-            else:
-                descriptors.append(unk_label)
+            descriptors.append(unk_label)
         nonthera_flag = nonthera_label.at[idx] if idx in nonthera_label.index else ""
         if nonthera_flag:
             descriptors.append("Matches FDA food/non-therapeutic catalog")
