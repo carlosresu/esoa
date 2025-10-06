@@ -61,6 +61,7 @@ OUTPUT_COLUMNS = [
     "dose_sim","looks_combo_final","combo_reason","combo_known_generics_count",
     "non_therapeutic_summary","non_therapeutic_detail","non_therapeutic_tokens","non_therapeutic_hits","non_therapeutic_best",
     "unknown_kind","unknown_words_list","unknown_words",
+    "qty_pnf","qty_who","qty_fda_drug","qty_fda_food","qty_unknown",
     "atc_code_final","confidence",
     "match_molecule(s)","match_quality","detail_final",
     "bucket_final","why_final","reason_final",
@@ -151,211 +152,77 @@ def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
     """Produce human-readable distribution summaries for review files."""
     total = len(out_small)
     lines: List[str] = ["Distribution Summary"]
+    qty_columns = ["qty_pnf", "qty_who", "qty_fda_drug", "qty_fda_food", "qty_unknown"]
+    bucket_order = ["Auto-Accept", "Candidates", "Needs review", "Unknown"]
 
-    def _normalize_summary_field(series: pd.Series) -> pd.Series:
-        cleaned: List[str] = []
-        for val in series.tolist():
-            if pd.isna(val):
-                cleaned.append("N/A")
-                continue
-            text = str(val).strip()
-            if not text or text.lower() == "nan":
-                cleaned.append("N/A")
+    def _render_qty_line(bucket_df: pd.DataFrame) -> str:
+        summaries: dict[str, int] = {}
+        for col in qty_columns:
+            if col in bucket_df.columns:
+                summaries[col] = int(pd.to_numeric(bucket_df[col], errors="coerce").fillna(0).astype(int).sum())
             else:
-                cleaned.append(text)
-        return pd.Series(cleaned, index=series.index)
-
-    # Auto-Accept
-    aa_rows = out_small.loc[out_small["bucket_final"].eq("Auto-Accept")].copy()
-    aa = int(len(aa_rows)) if total else 0
-    aa_pct = round(aa / float(total) * 100, 2) if total else 0.0
-    lines.append(f"Auto-Accept: {aa:,} ({aa_pct}%)")
-    if aa:
-        if "match_molecule(s)" in aa_rows.columns:
-            aa_rows["match_molecule(s)"] = _normalize_summary_field(aa_rows["match_molecule(s)"])
-        else:
-            aa_rows["match_molecule(s)"] = _normalize_summary_field(pd.Series(["" for _ in range(len(aa_rows))], index=aa_rows.index))
-        if "match_quality" in aa_rows.columns:
-            aa_rows["match_quality"] = _normalize_summary_field(aa_rows["match_quality"])
-        else:
-            aa_rows["match_quality"] = _normalize_summary_field(pd.Series(["" for _ in range(len(aa_rows))], index=aa_rows.index))
-
-        if mode == "default":
-            grp = (
-                aa_rows.groupby(["match_molecule(s)", "match_quality"], dropna=False)
-                .size()
-                .reset_index(name="n")
-            )
-            grp["pct"] = (grp["n"] / float(total) * 100).round(2) if total else 0.0
-            grp = grp.sort_values(by=["n", "match_molecule(s)", "match_quality"], ascending=[False, True, True])
-            for _, row in grp.iterrows():
-                lines.append(
-                    f"  {row['match_molecule(s)']}: {row['match_quality']}: {row['n']:,} ({row['pct']}%)"
-                )
-        elif mode == "molecule":
-            grp = (
-                aa_rows.groupby(["match_molecule(s)"] , dropna=False)
-                .size()
-                .reset_index(name="n")
-            )
-            grp["pct"] = (grp["n"] / float(total) * 100).round(2) if total else 0.0
-            grp = grp.sort_values(by=["n", "match_molecule(s)"] , ascending=[False, True])
-            for _, row in grp.iterrows():
-                lines.append(f"  {row['match_molecule(s)']}: {row['n']:,} ({row['pct']}%)")
-        elif mode == "match":
-            grp = (
-                aa_rows.groupby(["match_quality"], dropna=False)
-                .size()
-                .reset_index(name="n")
-            )
-            grp["pct"] = (grp["n"] / float(total) * 100).round(2) if total else 0.0
-            grp = grp.sort_values(by=["n", "match_quality"], ascending=[False, True])
-            for _, row in grp.iterrows():
-                lines.append(f"  {row['match_quality']}: {row['n']:,} ({row['pct']}%)")
-
-    # Needs review
-    nr_rows = out_small.loc[out_small["bucket_final"].eq("Needs review")].copy()
-    nr = int(len(nr_rows))
-    nr_pct = round(nr / float(total) * 100, 2) if total else 0.0
-    lines.append(f"Needs review: {nr:,} ({nr_pct}%)")
-    if nr:
-        if "match_molecule(s)" in nr_rows.columns:
-            nr_rows["match_molecule(s)"] = _normalize_summary_field(nr_rows["match_molecule(s)"])
-        else:
-            nr_rows["match_molecule(s)"] = _normalize_summary_field(pd.Series(["" for _ in range(len(nr_rows))], index=nr_rows.index))
-        if "match_quality" in nr_rows.columns:
-            nr_rows["match_quality"] = _normalize_summary_field(nr_rows["match_quality"])
-        else:
-            nr_rows["match_quality"] = _normalize_summary_field(pd.Series(["" for _ in range(len(nr_rows))], index=nr_rows.index))
-        if "detail_final" in nr_rows.columns:
-            nr_rows["detail_final"] = _normalize_summary_field(
-                nr_rows["detail_final"].replace({
-                    "": "N/A",
-                    "N/A": "N/A",
-                })
-            )
-            # Collapse unknown-token counts so the Needs review summary only
-            # differentiates between single versus multiple unknowns. This keeps
-            # the Others bucket as the sole place with precise token counts.
-            collapsed_details: List[str] = []
-            for detail in nr_rows["detail_final"]:
-                if detail == "N/A":
-                    collapsed_details.append(detail)
-                    continue
-
-                parts = [segment.strip() for segment in detail.split(";") if segment.strip()]
-                rewritten: List[str] = []
-                replaced = False
-                for segment in parts:
-                    match = re.search(r"^Unknown tokens:\s*(\d+)", segment)
-                    if match:
-                        label = "ContainsUnknown(s)"
-                        if label not in rewritten:
-                            rewritten.append(label)
-                        replaced = True
-                    else:
-                        rewritten.append(segment)
-                if not replaced and not rewritten:
-                    collapsed_details.append("N/A")
-                else:
-                    collapsed_details.append("; ".join(rewritten) if rewritten else "N/A")
-            nr_rows["detail_final"] = pd.Series(collapsed_details, index=nr_rows.index)
-        else:
-            nr_rows["detail_final"] = pd.Series(["N/A" for _ in range(len(nr_rows))], index=nr_rows.index)
-
-        if mode == "default":
-            grp = (
-                nr_rows.groupby(["match_molecule(s)", "match_quality", "detail_final"], dropna=False)
-                .size()
-                .reset_index(name="n")
-            )
-            grp["pct"] = (grp["n"] / float(total) * 100).round(2) if total else 0.0
-            grp = grp.sort_values(by=["n", "match_molecule(s)", "match_quality", "detail_final"], ascending=[False, True, True, True])
-            for _, row in grp.iterrows():
-                # Provide molecule + quality + detail breakdown when using the default summary.
-                lines.append(
-                    f"  {row['match_molecule(s)']}: {row['match_quality']}: {row['detail_final']}: {row['n']:,} ({row['pct']}%)"
-                )
-        elif mode == "molecule":
-            grp = (
-                nr_rows.groupby(["match_molecule(s)"], dropna=False)
-                .size()
-                .reset_index(name="n")
-            )
-            grp["pct"] = (grp["n"] / float(total) * 100).round(2) if total else 0.0
-            grp = grp.sort_values(by=["n", "match_molecule(s)"], ascending=[False, True])
-            for _, row in grp.iterrows():
-                # Summarize purely by molecule when requested.
-                lines.append(f"  {row['match_molecule(s)']}: {row['n']:,} ({row['pct']}%)")
-        elif mode == "match":
-            grp = (
-                nr_rows.groupby(["match_quality"], dropna=False)
-                .size()
-                .reset_index(name="n")
-            )
-            grp["pct"] = (grp["n"] / float(total) * 100).round(2) if total else 0.0
-            grp = grp.sort_values(by=["n", "match_quality"], ascending=[False, True])
-            for _, row in grp.iterrows():
-                # Provide a condensed breakdown keyed only by match quality.
-                lines.append(f"  {row['match_quality']}: {row['n']:,} ({row['pct']}%)")
-
-    # Others
-    oth_rows = out_small.loc[out_small["bucket_final"].eq("Others")].copy()
-    oth = int(len(oth_rows))
-    oth_pct = round(oth / float(total) * 100, 2) if total else 0.0
-    lines.append(f"Others: {oth:,} ({oth_pct}%)")
-    if oth:
-        if "match_molecule(s)" in oth_rows.columns:
-            oth_rows["match_molecule(s)"] = _normalize_summary_field(oth_rows["match_molecule(s)"])
-        else:
-            oth_rows["match_molecule(s)"] = _normalize_summary_field(pd.Series(["" for _ in range(len(oth_rows))], index=oth_rows.index))
-        if "match_quality" in oth_rows.columns:
-            oth_rows["match_quality"] = _normalize_summary_field(oth_rows["match_quality"])
-        else:
-            oth_rows["match_quality"] = _normalize_summary_field(pd.Series(["" for _ in range(len(oth_rows))], index=oth_rows.index))
-        if "detail_final" in oth_rows.columns:
-            oth_rows["detail_final"] = _normalize_summary_field(
-                oth_rows["detail_final"].replace({
-                    "": "N/A",
-                    "N/A": "N/A",
-                })
-            )
-        else:
-            oth_rows["detail_final"] = pd.Series(["N/A" for _ in range(len(oth_rows))], index=oth_rows.index)
-
-        grouped_oth = (
-            oth_rows.groupby(["match_molecule(s)", "match_quality", "detail_final"], dropna=False)
-            .size()
-            .reset_index(name="n")
+                summaries[col] = 0
+        return (
+            f"  PNF: {summaries['qty_pnf']:,}, WHO: {summaries['qty_who']:,}, "
+            f"FDA drug: {summaries['qty_fda_drug']:,}, FDA food: {summaries['qty_fda_food']:,}, "
+            f"Unknowns: {summaries['qty_unknown']:,}"
         )
-        grouped_oth["pct"] = (grouped_oth["n"] / float(total) * 100).round(2) if total else 0.0
-        grouped_oth = grouped_oth.sort_values(by=["n", "match_molecule(s)", "match_quality", "detail_final"], ascending=[False, True, True, True])
-        for _, row in grouped_oth.iterrows():
-            lines.append(
-                f"  {row['match_molecule(s)']}: {row['match_quality']}: {row['detail_final']}: {row['n']:,} ({row['pct']}%)"
-            )
 
-    # Any remaining buckets (e.g., specialized Others buckets)
-    handled_buckets = {"Auto-Accept", "Needs review", "Others"}
-    for bucket in sorted(out_small["bucket_final"].dropna().unique()):
-        if bucket in handled_buckets:
-            continue
+    def _append_top_values(bucket_df: pd.DataFrame, column: str, label: str, limit: int = 5) -> None:
+        if column not in bucket_df.columns:
+            return
+        series = (
+            bucket_df[column]
+            .fillna("N/A")
+            .astype(str)
+            .str.strip()
+            .replace({"": "N/A"})
+        )
+        top = series.value_counts().head(limit)
+        bucket_count = int(len(bucket_df)) or 1
+        for value, count in top.items():
+            pct_local = round(count / float(bucket_count) * 100, 2)
+            lines.append(f"    {label}: {value}: {count:,} ({pct_local}%)")
+
+    for bucket in bucket_order:
         bucket_rows = out_small.loc[out_small["bucket_final"].eq(bucket)].copy()
         count = int(len(bucket_rows))
         pct = round(count / float(total) * 100, 2) if total else 0.0
         lines.append(f"{bucket}: {count:,} ({pct}%)")
         if count:
-            grp = (
-                bucket_rows.groupby(["why_final", "reason_final"], dropna=False)
-                .size()
-                .reset_index(name="n")
-            )
-            grp["pct"] = (grp["n"] / float(total) * 100).round(2) if total else 0.0
-            grp = grp.sort_values(by=["n", "why_final", "reason_final"], ascending=[False, True, True])
-            for _, row in grp.iterrows():
-                lines.append(f"  {row['why_final']}: {row['reason_final']}: {row['n']:,} ({row['pct']}%)")
+            lines.append(_render_qty_line(bucket_rows))
+            if mode == "default" and "match_quality" in bucket_rows.columns:
+                _append_top_values(bucket_rows, "match_quality", "Match quality")
+            elif mode == "molecule" and "match_molecule(s)" in bucket_rows.columns:
+                _append_top_values(bucket_rows, "match_molecule(s)", "Molecule")
+            elif mode == "match" and "match_quality" in bucket_rows.columns:
+                _append_top_values(bucket_rows, "match_quality", "Match quality")
+
+    remaining = [
+        bucket
+        for bucket in out_small.get("bucket_final", pd.Series(dtype=str)).dropna().unique()
+        if bucket not in bucket_order
+    ]
+    for bucket in sorted(remaining):
+        bucket_rows = out_small.loc[out_small["bucket_final"].eq(bucket)].copy()
+        count = int(len(bucket_rows))
+        pct = round(count / float(total) * 100, 2) if total else 0.0
+        lines.append(f"{bucket}: {count:,} ({pct}%)")
+        if count:
+            lines.append(_render_qty_line(bucket_rows))
+            if "why_final" in bucket_rows.columns and "reason_final" in bucket_rows.columns:
+                grouped = (
+                    bucket_rows.groupby(["why_final", "reason_final"], dropna=False)
+                    .size()
+                    .reset_index(name="n")
+                    .sort_values(by=["n", "why_final", "reason_final"], ascending=[False, True, True])
+                )
+                for _, row in grouped.head(5).iterrows():
+                    pct_local = round(row["n"] / float(count) * 100, 2) if count else 0.0
+                    lines.append(f"    {row['why_final']}: {row['reason_final']}: {int(row['n']):,} ({pct_local}%)")
 
     return lines
+
 
 
 def _write_summary_text(out_small: pd.DataFrame, out_csv: str) -> None:

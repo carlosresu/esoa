@@ -158,7 +158,7 @@ Supervisor input needed
 
 - Optionally loads `inputs/fda_food_products.csv` (scraped via `scripts/fda_ph_food_scraper.py`) and builds an automaton of brand and product strings.
 - Captures every hit in `non_therapeutic_hits`, distills canonical tokens in `non_therapeutic_tokens`, and highlights the highest scoring entry in `non_therapeutic_best`/`non_therapeutic_detail` so reviewers can see which registration number or company triggered the flag.
-- When a line resolves to an FDA food/non-therapeutic item and no PNF/WHO/FDA-drug molecule exists, scoring routes the row to the `Others` bucket with `why_final = "Non-Therapeutic Medical Products"` and `reason_final = "non_therapeutic_detected"`.
+- When a line resolves to an FDA food/non-therapeutic item and no PNF/WHO/FDA-drug molecule exists, scoring routes the row to the `Unknown` bucket with `why_final = "Unknown"` and `reason_final = "non_therapeutic_detected"`.
 - Tokens from the catalog are excluded from `unknown_words` so food-only strings don’t pollute the missed-generic report.
 
 Public health/program implications
@@ -168,7 +168,7 @@ Identifying non-therapeutic entries early keeps food supplements and supply item
 Supervisor input needed
 
 - Confirm whether additional FDA or DOH catalogs should be merged to expand the non-therapeutic detection net.
-- Decide if certain borderline items (e.g., nutraceuticals) should escalate to review instead of landing directly in the Others bucket.
+- Decide if certain borderline items (e.g., nutraceuticals) should escalate to review instead of landing directly in the Unknown bucket.
 
 ---
 
@@ -265,25 +265,23 @@ Key columns to review inside `outputs/esoa_matched.csv` include:
 - `molecules_recognized` — the canonical pipe-delimited list of generics the scorer accepts for ATC alignment and downstream matching
 - `generic_final` — the normalized molecule identifier(s) the pipeline ultimately relied on (PNF `generic_id`, WHO molecule, or FDA generic fallback)
 - `probable_brands` — FDA brand display names detected before any swap, useful for auditing `did_brand_swap` outcomes
+- `qty_pnf` / `qty_who` / `qty_fda_drug` / `qty_fda_food` / `qty_unknown` — integer roll-ups that quantify how each source (and unresolved tokens) contributed to the row; the distribution summaries aggregate these columns per bucket.
 
 The complete column reference lives in `data_dictionary.md`.
 
-Example summary (values from a historical run; your counts will vary):
+Example summary (structure of the new distribution report — counts below are illustrative):
 
 Distribution Summary  
 Auto-Accept: 17,089 (15.16%)  
- brand→generic swap: 12,255 (10.88%)  
- OK, no changes: 4,834 (4.29%)  
-Needs review: 77,305 (68.6%)  
- Needs review: no/poor dose match: 38,942 (34.56%)  
- Needs review: no/poor form match: 23,333 (20.71%)  
- Needs review: no/poor route match: 12 (0.01%)  
- Needs review: no/poor dose/form/route: 5,389 (4.78%)  
-Valid Molecule with ATC (WHO/FDA, not in PNF): 9,629 (8.55%)  
-Others: 18,295 (16.23%)  
- Unknown: Multiple - All Unknown: 13,760 (12.21%)  
- Unknown: Multiple - Some Unknown: 2,812 (2.5%)  
- Unknown: Single - Unknown: 1,723 (1.53%)
+  PNF: 18,002, WHO: 0, FDA drug: 1,134, FDA food: 0, Unknowns: 0  
+Candidates: 45,021 (39.93%)  
+  PNF: 26,407, WHO: 15,662, FDA drug: 5,113, FDA food: 0, Unknowns: 0  
+Needs review: 42,284 (37.53%)  
+  PNF: 18,990, WHO: 11,227, FDA drug: 6,315, FDA food: 1,440, Unknowns: 9,806  
+Unknown: 9,836 (7.38%)  
+  PNF: 0, WHO: 0, FDA drug: 0, FDA food: 3,245, Unknowns: 16,912
+
+Additional lines list the top molecules or match-quality drivers per bucket when `summary_molecule.txt` or `summary_match.txt` is requested.
 
 ---
 
