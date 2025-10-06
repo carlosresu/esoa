@@ -703,6 +703,7 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     has_nonthera = nonthera_summary.str.strip().ne("")
     probable_atc_series = out["probable_atc"].fillna("").astype(str)
     has_probable_atc = probable_atc_series.str.strip().ne("")
+    has_atc_in_pnf = atc_present
     has_any_atc = has_atc_in_pnf | has_probable_atc
 
     out["bucket_final"] = ""
@@ -735,7 +736,6 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     present_in_pnf = out["present_in_pnf"].astype(bool)
     present_in_who = out["present_in_who"].astype(bool)
     present_in_fda = out["present_in_fda_generic"].astype(bool)
-    has_atc_in_pnf = atc_present
     who_route_lists = [tokens if isinstance(tokens, list) else [] for tokens in out.get("who_route_tokens", [[] for _ in range(len(out))])]
     who_route_sets = [set(tokens) for tokens in who_route_lists]
     who_route_info_available = pd.Series([bool(tokens) for tokens in who_route_sets], index=out.index)
