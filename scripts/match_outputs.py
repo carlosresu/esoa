@@ -250,7 +250,7 @@ def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
                     match = re.search(r"^Unknown tokens:\s*(\d+)", segment)
                     if match:
                         count = int(match.group(1))
-                        label = "Unknown tokens remaining: one" if count == 1 else "Unknown tokens remaining: multiple"
+                        label = "ContainsUnknowns: One" if count == 1 else "ContainsUnknowns: Multiple"
                         rewritten.append(label)
                         replaced = True
                     else:
