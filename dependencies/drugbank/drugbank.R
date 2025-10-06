@@ -54,6 +54,7 @@ english_synonyms <- dataset$drugs$synonyms %>%
   transmute(name = normalize_name(synonym)) %>%
   filter(!is.na(name), name != "") %>%
   filter(!str_detect(name, "[-+(),'/]")) %>%
+  filter(!str_detect(name, "[0-9]")) %>%
   distinct(name) %>%
   arrange(name)
 
