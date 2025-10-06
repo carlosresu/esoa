@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import ast
+import re
 
 import numpy as np
 import pandas as pd
@@ -972,12 +973,26 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
 
     unknown_counts = unknown_tokens_col.map(_unknown_count)
 
+    fallback_mask = out["match_molecule(s)"].astype(str).isin(
+        [
+            "AllTokensUnknownTo_PNF_WHO_FDA",
+            "RowFailedAllMatchingSteps",
+            "NonTherapeuticCatalogOnly",
+        ]
+    )
+    fallback_counts = (
+        out["match_basis"].fillna("")
+        .astype(str)
+        .map(lambda text: len(re.findall(r"[a-z]+", text.lower())))
+    )
+    unknown_counts = unknown_counts.where(~((unknown_counts == 0) & fallback_mask), fallback_counts)
+
     nonthera_label = nonthera_summary.fillna("").astype(str).replace({"nan": ""})
 
     detail_values: list[str] = []
     for pos, idx in enumerate(out.index):
         descriptors: list[str] = []
-        count_unknown = unknown_counts.iat[pos] if pos < len(unknown_counts) else 0
+        count_unknown = int(unknown_counts.iloc[pos]) if pos < len(unknown_counts) else 0
         if count_unknown:
             descriptors.append(f"Unknown tokens: {count_unknown}")
         nonthera_flag = nonthera_label.at[idx] if idx in nonthera_label.index else ""
@@ -1042,8 +1057,11 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
 
     mask = residual_molecule & (~has_nonthera) & (~unknown_any)
     if mask.any():
-        out.loc[mask, "match_molecule(s)"] = "NoReferenceCatalogMatches"
-        out.loc[mask & residual_quality, "match_quality"] = "no_reference_catalog_match"
+        out.loc[mask, "bucket_final"] = "Others"
+        out.loc[mask, "why_final"] = "Unknown"
+        out.loc[mask, "reason_final"] = "no_reference_catalog_match"
+        out.loc[mask, "match_molecule(s)"] = "RowFailedAllMatchingSteps"
+        out.loc[mask, "match_quality"] = "N/A"
 
     if "dose_recognized" in out.columns:
         out["dose_recognized"] = np.where(out["dose_sim"].astype(float) == 1.0, out["dose_recognized"], "N/A")
