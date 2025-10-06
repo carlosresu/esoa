@@ -192,10 +192,22 @@ def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
                 .reset_index(name="n")
                 .sort_values(by=["n", "match_molecule", "match_quality"], ascending=[False, True, True])
             )
-            for _, row in grouped.head(5).iterrows():
+            top_rows = grouped.head(5)
+            shown = int(top_rows["n"].sum())
+            for _, row in top_rows.iterrows():
                 pct_total = round(row["n"] / float(total) * 100, 2) if total else 0.0
+                pct_bucket = round(row["n"] / float(count) * 100, 2) if count else 0.0
                 lines.append(
-                    f"  {row['match_molecule']}: {row['match_quality']}: {int(row['n']):,} ({pct_total}%)"
+                    f"  {row['match_molecule']}: {row['match_quality']}: {int(row['n']):,} "
+                    f"({pct_total}% of total, {pct_bucket}% of bucket)"
+                )
+            remainder = count - shown
+            if remainder > 0:
+                pct_total_remainder = round(remainder / float(total) * 100, 2) if total else 0.0
+                pct_bucket_remainder = round(remainder / float(count) * 100, 2) if count else 0.0
+                lines.append(
+                    f"  Other combinations: {remainder:,} "
+                    f"({pct_total_remainder}% of total, {pct_bucket_remainder}% of bucket)"
                 )
 
         for bucket in bucket_order:
