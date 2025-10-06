@@ -148,6 +148,7 @@ table when validating new data or onboarding reviewers.
 - `PartiallyKnownTokensFrom_<sources>` – Some tokens remain unmatched even after PNF/WHO/FDA drug lookups; the suffix enumerates the datasets (e.g., `PartiallyKnownTokensFrom_PNF_WHO`, `PartiallyKnownTokensFrom_None`) that covered the known portion of the string.
 - `NoReferenceCatalogMatches` – No PNF/WHO/FDA drug or FDA food catalog entries matched any tokens; requires manual inspection.
 - `AllTokensUnknownTo_PNF_WHO_FDA` – No catalog (PNF/WHO/FDA) recognized any token in the row; all tokens remain unknown and the row is routed to the Others bucket.
+- `RowFailedAllMatchingSteps` – All reference matching stages failed; no catalogs provided coverage.
 
 **`match_quality` review / auto-accept tags**
 
@@ -167,7 +168,6 @@ table when validating new data or onboarding reviewers.
 - `nontherapeutic_catalog_match` – FDA food/non-therapeutic catalog match with no corroborated therapeutic molecule.
 - `unknown_tokens_present` – Partial unknown tokens remain after matching against PNF, WHO, and FDA drug lists.
 - `manual_review_required` – No structured matches materialized; escalated for human triage.
-- `no_reference_catalog_match` – No reference catalog (PNF/WHO/FDA/FDA food) recognized any tokens; manual reconciliation required.
 
 **`match_quality` review flags**
 
