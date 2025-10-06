@@ -28,6 +28,7 @@ table when validating new data or onboarding reviewers.
 | `brand_swap_added_generic` | `True` only when the swap inserted new generic tokens into the text. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Drives the +10 confidence bonus once dose/form/route stay aligned. |
 | `fda_dose_corroborated` | `True` when FDA metadata confirms the detected dose. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Requires both a brand swap and matching FDA dose string. |
 | `fda_generics_list` | Canonical FDA generics surfaced during brand swaps. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Serialized as a pipe-delimited string during export; informs `generic_final` fallback. |
+| `drugbank_generics_list` | DrugBank generics detected after brand swaps. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Serialized to a pipe-delimited string; fuels `present_in_drugbank` and `qty_drugbank`. |
 
 ## Dose, Route, and Form Parsing
 
@@ -60,6 +61,7 @@ table when validating new data or onboarding reviewers.
 | `present_in_pnf` | `True` when `match_basis` hit at least one non-salt PNF entry. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Set after salt filtering and partial fallback. |
 | `present_in_who` | `True` when WHO detection produced any ATC code. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Derived from `who_atc_codes`. |
 | `present_in_fda_generic` | `True` when FDA generic tokens appear in `match_basis`. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Highlights text already aligned with FDA generics. |
+| `present_in_drugbank` | `True` when any DrugBank generic matched after swaps. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Supports classification when only DrugBank synonyms explain the text. |
 | `probable_atc` | WHO ATC suggestion when no PNF match exists but WHO coverage does. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Empty string otherwise. |
 
 ## PNF Hit Diagnostics
@@ -116,6 +118,7 @@ table when validating new data or onboarding reviewers.
 | `qty_pnf` | Count of tokens attributed to PNF matches for the row. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Summed in summaries to show PNF coverage per bucket. |
 | `qty_who` | Count of WHO molecule hits contributing to the row. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Excludes PNF overlaps; used in bucket summaries. |
 | `qty_fda_drug` | Count of FDA brand→generic detections that survived scoring. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Helps quantify reliance on FDA mappings. |
+| `qty_drugbank` | Count of DrugBank generics matched in the row. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Indicates fallback coverage provided by DrugBank synonyms. |
 | `qty_fda_food` | Count of FDA food / non-therapeutic catalog tokens matched. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Highlights non-therapeutic influence within each bucket. |
 | `qty_unknown` | Final count of unresolved tokens after fallback heuristics. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Includes fallback counts when `unknown_words_list` is empty but the row failed matching. |
 
