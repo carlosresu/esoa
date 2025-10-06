@@ -146,6 +146,7 @@ When `bucket_final` stays `Needs review`, downstream summaries pair `match_molec
 - Approved route/form substitutions (e.g., sachet counted as tablet) are folded into these tags and no longer tracked separately.
 - `nontherapeutic_and_unknown_tokens` / `nontherapeutic_catalog_match` – FDA food/non-therapeutic catalog hits, optionally with residual unknown tokens.
 - `unknown_tokens_present` – Partial unknown tokens remain even after PNF/WHO/FDA lookups; see `match_molecule(s)` suffix (e.g., `PartiallyKnownTokensFrom_PNF_WHO`) for which datasets covered the known portion.
+- `AllTokensUnknownTo_PNF_WHO_FDA` – No catalog matched any token; routed to Others with `match_quality = N/A` and `detail_final` showing the exact count of unknown tokens remaining.
 - `manual_review_required` – No structured signals materialised; requires human triage.
 - `route_mismatch` – The text points to an unverified molecule and also carries a route conflict. Resolve the molecule identification and the route evidence.
 - `no_dose_available` – No reference match plus a missing dose. Provide dose context or determine if the entry should be excluded.

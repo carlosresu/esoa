@@ -132,7 +132,7 @@ table when validating new data or onboarding reviewers.
 | `match_molecule(s)` | Source labels describing which reference validated the molecule (PNF/WHO/FDA/brand). | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Drives reporting pivots. |
 | `generic_final` | Canonical molecule identifier(s) chosen after PNF→WHO→FDA fallback. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Pipe-delimited string; prefers `generic_id`, else WHO molecules, else FDA generics derived from alias/fuzzy matching. |
 | `match_quality` | Summary tag indicating why a row auto-accepted or still needs review. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Always populated; see the list of enumerated values below. |
-| `detail_final` | Supplemental descriptors describing unknown-token and FDA food detection outcomes. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Semicolon-separated phrases (no raw tokens) that can include the involved catalog datastores (PNF/WHO/FDA). |
+| `detail_final` | Supplemental descriptors describing unknown-token counts and FDA food detection outcomes. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Semicolon-separated phrases (no raw tokens); when unknown tokens remain, shows `Unknown tokens remaining: <count>`. |
 
 **`match_molecule(s)` values in daily reporting**
 
@@ -146,6 +146,7 @@ table when validating new data or onboarding reviewers.
 - `NonTherapeuticFoodNoMolecule` – FDA food/non-therapeutic catalog match and no therapeutic molecule confirmed.
 - `PartiallyKnownTokensFrom_<sources>` – Some tokens remain unmatched even after PNF/WHO/FDA drug lookups; the suffix enumerates the datasets (e.g., `PartiallyKnownTokensFrom_PNF_WHO`, `PartiallyKnownTokensFrom_None`) that covered the known portion of the string.
 - `NoStructuredSignalsDetected` – Scoring could not confirm any molecule or catalog match; manual inspection required.
+- `AllTokensUnknownTo_PNF_WHO_FDA` – No catalog (PNF/WHO/FDA) recognized any token in the row; all tokens remain unknown and the row is routed to the Others bucket.
 
 **`match_quality` review / auto-accept tags**
 
