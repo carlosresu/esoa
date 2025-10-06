@@ -1,5 +1,7 @@
-library(dplyr)
-library(tidyr)
+install.packages("tidyverse")
+library(tidyverse)
+install.packages("devtools")
+devtools::install_github("interstellar-Consultation-Services/dbdataset")
 library(dbdataset)
 
 # Source
