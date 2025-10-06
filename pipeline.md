@@ -145,7 +145,7 @@ When `bucket_final` stays `Needs review`, downstream summaries pair `match_molec
 - `dose_mismatch_varied_atc` – Auto-Accept rows with non-exact doses when multiple ATC payloads exist; flagged for reconciliation.
 - Approved route/form substitutions (e.g., sachet counted as tablet) are folded into these tags and no longer tracked separately.
 - `nontherapeutic_and_unknown_tokens` / `nontherapeutic_catalog_match` – FDA food/non-therapeutic catalog hits, optionally with residual unknown tokens.
-- `unknown_tokens_present` – Partial unknown tokens remain even after PNF/WHO/FDA lookups.
+- `unknown_tokens_present` – Partial unknown tokens remain even after PNF/WHO/FDA lookups; see `match_molecule(s)` suffix (e.g., `PartialUnknownTokens_PNF_WHO`) for which datasets covered the known portion.
 - `manual_review_required` – No structured signals materialised; requires human triage.
 - `route_mismatch` – The text points to an unverified molecule and also carries a route conflict. Resolve the molecule identification and the route evidence.
 - `no_dose_available` – No reference match plus a missing dose. Provide dose context or determine if the entry should be excluded.
