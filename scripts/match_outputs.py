@@ -196,18 +196,16 @@ def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
             shown = int(top_rows["n"].sum())
             for _, row in top_rows.iterrows():
                 pct_total = round(row["n"] / float(total) * 100, 2) if total else 0.0
-                pct_bucket = round(row["n"] / float(count) * 100, 2) if count else 0.0
                 lines.append(
                     f"  {row['match_molecule']}: {row['match_quality']}: {int(row['n']):,} "
-                    f"({pct_total}% of total, {pct_bucket}% of bucket)"
+                    f"({pct_total}% of global total)"
                 )
             remainder = count - shown
             if remainder > 0:
                 pct_total_remainder = round(remainder / float(total) * 100, 2) if total else 0.0
-                pct_bucket_remainder = round(remainder / float(count) * 100, 2) if count else 0.0
                 lines.append(
                     f"  Other combinations: {remainder:,} "
-                    f"({pct_total_remainder}% of total, {pct_bucket_remainder}% of bucket)"
+                    f"({pct_total_remainder}% of global total)"
                 )
 
         for bucket in bucket_order:
@@ -244,18 +242,16 @@ def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
         shown = int(top.sum())
         for value, count in top.items():
             pct_total = round(count / float(total) * 100, 2) if total else 0.0
-            pct_bucket = round(count / float(bucket_count) * 100, 2) if bucket_count else 0.0
             lines.append(
                 f"    {label}: {value}: {int(count):,} "
-                f"({pct_total}% of total, {pct_bucket}% of bucket)"
+                f"({pct_total}% of global total)"
             )
         remainder = bucket_count - shown
         if remainder > 0:
             pct_total_remainder = round(remainder / float(total) * 100, 2) if total else 0.0
-            pct_bucket_remainder = round(remainder / float(bucket_count) * 100, 2) if bucket_count else 0.0
             lines.append(
                 f"    {label}: Other values: {remainder:,} "
-                f"({pct_total_remainder}% of total, {pct_bucket_remainder}% of bucket)"
+                f"({pct_total_remainder}% of global total)"
             )
 
     for bucket in bucket_order:
