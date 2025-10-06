@@ -234,6 +234,32 @@ def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
                     "N/A": "N/A",
                 })
             )
+            # Collapse unknown-token counts so the Needs review summary only
+            # differentiates between single versus multiple unknowns. This keeps
+            # the Others bucket as the sole place with precise token counts.
+            collapsed_details: List[str] = []
+            for detail in nr_rows["detail_final"]:
+                if detail == "N/A":
+                    collapsed_details.append(detail)
+                    continue
+
+                parts = [segment.strip() for segment in detail.split(";") if segment.strip()]
+                rewritten: List[str] = []
+                replaced = False
+                for segment in parts:
+                    match = re.search(r"^Unknown tokens:\s*(\d+)", segment)
+                    if match:
+                        count = int(match.group(1))
+                        label = "Unknown tokens remaining: one" if count == 1 else "Unknown tokens remaining: multiple"
+                        rewritten.append(label)
+                        replaced = True
+                    else:
+                        rewritten.append(segment)
+                if not replaced and not rewritten:
+                    collapsed_details.append("N/A")
+                else:
+                    collapsed_details.append("; ".join(rewritten) if rewritten else "N/A")
+            nr_rows["detail_final"] = pd.Series(collapsed_details, index=nr_rows.index)
         else:
             nr_rows["detail_final"] = pd.Series(["N/A" for _ in range(len(nr_rows))], index=nr_rows.index)
 
