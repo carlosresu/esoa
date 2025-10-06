@@ -37,6 +37,8 @@ import sys
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict, Iterable
 
+from scripts.reference_data import load_drugbank_generics, load_ignore_words
+
 ROOT = Path(__file__).resolve().parent
 INPUTS = ROOT / "inputs"
 OUTPUTS = ROOT / "outputs"
@@ -56,6 +58,10 @@ COMMON_UNKNOWN_STOPWORDS = {
     "none",
     "content",
 }
+
+COMMON_UNKNOWN_STOPWORDS |= set(load_ignore_words())
+_, _drugbank_tokens, _ = load_drugbank_generics()
+COMMON_UNKNOWN_STOPWORDS |= set(_drugbank_tokens)
 
 # -----------------------------
 # Helpers

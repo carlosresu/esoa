@@ -11,6 +11,8 @@ import re
 from pathlib import Path
 from typing import Callable, List, Optional, Set
 
+from .reference_data import load_drugbank_generics, load_ignore_words
+
 # Local lightweight spinner so this module is self-contained
 def _run_with_spinner(label: str, func: Callable[[], None]) -> float:
     """Provide a local progress spinner so downstream modules stay dependency-free."""
@@ -46,13 +48,13 @@ def _run_with_spinner(label: str, func: Callable[[], None]) -> float:
 OUTPUT_COLUMNS = [
     "esoa_idx","raw_text","parentheticals",
     "normalized","norm_compact","match_basis","match_basis_norm_basic",
-    "probable_brands","did_brand_swap","brand_swap_added_generic","fda_dose_corroborated","fda_generics_list",
+    "probable_brands","did_brand_swap","brand_swap_added_generic","fda_dose_corroborated","fda_generics_list","drugbank_generics_list",
     "molecules_recognized","molecules_recognized_list","molecules_recognized_count",
     "dose_recognized","dosage_parsed_raw","dosage_parsed",
     "route_raw","form_raw","route_evidence_raw",
     "route","route_source","route_text","form","form_source","form_text",
     "form_ok","route_ok","route_form_imputations","route_evidence",
-    "present_in_pnf","present_in_who","present_in_fda_generic","probable_atc",
+    "present_in_pnf","present_in_who","present_in_fda_generic","present_in_drugbank","probable_atc",
     "generic_id","generic_final","molecule_token","pnf_hits_gids","pnf_hits_count","pnf_hits_tokens",
     "who_molecules_list","who_molecules","who_atc_codes_list","who_atc_codes","who_atc_count","who_atc_has_ddd","who_atc_adm_r","who_route_tokens","who_form_tokens",
     "selected_form","selected_route_allowed","selected_variant",
@@ -61,14 +63,14 @@ OUTPUT_COLUMNS = [
     "dose_sim","looks_combo_final","combo_reason","combo_known_generics_count",
     "non_therapeutic_summary","non_therapeutic_detail","non_therapeutic_tokens","non_therapeutic_hits","non_therapeutic_best",
     "unknown_kind","unknown_words_list","unknown_words",
-    "qty_pnf","qty_who","qty_fda_drug","qty_fda_food","qty_unknown",
+    "qty_pnf","qty_who","qty_fda_drug","qty_drugbank","qty_fda_food","qty_unknown",
     "atc_code_final","confidence",
     "match_molecule(s)","match_quality","detail_final",
     "bucket_final","why_final","reason_final",
 ]
 
 # Reserved for pipeline-specific tokens we know are safe to ignore.
-COMMON_UNKNOWN_STOPWORDS: Set[str] = set()
+COMMON_UNKNOWN_STOPWORDS: Set[str] = set(load_ignore_words())
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 _KNOWN_TOKENS_CACHE: Optional[Set[str]] = None
@@ -137,6 +139,10 @@ def _known_tokens() -> Set[str]:
             tokens.update(_extract_tokens(df_who.get("atc_name", [])))
         except Exception:
             pass
+
+    tokens.update(load_ignore_words(project_root))
+    _, drugbank_tokens, _ = load_drugbank_generics(project_root)
+    tokens.update(drugbank_tokens)
 
     _KNOWN_TOKENS_CACHE = tokens
     return _KNOWN_TOKENS_CACHE
@@ -209,7 +215,7 @@ def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
         return lines
 
     lines = ["Distribution Summary"]
-    qty_columns = ["qty_pnf", "qty_who", "qty_fda_drug", "qty_fda_food", "qty_unknown"]
+    qty_columns = ["qty_pnf", "qty_who", "qty_fda_drug", "qty_drugbank", "qty_fda_food", "qty_unknown"]
 
     def _append_top_values(bucket_df: pd.DataFrame, column: str, label: str, limit: int = 5) -> None:
         if column not in bucket_df.columns:
@@ -297,7 +303,7 @@ def write_outputs(
         return elapsed
 
     out_small = out_df.copy()
-    list_to_pipe = ["fda_generics_list", "non_therapeutic_tokens"]
+    list_to_pipe = ["fda_generics_list", "drugbank_generics_list", "non_therapeutic_tokens"]
     json_columns = ["non_therapeutic_hits", "non_therapeutic_best"]
 
     def _join_list(value: object) -> str:

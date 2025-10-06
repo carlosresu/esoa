@@ -684,6 +684,7 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     out["qty_pnf"] = qty_pnf
     out["qty_who"] = _count_listlike("who_molecules_list")
     out["qty_fda_drug"] = _count_listlike("fda_generics_list")
+    out["qty_drugbank"] = _count_listlike("drugbank_generics_list")
     out["qty_fda_food"] = _count_listlike("non_therapeutic_tokens")
     out["qty_unknown"] = _count_listlike("unknown_words_list")
 
@@ -736,6 +737,7 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     present_in_pnf = out["present_in_pnf"].astype(bool)
     present_in_who = out["present_in_who"].astype(bool)
     present_in_fda = out["present_in_fda_generic"].astype(bool)
+    present_in_drugbank = out.get("present_in_drugbank", pd.Series([False] * len(out), index=out.index)).astype(bool)
     who_route_lists = [tokens if isinstance(tokens, list) else [] for tokens in out.get("who_route_tokens", [[] for _ in range(len(out))])]
     who_route_sets = [set(tokens) for tokens in who_route_lists]
     who_route_info_available = pd.Series([bool(tokens) for tokens in who_route_sets], index=out.index)
@@ -744,6 +746,7 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     out.loc[present_in_pnf & has_atc_in_pnf, "match_molecule(s)"] = "ValidMoleculeWithATCinPNF"
     out.loc[(~present_in_pnf) & present_in_who, "match_molecule(s)"] = "ValidMoleculeWithATCinWHO/NotInPNF"
     out.loc[(~present_in_pnf) & (~present_in_who) & present_in_fda, "match_molecule(s)"] = "ValidMoleculeNoATCinFDA/NotInPNF"
+    out.loc[(~present_in_pnf) & (~present_in_who) & (~present_in_fda) & present_in_drugbank, "match_molecule(s)"] = "ValidMoleculeInDrugBank"
 
     pnf_without_atc = present_in_pnf & (~has_atc_in_pnf) & out["match_molecule(s)"].eq("")
     out.loc[pnf_without_atc, "match_molecule(s)"] = "ValidMoleculeNoATCinPNF"
@@ -776,6 +779,11 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
         fda_list = row.get("fda_generics_list")
         if isinstance(fda_list, list):
             joined = _unique_join([str(v) for v in fda_list if isinstance(v, str)])
+            if joined:
+                return joined
+        drugbank_list = row.get("drugbank_generics_list")
+        if isinstance(drugbank_list, list):
+            joined = _unique_join([str(v) for v in drugbank_list if isinstance(v, str)])
             if joined:
                 return joined
         return ""

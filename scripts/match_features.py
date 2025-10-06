@@ -19,6 +19,7 @@ from .text_utils import (
     extract_parenthetical_phrases,
     STOPWORD_TOKENS,
 )
+from .reference_data import load_drugbank_generics, load_ignore_words
 from .who_molecules import detect_all_who_molecules, load_who_molecules
 from .brand_map import load_latest_brandmap, build_brand_automata, fda_generics_set
 from .pnf_aliases import expand_generic_aliases, SPECIAL_GENERIC_ALIASES, apply_spelling_rules
@@ -181,6 +182,9 @@ def build_features(
             timing_hook(label, elapsed)
         return elapsed
 
+    ignore_words = load_ignore_words()
+    stopword_tokens_all: Set[str] = set(STOPWORD_TOKENS) | ignore_words
+
     # 1) Validate inputs
     def _validate():
         required_pnf = {
@@ -290,7 +294,10 @@ def build_features(
     for name in fda_gens:
         fda_tokens.update(_tokenize_unknowns(name))
 
-    therapeutic_tokens: Set[str] = pnf_tokens | who_tokens | fda_tokens
+    drugbank_name_set, drugbank_tokens, drugbank_token_index = load_drugbank_generics()
+    drugbank_name_set = set(drugbank_name_set)
+    drugbank_tokens = set(drugbank_tokens)
+    therapeutic_tokens: Set[str] = pnf_tokens | who_tokens | fda_tokens | drugbank_tokens
 
     # 4b) FDA food/non-therapeutic catalog (optional, may not exist locally)
     nonthera_lookup: Dict[str, List[Dict[str, str]]] = {}
@@ -330,7 +337,7 @@ def build_features(
                     for tok in tokens_raw
                     if len(tok) >= 3
                     and tok not in therapeutic_tokens
-                    and tok not in STOPWORD_TOKENS
+                    and tok not in stopword_tokens_all
                     and tok not in brand_token_lookup
                 }
                 if not filtered_tokens:
@@ -647,6 +654,8 @@ def build_features(
                     has_generic_already = True
                 elif generic_basic in pnf_name_set and generic_basic in tokens_set:
                     has_generic_already = True
+                elif generic_basic and generic_basic in drugbank_name_set and generic_basic in norm_basic_current:
+                    has_generic_already = True
 
                 if has_generic_already:
                     new_out = re.sub(rf"\b{re.escape(bn)}\b", "", out)
@@ -684,6 +693,45 @@ def build_features(
         df["probable_brands"] = probable_brand_hits
         df["fda_generics_list"] = fda_generics_lists
     _timed("Apply brand→generic swaps", _brand_swap)
+
+    def _drugbank_hits():
+        if not drugbank_token_index:
+            df["drugbank_generics_list"] = [[] for _ in range(len(df))]
+            df["present_in_drugbank"] = False
+            return
+        hits_list: List[List[str]] = []
+        present_flags: List[bool] = []
+        for basis in df["match_basis"]:
+            norm = _normalize_text_basic(str(basis))
+            if not norm:
+                hits_list.append([])
+                present_flags.append(False)
+                continue
+            tokens = norm.split()
+            token_count = len(tokens)
+            matches: List[str] = []
+            for pos, token in enumerate(tokens):
+                candidates = drugbank_token_index.get(token)
+                if not candidates:
+                    continue
+                for cand_tokens in candidates:
+                    length = len(cand_tokens)
+                    if length == 0 or pos + length > token_count:
+                        continue
+                    if tuple(tokens[pos:pos + length]) == cand_tokens:
+                        matches.append(" ".join(cand_tokens))
+            seen: Set[str] = set()
+            uniq: List[str] = []
+            for name in matches:
+                if name not in seen:
+                    seen.add(name)
+                    uniq.append(name)
+            hits_list.append(uniq)
+            present_flags.append(bool(uniq))
+        df["drugbank_generics_list"] = hits_list
+        df["present_in_drugbank"] = present_flags
+
+    _timed("Detect DrugBank generics", _drugbank_hits)
 
     _timed("Summarize non-therapeutic", _choose_best_nonthera)
     df["match_basis_norm_basic"] = df["match_basis"].map(_normalize_text_basic)
@@ -925,15 +973,13 @@ def build_features(
         def _known_generic_tokens(text_norm: str) -> List[str]:
             s = _segment_norm(text_norm)
             toks = _tokenize_unknowns(s)
-            out = []
+            seen: Set[str] = set()
+            out: List[str] = []
             for t in toks:
-                if t in pnf_name_set or t in who_name_set or t in fda_gens:
+                if t in therapeutic_tokens and t not in seen:
+                    seen.add(t)
                     out.append(t)
-            seen=set(); res=[]
-            for t in out:
-                if t not in seen:
-                    seen.add(t); res.append(t)
-            return res
+            return out
         known_counts = df["match_basis"].map(lambda s: len(_known_generic_tokens(s)))
         df["combo_known_generics_count"] = known_counts
         df["looks_combo_final"] = df["combo_known_generics_count"].ge(2)
@@ -966,7 +1012,8 @@ def build_features(
                     and t not in pnf_tokens
                     and t not in who_tokens
                     and t not in fda_tokens
-                    and t not in STOPWORD_TOKENS
+                    and t not in drugbank_tokens
+                    and t not in stopword_tokens_all
                     and t not in nonthera_tokens
                     and t not in brand_token_lookup
                 ):
@@ -1019,6 +1066,10 @@ def build_features(
         df["present_in_pnf"] = df["pnf_hits_count"].astype(int).gt(0)
         df["present_in_who"] = df["who_atc_codes"].astype(str).str.len().gt(0)
         df["present_in_fda_generic"] = df["match_basis"].map(lambda s: any(tok in fda_gens for tok in _tokenize_unknowns(_segment_norm(s))))
+        if "drugbank_generics_list" in df.columns:
+            df["present_in_drugbank"] = df["drugbank_generics_list"].map(lambda xs: bool(xs))
+        else:
+            df["present_in_drugbank"] = False
     _timed("Compute presence flags", _presence_flags)
 
     return df
