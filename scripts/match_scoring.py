@@ -1127,6 +1127,42 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
         blank_quality = general_unknown_mask & quality_series.str.strip().eq("")
         out.loc[auto_quality | blank_quality, "match_quality"] = "contains_unknown_tokens"
 
+    def _collapse_unknown_detail(text: str) -> str:
+        if not isinstance(text, str):
+            return "N/A"
+        stripped = text.strip()
+        if not stripped:
+            return "N/A"
+        if stripped.lower() == "n/a":
+            return "N/A"
+        parts = [segment.strip() for segment in stripped.split(";") if segment.strip()]
+        if not parts:
+            return "N/A"
+        rewritten: list[str] = []
+        replaced = False
+        for segment in parts:
+            match = re.match(r"Unknown tokens:\s*(\d+)", segment, flags=re.IGNORECASE)
+            if match:
+                count = int(match.group(1))
+                label = "ContainsUnknowns: One" if count == 1 else "ContainsUnknowns: Multiple"
+                rewritten.append(label)
+                replaced = True
+            else:
+                rewritten.append(segment)
+        if not rewritten:
+            return "N/A"
+        if replaced:
+            return "; ".join(rewritten)
+        return "; ".join(parts)
+
+    others_mask = out["bucket_final"].eq("Others")
+    if others_mask.any():
+        collapsed_details = [
+            _collapse_unknown_detail(text)
+            for text in out.loc[others_mask, "detail_final"].tolist()
+        ]
+        out.loc[others_mask, "detail_final"] = collapsed_details
+
     if "dose_recognized" in out.columns:
         out["dose_recognized"] = np.where(out["dose_sim"].astype(float) == 1.0, out["dose_recognized"], "N/A")
 
