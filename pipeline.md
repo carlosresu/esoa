@@ -140,7 +140,10 @@ When `bucket_final` stays `Needs review`, downstream summaries pair `match_molec
 
 ### UnspecifiedSource
 
-- `unspecified` – No reference (PNF/WHO/FDA) confirmed the molecule and no stronger signal was detected, yet the row still needs review. Determine whether the entry should map to a known molecule.
+- `auto_exact_dose_route_form` / `auto_policy_substitution` – Auto-Accept rows, distinguishing exact PNF matches from those that relied on allowed substitutions.
+- `nontherapeutic_and_unknown_tokens` / `nontherapeutic_catalog_match` – FDA food/non-therapeutic catalog hits, optionally with residual unknown tokens.
+- `unknown_tokens_present` – Partial unknown tokens remain even after PNF/WHO/FDA lookups.
+- `manual_review_required` – No structured signals materialised; requires human triage.
 - `route_mismatch` – The text points to an unverified molecule and also carries a route conflict. Resolve the molecule identification and the route evidence.
 - `no_dose_available` – No reference match plus a missing dose. Provide dose context or determine if the entry should be excluded.
 - `route_form_mismatch` – The captured route/form pairing is outside our whitelist for an unverified molecule. Clarify both the molecule and administration details.

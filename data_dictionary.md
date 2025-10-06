@@ -131,7 +131,8 @@ table when validating new data or onboarding reviewers.
 | `confidence` | Composite 0–100 score covering generic, dose, route, ATC, and brand-swap bonus. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Higher values suggest stronger auto-match evidence. |
 | `match_molecule(s)` | Source labels describing which reference validated the molecule (PNF/WHO/FDA/brand). | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Drives reporting pivots. |
 | `generic_final` | Canonical molecule identifier(s) chosen after PNF→WHO→FDA fallback. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Pipe-delimited string; prefers `generic_id`, else WHO molecules, else FDA generics derived from alias/fuzzy matching. |
-| `match_quality` | Summary for review (`dose mismatch`, `form mismatch`, etc.). | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Defaults to `unspecified` when no issue noted. |
+| `match_quality` | Summary tag indicating why a row auto-accepted or still needs review. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Always populated; see the list of enumerated values below. |
+| `detail_final` | Supplemental descriptors describing unknown-token and FDA food detection outcomes. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Uses semicolon-separated phrases (no raw tokens) for easy aggregation. |
 
 **`match_molecule(s)` values in daily reporting**
 
@@ -140,7 +141,29 @@ table when validating new data or onboarding reviewers.
 - `ValidBrandSwappedForMoleculeWithATCinWHO` – Brand swap landed on a WHO molecule (no PNF coverage) that still carried ATC metadata.
 - `ValidMoleculeWithATCinWHO/NotInPNF` – WHO molecule matched without any PNF hit; we rely entirely on WHO metadata.
 - `ValidMoleculeNoATCinFDA/NotInPNF` – FDA generic matched but neither PNF nor WHO produced a molecule/ATC pairing.
-- `UnspecifiedSource` – No authoritative reference confirmed the text; downstream summaries coerce empty labels into this bucket for auditing.
+- `ValidMoleculeNoATCinPNF` – PNF matched but the prepared PNF extract lacks an ATC for the selected variant.
+- `NonTherapeuticFoodWithUnknownTokens` – FDA food/non-therapeutic catalog match present together with residual unknown tokens.
+- `NonTherapeuticFoodNoMolecule` – FDA food/non-therapeutic catalog match and no therapeutic molecule confirmed.
+- `PartialUnknownTokens` – Some tokens remain unmatched even after PNF/WHO/FDA drug lookups, but no FDA food catalog match exists.
+- `NoStructuredSignalsDetected` – Scoring could not confirm any molecule or catalog match; manual inspection required.
+
+**`match_quality` review / auto-accept tags**
+
+- `auto_exact_dose_route_form` – Auto-Accept row with exact dose, route, and form alignment against the selected PNF variant.
+- `auto_policy_substitution` – Auto-Accept row that relied on approved route/form substitutions or tolerated dose variance.
+- `dose_mismatch` – Recognized dose text disagrees with the selected PNF/WHO dose payload after normalization.
+- `form_mismatch` – Textual form or inferred form conflicts with the PNF-allowed form family for the chosen route.
+- `route_mismatch` – Textual route conflicts with the allowed routes for the candidate (including WHO fallbacks when PNF is missing).
+- `route_form_mismatch` – Route and form combination violates the curated `APPROVED_ROUTE_FORMS` whitelist even if each attribute alone might be acceptable.
+- `no_dose_available` / `no_form_available` / `no_route_available` – Parsed text lacks the corresponding attribute; we could not impute it with high confidence.
+- `no_dose_and_form_available` / `no_dose_and_route_available` / `no_form_and_route_available` / `no_dose_form_and_route_available` – Multiple attributes were simultaneously missing, signalling limited metadata.
+- `who_metadata_insufficient_review_required` – Only WHO supplied the molecule and none of the other checks raised a specific conflict, but we still lack enough corroborating detail to auto-accept.
+- `who_does_not_provide_dose_info` – We rely on WHO alone and the WHO ATC extract does not expose a DDD; dose comparisons therefore remain unresolved.
+- `who_does_not_provide_route_info` – We rely on WHO alone and the WHO ATC extract did not expose any Adm.R tokens; route validation falls back to manual review.
+- `nontherapeutic_and_unknown_tokens` – FDA food/non-therapeutic catalog match present together with residual unknown tokens.
+- `nontherapeutic_catalog_match` – FDA food/non-therapeutic catalog match with no corroborated therapeutic molecule.
+- `unknown_tokens_present` – Partial unknown tokens remain after matching against PNF, WHO, and FDA drug lists.
+- `manual_review_required` – No structured matches materialized; escalated for human triage.
 
 **`match_quality` review flags**
 
