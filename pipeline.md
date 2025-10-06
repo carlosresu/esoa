@@ -35,7 +35,7 @@ transformations performed and why policy constants are set the way they are.
    Execute PNF automaton scans (`pnf_hits_gids`, `pnf_hits_tokens`) using expanded alias sets (parenthetical trade names, slash/plus splits, curated abbreviations), fall back to partial and fuzzy matches for near-miss spellings, and detect WHO molecules with ATC/DDD metadata (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)).
 
 10. **Detect FDA Food / Non-therapeutic Catalog Matches**
-    Optionally load `fda_food_products.csv`, capture every matching entry in `non_therapeutic_hits`, summarize the highest scoring registration in `non_therapeutic_detail`, and retain canonical tokens in `non_therapeutic_tokens` for downstream unknown filtering and review context (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)). When no therapeutic molecule is recognized, scoring promotes these rows to the Others bucket with `reason_final = "non_therapeutic_detected"` (see [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py)).
+    Optionally load `fda_food_products.csv`, capture every matching entry in `non_therapeutic_hits`, summarize the highest scoring registration in `non_therapeutic_detail`, and retain canonical tokens in `non_therapeutic_tokens` for downstream unknown filtering and review context (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)). When no therapeutic molecule is recognized, scoring promotes these rows to the Unknown bucket with `reason_final = "non_therapeutic_detected"` (see [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py)).
 
 11. **Classify Combinations and Extract Unknowns**
    Use known-generic heuristics to set `looks_combo_final`, record `combo_reason`, gather `unknown_words_list`, and derive presence flags for PNF, WHO, and FDA generics (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)).
@@ -51,6 +51,10 @@ transformations performed and why policy constants are set the way they are.
 
 15. **Bucketize and Annotate Outcomes**
     Populate `bucket_final`, `match_molecule(s)`, `match_quality`, `why_final`, and `reason_final`, ensuring Auto-Accept logic and review annotations remain consistent (see [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py)).
+    - **Auto-Accept** — PNF match with ATC, `form_ok`/`route_ok`, and no unresolved tokens.
+    - **Candidates** — ATC assigned via PNF or WHO (including FDA brand swaps) but Auto-Accept criteria not met; no unknown tokens remain.
+    - **Needs review** — ATC assigned yet one or more tokens stay unresolved; `match_quality` pinpoints the outstanding issues.
+    - **Unknown** — No ATC payload was found, including FDA food/non-therapeutic detections.
 
 16. **Write Outputs and Summaries**
     Persist the curated data set to CSV/XLSX, generate distribution summaries, and freeze workbook panes for review convenience (see [scripts/match_outputs.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_outputs.py)).
@@ -146,7 +150,7 @@ When `bucket_final` stays `Needs review`, downstream summaries pair `match_molec
 - Approved route/form substitutions (e.g., sachet counted as tablet) are folded into these tags and no longer tracked separately.
 - `nontherapeutic_and_unknown_tokens` / `nontherapeutic_catalog_match` – FDA food/non-therapeutic catalog hits, optionally with residual unknown tokens.
 - `unknown_tokens_present` – Partial unknown tokens remain even after PNF/WHO/FDA lookups; see `match_molecule(s)` suffix (e.g., `PartiallyKnownTokensFrom_PNF_WHO`) for which datasets covered the known portion.
-- `AllTokensUnknownTo_PNF_WHO_FDA` – No catalog matched any token; routed to Others with `match_quality = N/A` and `detail_final` showing the exact count of unknown tokens remaining.
+- `AllTokensUnknownTo_PNF_WHO_FDA` – No catalog matched any token; routed to Unknown with `match_quality = contains_unknown_tokens` and `detail_final` showing the unresolved token count.
 - `manual_review_required` – No structured signals materialised; requires human triage.
 - `route_mismatch` – The text points to an unverified molecule and also carries a route conflict. Resolve the molecule identification and the route evidence.
 - `no_dose_available` – No reference match plus a missing dose. Provide dose context or determine if the entry should be excluded.
@@ -154,9 +158,9 @@ When `bucket_final` stays `Needs review`, downstream summaries pair `match_molec
 - `no_dose_and_form_available` – Both dose and form are absent while the molecule remains unverified. Supplement the missing fields or reject.
 - `no_form_available` – Form is missing and no reference confirmed the molecule. Capture the dosage form before moving forward.
 
-## Others Bucket Reference (why_final × reason_final)
+## Unknown Bucket Reference (why_final × reason_final)
 
-The **Others** bucket collects rows that are explicitly non-therapeutic or that
+The **Unknown** bucket collects rows that are explicitly non-therapeutic or that
 remain unknown even after FDA food catalog checks. Reviewers can pivot on
 `why_final`/`reason_final` to decide next steps:
 

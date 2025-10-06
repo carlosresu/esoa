@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import ast
 import re
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -82,18 +83,6 @@ def _mk_reason(series: pd.Series, default_ok: str) -> pd.Series:
     s = s.fillna(default_ok)
     s = s.replace({"": default_ok, "no_specific_reason_provided": default_ok})
     return s.astype("string")
-
-
-def _annotate_unknown(s: str) -> str:
-    """Append clarifying text for buckets that merely state "Unknown"."""
-    if s == "Single - Unknown":
-        return "Single - Unknown (unknown to PNF, WHO, FDA)"
-    if s == "Multiple - All Unknown":
-        return "Multiple - All Unknown (unknown to PNF, WHO, FDA)"
-    if s == "Multiple - Some Unknown":
-        return "Multiple - Some Unknown (some unknown to PNF, WHO, FDA)"
-    return s
-
 
 def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.DataFrame:
     """Score features, select best PNF candidates, and prepare audit columns using the policy described in README (route/form whitelist, dose equality, confidence weights, Auto-Accept gates)."""
@@ -674,6 +663,48 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
 
     out["probable_atc"] = np.where(~out["present_in_pnf"] & out["present_in_who"], out["who_atc_codes"], "")
 
+    def _count_listlike(col: str) -> pd.Series:
+        raw = out.get(col)
+        if raw is None:
+            return pd.Series([0] * len(out), index=out.index)
+        return pd.Series(
+            [
+                sum(1 for item in value if isinstance(item, str) and item.strip())
+                if isinstance(value, (list, tuple, set))
+                else 0
+                for value in raw
+            ],
+            index=out.index,
+        )
+
+    qty_pnf = pd.to_numeric(
+        out.get("pnf_hits_count", pd.Series([0] * len(out), index=out.index)),
+        errors="coerce",
+    ).fillna(0).astype(int)
+    out["qty_pnf"] = qty_pnf
+    out["qty_who"] = _count_listlike("who_molecules_list")
+    out["qty_fda_drug"] = _count_listlike("fda_generics_list")
+    out["qty_fda_food"] = _count_listlike("non_therapeutic_tokens")
+    out["qty_unknown"] = _count_listlike("unknown_words_list")
+
+    unknown_kind_series = out.get(
+        "unknown_kind",
+        pd.Series(["None"] * len(out), index=out.index),
+    ).astype(str)
+    has_unknown_kind = unknown_kind_series.isin(
+        ["Single - Unknown", "Multiple - All Unknown", "Multiple - Some Unknown"]
+    )
+    has_unknowns = out["qty_unknown"].gt(0) | has_unknown_kind
+
+    nonthera_summary = out.get(
+        "non_therapeutic_summary",
+        pd.Series([""] * len(out), index=out.index),
+    ).fillna("").astype(str)
+    has_nonthera = nonthera_summary.str.strip().ne("")
+    probable_atc_series = out["probable_atc"].fillna("").astype(str)
+    has_probable_atc = probable_atc_series.str.strip().ne("")
+    has_any_atc = has_atc_in_pnf | has_probable_atc
+
     out["bucket_final"] = ""
     out["why_final"] = ""
     out["reason_final"] = ""
@@ -779,19 +810,31 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     dose_mismatch_mask = selected_variant_present & (dose_values < 1.0)
     dose_issue_mask = dose_mismatch_mask | (~dose_present) | (~selected_variant_present)
 
-    auto_mask = base_auto_mask & ((~dose_issue_mask) | is_single_atc)
+    auto_mask = base_auto_mask & ((~dose_issue_mask) | is_single_atc) & (~has_unknowns)
     out.loc[auto_mask, "bucket_final"] = "Auto-Accept"
+    out.loc[auto_mask, "why_final"] = "Auto-Accept"
 
-    needs_rev_mask = (out["bucket_final"] == "") & (is_candidate_like | present_in_who | present_in_fda)
-    out.loc[needs_rev_mask, "bucket_final"] = "Needs review"
-    out.loc[needs_rev_mask, "why_final"] = "Needs review"
+    review_mask = has_any_atc & (~auto_mask)
+    candidate_mask = review_mask & (~has_unknowns)
+    needs_review_mask = review_mask & has_unknowns
+
+    out.loc[candidate_mask, "bucket_final"] = "Candidates"
+    out.loc[candidate_mask, "why_final"] = "Candidates"
+    out.loc[needs_review_mask, "bucket_final"] = "Needs review"
+    out.loc[needs_review_mask, "why_final"] = "Needs review"
+
+    unassigned_mask = out["bucket_final"].eq("")
+    out.loc[unassigned_mask, "bucket_final"] = "Unknown"
+    out.loc[unassigned_mask, "why_final"] = "Unknown"
+    unknown_mask = out["bucket_final"].eq("Unknown")
 
     dose_mismatch_general = (out["dose_sim"].astype(float) < 1.0) & dose_present
     who_has_ddd = False
     who_brand_swap = out["match_molecule(s)"].eq("ValidBrandSwappedForMoleculeWithATCinWHO")
     dose_mismatch_general = dose_mismatch_general & selected_variant_present
-    out.loc[needs_rev_mask & dose_mismatch_general, "match_quality"] = "dose_mismatch"
-    out.loc[needs_rev_mask & (~dose_mismatch_general) & (missing_series.str.len() > 0), "match_quality"] = missing_series
+    out.loc[review_mask & dose_mismatch_general, "match_quality"] = "dose_mismatch"
+    missing_nonempty = missing_series.astype(str).str.strip().ne("")
+    out.loc[review_mask & (~dose_mismatch_general) & missing_nonempty, "match_quality"] = missing_series
 
     form_norm = out["form"].map(_normalize_form_token)
     sel_form_norm = out["selected_form"].map(_normalize_form_token)
@@ -839,25 +882,43 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
                 route_ok_array[idx] = True
     out["route_ok"] = pd.Series(route_ok_array, index=out.index)
 
-    unresolved = needs_rev_mask & (out["match_quality"] == "")
+    unresolved = review_mask & (out["match_quality"] == "")
     out.loc[unresolved & (form_conflict | form_unreliable), "match_quality"] = "form_mismatch"
 
-    unresolved = needs_rev_mask & (out["match_quality"] == "")
+    unresolved = review_mask & (out["match_quality"] == "")
     out.loc[unresolved & (route_conflict | route_unreliable), "match_quality"] = "route_mismatch"
-    out.loc[needs_rev_mask & route_form_invalid_mask, "match_quality"] = "route_form_mismatch"
-    unresolved = needs_rev_mask & (out["match_quality"] == "")
+    unresolved = review_mask & (out["match_quality"] == "")
+    out.loc[unresolved & route_form_invalid_mask, "match_quality"] = "route_form_mismatch"
+    unresolved = needs_review_mask & (out["match_quality"] == "")
     out.loc[unresolved & who_only_mask, "match_quality"] = WHO_METADATA_GAP_REASON
     out.loc[unresolved & (~who_only_mask), "match_quality"] = DEFAULT_METADATA_GAP_REASON
 
     who_without_ddd = present_in_who & (~present_in_pnf)
-    dose_related = out["match_quality"].str.contains("dose", case=False, na=False)
-    out.loc[needs_rev_mask & who_without_ddd & dose_related, "match_quality"] = "who_does_not_provide_dose_info"
+    dose_related = out["match_quality"].astype(str).str.contains("dose", case=False, na=False)
+    out.loc[review_mask & who_without_ddd & dose_related, "match_quality"] = "who_does_not_provide_dose_info"
     who_without_route_info = present_in_who & (~present_in_pnf) & (~who_route_info_available)
-    route_related = out["match_quality"].str.contains("route", case=False, na=False)
-    out.loc[needs_rev_mask & who_without_route_info & route_related, "match_quality"] = "who_does_not_provide_route_info"
+    route_related = out["match_quality"].astype(str).str.contains("route", case=False, na=False)
+    out.loc[review_mask & who_without_route_info & route_related, "match_quality"] = "who_does_not_provide_route_info"
 
-    out.loc[needs_rev_mask, "reason_final"] = out.loc[needs_rev_mask, "match_quality"]
-    out["reason_final"] = _mk_reason(out["reason_final"], DEFAULT_METADATA_GAP_REASON)
+    out.loc[needs_review_mask, "reason_final"] = out.loc[needs_review_mask, "match_quality"]
+    out.loc[candidate_mask, "reason_final"] = out.loc[candidate_mask, "match_quality"]
+    out.loc[candidate_mask & out["reason_final"].astype(str).str.strip().eq(""), "reason_final"] = "candidate_ready_for_atc_assignment"
+    needs_reason = _mk_reason(out.loc[needs_review_mask, "reason_final"], "contains_unknown_tokens")
+    out.loc[needs_review_mask, "reason_final"] = needs_reason
+
+    candidate_blank = candidate_mask & out["match_quality"].astype(str).str.strip().eq("")
+    who_candidate = candidate_blank & (~present_in_pnf) & present_in_who
+    out.loc[who_candidate, "match_quality"] = "who_atc_assigned"
+    brand_candidate = candidate_blank & (~present_in_pnf) & (~present_in_who) & present_in_fda
+    out.loc[brand_candidate, "match_quality"] = "fda_brand_linked"
+    candidate_blank = candidate_mask & out["match_quality"].astype(str).str.strip().eq("")
+    out.loc[candidate_blank, "match_quality"] = "candidate_ready"
+
+    needs_blank = needs_review_mask & out["match_quality"].astype(str).str.strip().eq("")
+    out.loc[needs_blank, "match_quality"] = "contains_unknown_tokens"
+    needs_combo = needs_review_mask & has_nonthera & out["match_quality"].astype(str).str.strip().eq("contains_unknown_tokens")
+    out.loc[needs_combo, "match_quality"] = "nontherapeutic_and_unknown_tokens"
+    out.loc[needs_combo, "reason_final"] = "nontherapeutic_and_unknown_tokens"
 
     # Provide consistent quality tags for Auto-Accept rows so summaries add up cleanly.
     auto_rows = out["bucket_final"].eq("Auto-Accept")
@@ -894,108 +955,62 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     remaining_auto = auto_rows & out["match_quality"].astype(str).str.strip().eq("")
     out.loc[remaining_auto, "match_quality"] = "auto_exact_dose_route_form"
 
-    unknown_single = out["unknown_kind"].eq("Single - Unknown")
-    unknown_multi_all = out["unknown_kind"].eq("Multiple - All Unknown")
-    unknown_multi_some = out["unknown_kind"].eq("Multiple - Some Unknown")
-    none_found = out["unknown_kind"].eq("None")
-    fallback_unknown = (~is_candidate_like) & (~present_in_who) & (~present_in_fda) & (~none_found)
+    unknown_any_mask = unknown_kind_series.isin([
+        "Single - Unknown",
+        "Multiple - All Unknown",
+        "Multiple - Some Unknown",
+    ])
 
-    if "non_therapeutic_summary" in out.columns:
-        nonthera_summary = out["non_therapeutic_summary"].fillna("").astype(str)
-        nonthera_mask = nonthera_summary.str.strip().ne("")
-    else:
-        nonthera_summary = pd.Series(["" for _ in range(len(out))], index=out.index)
-        nonthera_mask = pd.Series([False for _ in range(len(out))], index=out.index)
+    if unknown_mask.any():
+        unknown_quality_values: dict[Any, str] = {}
+        unknown_reason_values: dict[Any, str] = {}
+        for idx in out.index:
+            if not unknown_mask.loc[idx]:
+                continue
+            nonthera_flag = has_nonthera.loc[idx]
+            count_unknown = out.loc[idx, "qty_unknown"]
+            has_unknown_flag = bool(count_unknown) or unknown_any_mask.loc[idx]
+            current_label = out.at[idx, "match_molecule(s)"].strip()
 
-    def _annotate_unknown_with_presence(base_reason: str, idx: pd.Index) -> pd.Series:
-        canonical = _annotate_unknown(base_reason)
-        if "(" in canonical and canonical.endswith(")"):
-            head, tail = canonical.split("(", 1)
-            base_text = head.strip()
-            default_detail = tail.rsplit(")", 1)[0].strip()
-        else:
-            base_text = canonical
-            default_detail = "unknown to PNF, WHO, FDA"
-        labels = []
-        for i in idx:
-            sources = []
-            if present_in_pnf[i]:
-                sources.append("PNF")
-            if present_in_who[i]:
-                sources.append("WHO")
-            if present_in_fda[i]:
-                sources.append("FDA")
-            if sources:
-                detail = f"known in {'/'.join(sources)}; remaining tokens unknown"
+            if nonthera_flag and has_unknown_flag:
+                mq = "nontherapeutic_and_unknown_tokens"
+                reason = "non_therapeutic_detected_with_unknown_tokens"
+                default_label = "NonTherapeuticFoodWithUnknownTokens"
+            elif nonthera_flag:
+                mq = "nontherapeutic_catalog_match"
+                reason = "non_therapeutic_detected"
+                default_label = "NonTherapeuticCatalogOnly"
+            elif has_unknown_flag:
+                mq = "contains_unknown_tokens"
+                reason = "all_tokens_unknown"
+                default_label = "AllTokensUnknownTo_PNF_WHO_FDA"
             else:
-                detail = default_detail
-            labels.append(f"{base_text} ({detail})")
-        return pd.Series(labels, index=idx)
+                mq = "no_reference_catalog_match"
+                reason = "no_reference_catalog_match"
+                default_label = "RowFailedAllMatchingSteps"
 
-    for cond, reason in [
-        (unknown_single | (fallback_unknown & unknown_single), "Single - Unknown"),
-        (unknown_multi_all | (fallback_unknown & unknown_multi_all), "Multiple - All Unknown"),
-        (unknown_multi_some | (fallback_unknown & unknown_multi_some), "Multiple - Some Unknown"),
-    ]:
-        mask = cond & (out["bucket_final"] == "")
-        if not mask.any():
-            continue
+            if not current_label:
+                sources: list[str] = []
+                if present_in_pnf.loc[idx]:
+                    sources.append("PNF")
+                if present_in_who.loc[idx]:
+                    sources.append("WHO")
+                if present_in_fda.loc[idx]:
+                    sources.append("FDA")
+                if default_label == "AllTokensUnknownTo_PNF_WHO_FDA" and sources:
+                    current_label = f"PartiallyKnownTokensFrom_{'_'.join(sources)}"
+                else:
+                    current_label = default_label
+                out.at[idx, "match_molecule(s)"] = current_label
 
-        if reason == "Multiple - Some Unknown":
-            nonthera_here = (
-                mask
-                & nonthera_mask
-                & (~present_in_pnf)
-                & (~present_in_who)
-                & (~present_in_fda)
-            )
-            general_mask = mask & (~nonthera_here)
+            unknown_quality_values[idx] = mq
+            unknown_reason_values[idx] = reason
 
-            if nonthera_here.any():
-                out.loc[nonthera_here, "bucket_final"] = "Others"
-                out.loc[nonthera_here, "why_final"] = "Non-Therapeutic Medical Products"
-                out.loc[nonthera_here, "reason_final"] = "non_therapeutic_detected"
-                out.loc[nonthera_here, "match_molecule(s)"] = "NonTherapeuticCatalogOnly"
-                out.loc[nonthera_here, "match_quality"] = "nontherapeutic_catalog_match"
-
-            if general_mask.any():
-                out.loc[general_mask, "bucket_final"] = "Others"
-                blank_why = general_mask & out["why_final"].astype(str).str.strip().eq("")
-                out.loc[blank_why, "why_final"] = "Unknown"
-                reason_series = _annotate_unknown_with_presence(reason, out.loc[general_mask].index)
-                out.loc[general_mask, "reason_final"] = reason_series
-                quality_series = out["match_quality"].astype(str)
-                blank_quality = general_mask & quality_series.str.strip().eq("")
-                auto_quality = general_mask & quality_series.str.startswith("auto_", na=False)
-                out.loc[blank_quality | auto_quality, "match_quality"] = "contains_unknown_tokens"
-            continue
-
-        # Only fall back to the FDA food catalog when no molecule was identified in
-        # PNF, WHO, or the FDA drug mappings. This preserves the desired
-        # prioritization order (PNF → WHO → FDA drug → FDA food).
-        nonthera_here = (
-            mask
-            & nonthera_mask
-            & (~present_in_pnf)
-            & (~present_in_who)
-            & (~present_in_fda)
-        )
-        others_mask = mask & (~nonthera_mask)
-
-        if nonthera_here.any():
-            out.loc[nonthera_here, "bucket_final"] = "Others"
-            out.loc[nonthera_here, "why_final"] = "Non-Therapeutic Medical Products"
-            reason_tag = "non_therapeutic_detected"
-            out.loc[nonthera_here, "reason_final"] = reason_tag
-            out.loc[nonthera_here, "match_molecule(s)"] = "NonTherapeuticCatalogOnly"
-            out.loc[nonthera_here, "match_quality"] = "nontherapeutic_catalog_match"
-
-        if others_mask.any():
-            out.loc[others_mask, "bucket_final"] = "Others"
-            out.loc[others_mask, "why_final"] = "Unknown"
-            out.loc[others_mask, "reason_final"] = _annotate_unknown_with_presence(reason, out.loc[others_mask].index)
-            out.loc[others_mask, "match_molecule(s)"] = "AllTokensUnknownTo_PNF_WHO_FDA"
-            out.loc[others_mask, "match_quality"] = "N/A"
+        if unknown_quality_values:
+            quals = pd.Series(unknown_quality_values)
+            reas = pd.Series(unknown_reason_values)
+            out.loc[quals.index, "match_quality"] = quals.values
+            out.loc[reas.index, "reason_final"] = reas.values
 
     if "unknown_words_list" in out.columns:
         unknown_tokens_col = out["unknown_words_list"]
@@ -1023,12 +1038,14 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     )
     unknown_counts = unknown_counts.where(~((unknown_counts == 0) & fallback_mask), fallback_counts)
 
+    out["qty_unknown"] = unknown_counts.astype(int)
+
     nonthera_label = nonthera_summary.fillna("").astype(str).replace({"nan": ""})
 
     detail_values: list[str] = []
-    for pos, idx in enumerate(out.index):
+    for idx in out.index:
         descriptors: list[str] = []
-        count_unknown = int(unknown_counts.iloc[pos]) if pos < len(unknown_counts) else 0
+        count_unknown = int(unknown_counts.at[idx]) if idx in unknown_counts.index else 0
         if count_unknown:
             descriptors.append(f"Unknown tokens: {count_unknown}")
         nonthera_flag = nonthera_label.at[idx] if idx in nonthera_label.index else ""
@@ -1036,96 +1053,6 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
             descriptors.append("Matches FDA food/non-therapeutic catalog")
         detail_values.append("; ".join(descriptors))
     out["detail_final"] = detail_values
-
-    remaining = out["bucket_final"].eq("")
-    out.loc[remaining, "bucket_final"] = "Needs review"
-    out.loc[remaining, "why_final"] = "Needs review"
-    out.loc[remaining, "reason_final"] = _mk_reason(out.loc[remaining, "match_quality"], DEFAULT_METADATA_GAP_REASON)
-
-    residual_molecule = out["match_molecule(s)"].astype(str).str.strip().eq("")
-    residual_quality = out["match_quality"].astype(str).str.strip().eq("")
-    has_nonthera = nonthera_label.str.strip().ne("")
-    unknown_some = out["unknown_kind"].eq("Multiple - Some Unknown")
-    unknown_any = out["unknown_kind"].isin([
-        "Single - Unknown",
-        "Multiple - All Unknown",
-        "Multiple - Some Unknown",
-    ])
-
-    mask = residual_molecule & has_nonthera & unknown_some
-    if mask.any():
-        out.loc[mask, "match_molecule(s)"] = "NonTherapeuticFoodWithUnknownTokens"
-        out.loc[mask & residual_quality, "match_quality"] = "nontherapeutic_and_unknown_tokens"
-
-    mask = residual_molecule & has_nonthera & (~unknown_any)
-    if mask.any():
-        out.loc[mask, "match_molecule(s)"] = "NonTherapeuticFoodNoMolecule"
-        out.loc[mask & residual_quality, "match_quality"] = "nontherapeutic_catalog_match"
-
-    mask = residual_molecule & (~has_nonthera) & unknown_some
-    if mask.any():
-        source_labels: list[tuple[int, str]] = []
-        route_to_others: list[int] = []
-        for pos, idx in enumerate(out.index):
-            if not mask.iat[pos]:
-                continue
-            sources: list[str] = []
-            if present_in_pnf.iat[pos]:
-                sources.append("PNF")
-            if present_in_who.iat[pos]:
-                sources.append("WHO")
-            if present_in_fda.iat[pos]:
-                sources.append("FDA")
-            if sources:
-                suffix = "_".join(sources)
-                source_labels.append((idx, f"PartiallyKnownTokensFrom_{suffix}"))
-            else:
-                route_to_others.append(idx)
-        if source_labels:
-            idxs, labels = zip(*source_labels)
-            out.loc[list(idxs), "match_molecule(s)"] = list(labels)
-        if route_to_others:
-            out.loc[route_to_others, "bucket_final"] = "Others"
-            out.loc[route_to_others, "why_final"] = "Unknown"
-            out.loc[route_to_others, "reason_final"] = "all_tokens_unknown"
-            out.loc[route_to_others, "match_molecule(s)"] = "AllTokensUnknownTo_PNF_WHO_FDA"
-            out.loc[route_to_others, "match_quality"] = "N/A"
-
-    mask = residual_molecule & (~has_nonthera) & (~unknown_any)
-    if mask.any():
-        out.loc[mask, "bucket_final"] = "Others"
-        out.loc[mask, "why_final"] = "Unknown"
-        out.loc[mask, "reason_final"] = "no_reference_catalog_match"
-        out.loc[mask, "match_molecule(s)"] = "RowFailedAllMatchingSteps"
-        out.loc[mask, "match_quality"] = "N/A"
-
-    unknown_any_mask = out["unknown_kind"].isin([
-        "Single - Unknown",
-        "Multiple - All Unknown",
-        "Multiple - Some Unknown",
-    ])
-    if unknown_any_mask.any():
-        out.loc[unknown_any_mask, "bucket_final"] = "Others"
-
-        why_series = out["why_final"].astype(str).str.strip()
-        nonthera_mask_existing = unknown_any_mask & why_series.eq("Non-Therapeutic Medical Products")
-        general_unknown_mask = unknown_any_mask & (~nonthera_mask_existing)
-
-        out.loc[general_unknown_mask, "why_final"] = "Unknown"
-
-        for reason_value in [
-            "Single - Unknown",
-            "Multiple - All Unknown",
-            "Multiple - Some Unknown",
-        ]:
-            reason_mask = general_unknown_mask & out["unknown_kind"].eq(reason_value)
-            if reason_mask.any():
-                out.loc[reason_mask, "reason_final"] = _annotate_unknown_with_presence(reason_value, out.loc[reason_mask].index)
-
-        quality_series = out["match_quality"].astype(str)
-        auto_quality = general_unknown_mask & quality_series.str.startswith("auto_", na=False)
-        blank_quality = general_unknown_mask & quality_series.str.strip().eq("")
-        out.loc[auto_quality | blank_quality, "match_quality"] = "contains_unknown_tokens"
 
     def _collapse_unknown_detail(text: str) -> str:
         if not isinstance(text, str):
@@ -1154,13 +1081,13 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
             rewritten.append(label)
         return "; ".join(rewritten)
 
-    others_mask = out["bucket_final"].eq("Others")
-    if others_mask.any():
+    unknown_detail_mask = out["bucket_final"].eq("Unknown")
+    if unknown_detail_mask.any():
         collapsed_details = [
             _collapse_unknown_detail(text)
-            for text in out.loc[others_mask, "detail_final"].tolist()
+            for text in out.loc[unknown_detail_mask, "detail_final"].tolist()
         ]
-        out.loc[others_mask, "detail_final"] = collapsed_details
+        out.loc[unknown_detail_mask, "detail_final"] = collapsed_details
 
     if "dose_recognized" in out.columns:
         out["dose_recognized"] = np.where(out["dose_sim"].astype(float) == 1.0, out["dose_recognized"], "N/A")

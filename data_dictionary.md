@@ -112,12 +112,17 @@ table when validating new data or onboarding reviewers.
 | `unknown_kind` | Qualifies unresolved tokens (`None`, `Single - Unknown`, etc.). | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Guides reviewer triage. |
 | `unknown_words_list` | List of normalized tokens not recognized in PNF/WHO/FDA vocabularies. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Used by [resolve_unknowns.py](https://github.com/carlosresu/esoa/blob/main/resolve_unknowns.py); serialized to string. |
 | `unknown_words` | Pipe-delimited string version of `unknown_words_list`. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Empty when every token is known. |
+| `qty_pnf` | Count of tokens attributed to PNF matches for the row. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Summed in summaries to show PNF coverage per bucket. |
+| `qty_who` | Count of WHO molecule hits contributing to the row. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Excludes PNF overlaps; used in bucket summaries. |
+| `qty_fda_drug` | Count of FDA brand→generic detections that survived scoring. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Helps quantify reliance on FDA mappings. |
+| `qty_fda_food` | Count of FDA food / non-therapeutic catalog tokens matched. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Highlights non-therapeutic influence within each bucket. |
+| `qty_unknown` | Final count of unresolved tokens after fallback heuristics. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Includes fallback counts when `unknown_words_list` is empty but the row failed matching. |
 
 ## FDA Food / Non-Therapeutic Detection
 
 | Column | Meaning | First Assigned | Notes |
 | --- | --- | --- | --- |
-| `non_therapeutic_summary` | High-level marker when FDA food/non-therapeutic hits were found. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | `non_therapeutic_detected` signals promotion to the Others bucket. |
+| `non_therapeutic_summary` | High-level marker when FDA food/non-therapeutic hits were found. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | `non_therapeutic_detected` signals promotion to the Unknown bucket. |
 | `non_therapeutic_detail` | Human-readable detail of the highest scoring catalog match. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Includes brand/product/company/registration data pulled from the FDA catalog. |
 | `non_therapeutic_tokens` | Canonical tokens extracted from matching catalog entries. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Exported as a pipe-delimited string; excluded from `unknown_words`. |
 | `non_therapeutic_hits` | JSON list of every catalog row that matched the text. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Preserved for debugging score choices and catalog coverage. |
@@ -147,7 +152,7 @@ table when validating new data or onboarding reviewers.
 - `NonTherapeuticCatalogOnly` – FDA food/non-therapeutic catalog matched while therapeutic catalogs had no coverage.
 - `PartiallyKnownTokensFrom_<sources>` – Some tokens remain unmatched even after PNF/WHO/FDA drug lookups; the suffix enumerates the datasets (e.g., `PartiallyKnownTokensFrom_PNF_WHO`, `PartiallyKnownTokensFrom_None`) that covered the known portion of the string.
 - `NoReferenceCatalogMatches` – No PNF/WHO/FDA drug or FDA food catalog entries matched any tokens; requires manual inspection.
-- `AllTokensUnknownTo_PNF_WHO_FDA` – No catalog (PNF/WHO/FDA) recognized any token in the row; all tokens remain unknown and the row is routed to the Others bucket.
+- `AllTokensUnknownTo_PNF_WHO_FDA` – No catalog (PNF/WHO/FDA) recognized any token in the row; all tokens remain unknown and the row is routed to the Unknown bucket.
 - `RowFailedAllMatchingSteps` – All reference matching stages failed; no catalogs provided coverage.
 
 **`match_quality` review / auto-accept tags**
@@ -186,6 +191,6 @@ table when validating new data or onboarding reviewers.
 
 | Column | Meaning | First Assigned | Notes |
 | --- | --- | --- | --- |
-| `bucket_final` | Final workflow bucket (`Auto-Accept`, `Needs review`, `Others`). | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Determines downstream handling. |
-| `why_final` | High-level justification aligned with `bucket_final`. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Often `Needs review` or `Unknown`. |
+| `bucket_final` | Final workflow bucket (`Auto-Accept`, `Candidates`, `Needs review`, `Unknown`). | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Determines downstream handling. |
+| `why_final` | High-level justification aligned with `bucket_final`. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Mirrors the bucket label for readability. |
 | `reason_final` | Expanded rationale for review or other buckets. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Includes unknown-token annotations when applicable. |
