@@ -956,12 +956,11 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
             out.loc[others_mask, "why_final"] = "Unknown"
             out.loc[others_mask, "reason_final"] = _annotate_unknown_with_presence(reason, out.loc[others_mask].index)
 
-    unknown_map = {
-        "Single - Unknown": "Remaining tokens unknown to PNF/WHO/FDA",
-        "Multiple - All Unknown": "Remaining tokens unknown to PNF/WHO/FDA",
-        "Multiple - Some Unknown": "Remaining tokens unknown to PNF/WHO/FDA",
+    detail_unknown_map = {
+        "Single - Unknown": "Single remaining token unknown to PNF/WHO/FDA",
+        "Multiple - All Unknown": "All tokens unknown to PNF/WHO/FDA",
+        "Multiple - Some Unknown": "Multiple remaining tokens unknown to PNF/WHO/FDA",
     }
-    unknown_detail = out["unknown_kind"].map(unknown_map).fillna("")
 
     if "unknown_words_list" in out.columns:
         unknown_tokens_col = out["unknown_words_list"]
@@ -973,9 +972,10 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     detail_values: list[str] = []
     for pos, idx in enumerate(out.index):
         descriptors: list[str] = []
-        unk_label = unknown_detail.at[idx] if idx in unknown_detail.index else ""
-        if unk_label:
-            descriptors.append(unk_label)
+        kind_value = out["unknown_kind"].iat[pos] if pos < len(out) else None
+        detail_text = detail_unknown_map.get(kind_value)
+        if detail_text:
+            descriptors.append(detail_text)
         nonthera_flag = nonthera_label.at[idx] if idx in nonthera_label.index else ""
         if nonthera_flag:
             descriptors.append("Matches FDA food/non-therapeutic catalog")
@@ -1009,23 +1009,30 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
 
     mask = residual_molecule & (~has_nonthera) & unknown_some
     if mask.any():
-        # Build granular labels describing which datasets covered the known tokens.
-        source_labels: list[str] = []
+        source_labels: list[tuple[int, str]] = []
+        route_to_others: list[int] = []
         for pos, idx in enumerate(out.index):
             if not mask.iat[pos]:
                 continue
-            sources = []
+            sources: list[str] = []
             if present_in_pnf.iat[pos]:
                 sources.append("PNF")
             if present_in_who.iat[pos]:
                 sources.append("WHO")
             if present_in_fda.iat[pos]:
                 sources.append("FDA")
-            suffix = "_".join(sources) if sources else "None"
-            source_labels.append((idx, f"PartiallyKnownTokensFrom_{suffix}"))
+            if sources:
+                suffix = "_".join(sources)
+                source_labels.append((idx, f"PartiallyKnownTokensFrom_{suffix}"))
+            else:
+                route_to_others.append(idx)
         if source_labels:
             idxs, labels = zip(*source_labels)
             out.loc[list(idxs), "match_molecule(s)"] = list(labels)
+        if route_to_others:
+            out.loc[route_to_others, "bucket_final"] = "Others"
+            out.loc[route_to_others, "why_final"] = "Unknown"
+            out.loc[route_to_others, "reason_final"] = "all_tokens_unknown"
         out.loc[mask & residual_quality, "match_quality"] = "unknown_tokens_present"
 
     mask = residual_molecule & (~has_nonthera) & (~unknown_any)
