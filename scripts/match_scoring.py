@@ -1138,22 +1138,21 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
         parts = [segment.strip() for segment in stripped.split(";") if segment.strip()]
         if not parts:
             return "N/A"
+        label = "ContainsUnknown(s)"
         rewritten: list[str] = []
         replaced = False
         for segment in parts:
-            match = re.match(r"Unknown tokens:\s*(\d+)", segment, flags=re.IGNORECASE)
-            if match:
-                count = int(match.group(1))
-                label = "ContainsUnknowns: One" if count == 1 else "ContainsUnknowns: Multiple"
-                rewritten.append(label)
+            if re.match(r"Unknown tokens:\s*\d+", segment, flags=re.IGNORECASE):
+                if label not in rewritten:
+                    rewritten.append(label)
                 replaced = True
             else:
                 rewritten.append(segment)
         if not rewritten:
-            return "N/A"
-        if replaced:
-            return "; ".join(rewritten)
-        return "; ".join(parts)
+            return label if replaced else "N/A"
+        if replaced and label not in rewritten:
+            rewritten.append(label)
+        return "; ".join(rewritten)
 
     others_mask = out["bucket_final"].eq("Others")
     if others_mask.any():
