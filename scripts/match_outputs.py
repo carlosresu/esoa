@@ -179,10 +179,9 @@ def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
             .replace({"": "N/A"})
         )
         top = series.value_counts().head(limit)
-        bucket_count = int(len(bucket_df)) or 1
         for value, count in top.items():
-            pct_local = round(count / float(bucket_count) * 100, 2)
-            lines.append(f"    {label}: {value}: {count:,} ({pct_local}%)")
+            pct_total = round(count / float(total) * 100, 2) if total else 0.0
+            lines.append(f"    {label}: {value}: {count:,} ({pct_total}%)")
 
     for bucket in bucket_order:
         bucket_rows = out_small.loc[out_small["bucket_final"].eq(bucket)].copy()
