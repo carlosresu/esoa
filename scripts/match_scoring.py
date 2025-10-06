@@ -838,6 +838,23 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     out.loc[needs_rev_mask, "reason_final"] = out.loc[needs_rev_mask, "match_quality"]
     out["reason_final"] = _mk_reason(out["reason_final"], DEFAULT_METADATA_GAP_REASON)
 
+    # Provide consistent quality tags for Auto-Accept rows so summaries add up cleanly.
+    auto_rows = out["bucket_final"].eq("Auto-Accept")
+    quality_blank = out["match_quality"].astype(str).str.strip().eq("")
+    route_present_mask = out["route"].astype(str).str.strip().ne("")
+    form_present_mask = out["form"].astype(str).str.strip().ne("")
+    exact_auto = (
+        auto_rows
+        & quality_blank
+        & route_present_mask
+        & form_present_mask
+        & (out["dose_sim"].astype(float) == 1.0)
+    )
+    out.loc[exact_auto, "match_quality"] = "auto_exact_dose_route_form"
+
+    residual_auto = auto_rows & quality_blank & (~exact_auto)
+    out.loc[residual_auto, "match_quality"] = "auto_policy_substitution"
+
     unknown_single = out["unknown_kind"].eq("Single - Unknown")
     unknown_multi_all = out["unknown_kind"].eq("Multiple - All Unknown")
     unknown_multi_some = out["unknown_kind"].eq("Multiple - Some Unknown")

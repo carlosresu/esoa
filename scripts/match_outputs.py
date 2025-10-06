@@ -171,42 +171,47 @@ def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
     aa_pct = round(aa / float(total) * 100, 2) if total else 0.0
     lines.append(f"Auto-Accept: {aa:,} ({aa_pct}%)")
     if aa:
-        exact_mask = (
-            (aa_rows["dose_sim"].astype(float) == 1.0)
-            & aa_rows["route"].astype(str).ne("")
-            & aa_rows["form"].astype(str).ne("")
-        )
-        if "brand_swap_added_generic" in aa_rows.columns:
-            swap_series = aa_rows["brand_swap_added_generic"].astype(bool)
+        if "match_molecule(s)" in aa_rows.columns:
+            aa_rows["match_molecule(s)"] = _normalize_summary_field(aa_rows["match_molecule(s)"])
         else:
-            swap_series = aa_rows["did_brand_swap"].astype(bool)
-        swapped_exact = aa_rows.loc[exact_mask & swap_series]
-        clean_exact = aa_rows.loc[exact_mask & (~swap_series)]
+            aa_rows["match_molecule(s)"] = _normalize_summary_field(pd.Series(["" for _ in range(len(aa_rows))], index=aa_rows.index))
+        if "match_quality" in aa_rows.columns:
+            aa_rows["match_quality"] = _normalize_summary_field(aa_rows["match_quality"])
+        else:
+            aa_rows["match_quality"] = _normalize_summary_field(pd.Series(["" for _ in range(len(aa_rows))], index=aa_rows.index))
 
-        aa_breakdown = []
-        if len(swapped_exact):
-            count = len(swapped_exact)
-            pct = round(count / float(total) * 100, 2)
-            # Highlight brand-swapped exact matches separately for quick auditing.
-            aa_breakdown.append(
-                (
-                    count,
-                    f"  ValidBrandSwappedForGenericInPNF: exact dose/form/route match: {count:,} ({pct}%)",
-                )
+        if mode == "default":
+            grp = (
+                aa_rows.groupby(["match_molecule(s)", "match_quality"], dropna=False)
+                .size()
+                .reset_index(name="n")
             )
-        if len(clean_exact):
-            count = len(clean_exact)
-            pct = round(count / float(total) * 100, 2)
-            # Track native PNF exact matches without brand swaps.
-            aa_breakdown.append(
-                (
-                    count,
-                    f"  ValidGenericInPNF, exact dose/route/form match: {count:,} ({pct}%)",
+            grp["pct"] = (grp["n"] / float(total) * 100).round(2) if total else 0.0
+            grp = grp.sort_values(by=["n", "match_molecule(s)", "match_quality"], ascending=[False, True, True])
+            for _, row in grp.iterrows():
+                lines.append(
+                    f"  {row['match_molecule(s)']}: {row['match_quality']}: {row['n']:,} ({row['pct']}%)"
                 )
+        elif mode == "molecule":
+            grp = (
+                aa_rows.groupby(["match_molecule(s)"] , dropna=False)
+                .size()
+                .reset_index(name="n")
             )
-
-        for _, line in sorted(aa_breakdown, key=lambda x: x[0], reverse=True):
-            lines.append(line)
+            grp["pct"] = (grp["n"] / float(total) * 100).round(2) if total else 0.0
+            grp = grp.sort_values(by=["n", "match_molecule(s)"] , ascending=[False, True])
+            for _, row in grp.iterrows():
+                lines.append(f"  {row['match_molecule(s)']}: {row['n']:,} ({row['pct']}%)")
+        elif mode == "match":
+            grp = (
+                aa_rows.groupby(["match_quality"], dropna=False)
+                .size()
+                .reset_index(name="n")
+            )
+            grp["pct"] = (grp["n"] / float(total) * 100).round(2) if total else 0.0
+            grp = grp.sort_values(by=["n", "match_quality"], ascending=[False, True])
+            for _, row in grp.iterrows():
+                lines.append(f"  {row['match_quality']}: {row['n']:,} ({row['pct']}%)")
 
     # Needs review
     nr_rows = out_small.loc[out_small["bucket_final"].eq("Needs review")].copy()
