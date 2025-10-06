@@ -950,32 +950,36 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
             out.loc[nonthera_here, "why_final"] = "Non-Therapeutic Medical Products"
             reason_tag = "non_therapeutic_detected"
             out.loc[nonthera_here, "reason_final"] = reason_tag
+            out.loc[nonthera_here, "match_molecule(s)"] = "NonTherapeuticCatalogOnly"
+            out.loc[nonthera_here, "match_quality"] = "nontherapeutic_catalog_match"
 
         if others_mask.any():
             out.loc[others_mask, "bucket_final"] = "Others"
             out.loc[others_mask, "why_final"] = "Unknown"
             out.loc[others_mask, "reason_final"] = _annotate_unknown_with_presence(reason, out.loc[others_mask].index)
-
-    detail_unknown_map = {
-        "Single - Unknown": "Single remaining token unknown to PNF/WHO/FDA",
-        "Multiple - All Unknown": "All tokens unknown to PNF/WHO/FDA",
-        "Multiple - Some Unknown": "Multiple remaining tokens unknown to PNF/WHO/FDA",
-    }
+            out.loc[others_mask, "match_molecule(s)"] = "AllTokensUnknownTo_PNF_WHO_FDA"
+            out.loc[others_mask, "match_quality"] = "N/A"
 
     if "unknown_words_list" in out.columns:
         unknown_tokens_col = out["unknown_words_list"]
     else:
         unknown_tokens_col = pd.Series([[] for _ in range(len(out))], index=out.index)
 
+    def _unknown_count(value: object) -> int:
+        if isinstance(value, (list, tuple, set)):
+            return sum(1 for tok in value if isinstance(tok, str) and tok.strip())
+        return 0
+
+    unknown_counts = unknown_tokens_col.map(_unknown_count)
+
     nonthera_label = nonthera_summary.fillna("").astype(str).replace({"nan": ""})
 
     detail_values: list[str] = []
     for pos, idx in enumerate(out.index):
         descriptors: list[str] = []
-        kind_value = out["unknown_kind"].iat[pos] if pos < len(out) else None
-        detail_text = detail_unknown_map.get(kind_value)
-        if detail_text:
-            descriptors.append(detail_text)
+        count_unknown = unknown_counts.iat[pos] if pos < len(unknown_counts) else 0
+        if count_unknown:
+            descriptors.append(f"Unknown tokens remaining: {count_unknown}")
         nonthera_flag = nonthera_label.at[idx] if idx in nonthera_label.index else ""
         if nonthera_flag:
             descriptors.append("Matches FDA food/non-therapeutic catalog")
@@ -1033,6 +1037,9 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
             out.loc[route_to_others, "bucket_final"] = "Others"
             out.loc[route_to_others, "why_final"] = "Unknown"
             out.loc[route_to_others, "reason_final"] = "all_tokens_unknown"
+            out.loc[route_to_others, "match_molecule(s)"] = "AllTokensUnknownTo_PNF_WHO_FDA"
+            out.loc[route_to_others, "match_quality"] = "N/A"
+            # Update detail to reflect counts (already computed); nothing additional needed here.
 
     mask = residual_molecule & (~has_nonthera) & (~unknown_any)
     if mask.any():
