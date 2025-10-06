@@ -67,56 +67,11 @@ OUTPUT_COLUMNS = [
     "bucket_final","why_final","reason_final",
 ]
 
-# Common non-clinical nouns that should not be escalated as unknowns
-COMMON_UNKNOWN_STOPWORDS = {
-    "adhesive",
-    "adhesives",
-    "admin",
-    "administration",
-    "adh",
-    "bottle",
-    "bottles",
-    "box",
-    "boxes",
-    "breathing",
-    "catheter",
-    "catheters",
-    "cannula",
-    "cannulas",
-    "diluent",
-    "diluents",
-    "dressing",
-    "dressings",
-    "fluids",
-    "gauze",
-    "gauzes",
-    "glove",
-    "gloves",
-    "latex",
-    "mask",
-    "masks",
-    "mouthwash",
-    "needle",
-    "needles",
-    "ophthalmic",
-    "opthalmic",
-    "parenteral",
-    "prefilled",
-    "respirator",
-    "respirators",
-    "syringe",
-    "syringes",
-    "tube",
-    "tubes",
-    "tubing",
-    "ventilator",
-    "ventilators",
-}
+# Reserved for pipeline-specific tokens we know are safe to ignore.
+COMMON_UNKNOWN_STOPWORDS: Set[str] = set()
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 _KNOWN_TOKENS_CACHE: Optional[Set[str]] = None
-_ENGLISH_COMMON_WORDS_CACHE: Optional[Set[str]] = None
-_DICTIONARY_WORDS_CACHE: Optional[Set[str]] = None
 
 
 def _extract_tokens(values: Iterable[object]) -> Set[str]:
@@ -185,100 +140,6 @@ def _known_tokens() -> Set[str]:
 
     _KNOWN_TOKENS_CACHE = tokens
     return _KNOWN_TOKENS_CACHE
-
-
-def _english_common_words() -> Set[str]:
-    """Return a corpus of lowercase words that correspond to common English vocabulary."""
-    global _ENGLISH_COMMON_WORDS_CACHE
-    if _ENGLISH_COMMON_WORDS_CACHE is not None:
-        return _ENGLISH_COMMON_WORDS_CACHE
-
-    words: Set[str] = set()
-    project_root = Path(__file__).resolve().parent.parent
-
-    project_root = Path(__file__).resolve().parent.parent
-
-    custom_wordlists = [
-        project_root / "resources" / "common_nondrug_terms.txt",
-        project_root / "inputs" / "english_common_words.txt",
-    ]
-    for custom_wordlist in custom_wordlists:
-        if not custom_wordlist.is_file():
-            continue
-        try:
-            with open(custom_wordlist, "r", encoding="utf-8") as f:
-                for line in f:
-                    word = line.strip().lower()
-                    if word and word.isalpha():
-                        words.add(word)
-        except Exception:
-            pass
-
-    if not words:
-        # Minimal fallback so behaviour remains predictable if no dictionary is available.
-        words.update(
-            {
-                "catheter",
-                "donation",
-                "fluids",
-                "gauze",
-                "gloves",
-                "mask",
-                "masks",
-                "ophthalmic",
-                "parenteral",
-                "prefilled",
-                "sutures",
-                "ventilator",
-            }
-        )
-
-    _ENGLISH_COMMON_WORDS_CACHE = words
-    return _ENGLISH_COMMON_WORDS_CACHE
-
-
-def _dictionary_words() -> Set[str]:
-    """Return a cached set of general English words from system dictionaries."""
-    global _DICTIONARY_WORDS_CACHE
-    if _DICTIONARY_WORDS_CACHE is not None:
-        return _DICTIONARY_WORDS_CACHE
-
-    words: Set[str] = set()
-    dictionary_candidates = [
-        Path("/usr/share/dict/words"),
-        Path("/usr/share/dict/american-english"),
-        Path("/usr/share/dict/web2"),
-        Path("/usr/share/dict/web2a"),
-    ]
-    for candidate in dictionary_candidates:
-        if not candidate.is_file():
-            continue
-        try:
-            with open(candidate, "r", encoding="utf-8", errors="ignore") as f:
-                for line in f:
-                    word = line.strip().lower()
-                    if word and word.isalpha():
-                        words.add(word)
-        except Exception:
-            continue
-
-    # ensure some expected nouns exist even if dictionary lookup fails
-    if not words:
-        words.update(
-            {
-                "donation",
-                "fluids",
-                "gauze",
-                "gloves",
-                "mask",
-                "masks",
-                "parenteral",
-                "prefilled",
-            }
-        )
-
-    _DICTIONARY_WORDS_CACHE = words
-    return _DICTIONARY_WORDS_CACHE
 
 def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
     """Produce human-readable distribution summaries for review files."""
@@ -504,12 +365,8 @@ def write_outputs(
             out_small["unknown_kind"].ne("None") & out_small["unknown_words"].astype(str).ne(""),
             ["unknown_words"]
         ].copy()
-        words = []
+        words: List[str] = []
         known_tokens = _known_tokens()
-        english_words = _english_common_words()
-        dictionary_words = _dictionary_words()
-        new_common_terms: Set[str] = set()
-        common_terms_path = Path(__file__).resolve().parent.parent / "resources" / "common_nondrug_terms.txt"
         for s in unknown["unknown_words"]:
             for w in str(s).split("|"):
                 w = w.strip()
@@ -520,13 +377,6 @@ def write_outputs(
                     continue
                 if lower in known_tokens:
                     continue
-                if len(lower) >= 4 and lower.isalpha():
-                    if lower in english_words:
-                        continue
-                    if lower in dictionary_words:
-                        english_words.add(lower)
-                        new_common_terms.add(lower)
-                        continue
                 words.append(w)
         unk_path = os.path.join(os.path.dirname(out_csv), "unknown_words.csv")
         if words:
@@ -541,22 +391,6 @@ def write_outputs(
             unk_df = pd.DataFrame(columns=["word", "count"])
         unk_df.to_csv(unk_path, index=False, encoding="utf-8")
         # Feeds resolve_unknowns.py to produce the missed_generics report highlighted in README.
-        if new_common_terms:
-            existing: Set[str] = set(english_words)
-            if common_terms_path.is_file():
-                try:
-                    with open(common_terms_path, "r", encoding="utf-8") as f:
-                        for line in f:
-                            text = line.strip().lower()
-                            if text:
-                                existing.add(text)
-                except Exception:
-                    pass
-            existing.update(new_common_terms)
-            common_terms_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(common_terms_path, "w", encoding="utf-8") as f:
-                for term in sorted(existing):
-                    f.write(f"{term}\n")
     _timed("Write unknown words CSV", _write_unknowns)
 
     _timed("Write summary.txt", lambda: _write_summary_text(out_small, out_csv))
