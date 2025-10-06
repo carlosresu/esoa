@@ -144,7 +144,7 @@ table when validating new data or onboarding reviewers.
 - `ValidMoleculeNoATCinPNF` – PNF matched but the prepared PNF extract lacks an ATC for the selected variant.
 - `NonTherapeuticFoodWithUnknownTokens` – FDA food/non-therapeutic catalog match present together with residual unknown tokens.
 - `NonTherapeuticFoodNoMolecule` – FDA food/non-therapeutic catalog match and no therapeutic molecule confirmed.
-- `PartialUnknownTokens_<sources>` – Some tokens remain unmatched even after PNF/WHO/FDA drug lookups; the suffix enumerates the datasets (e.g., `PartialUnknownTokens_PNF_WHO`, `PartialUnknownTokens_None`) that covered the known portion of the string.
+- `PartiallyKnownTokensFrom_<sources>` – Some tokens remain unmatched even after PNF/WHO/FDA drug lookups; the suffix enumerates the datasets (e.g., `PartiallyKnownTokensFrom_PNF_WHO`, `PartiallyKnownTokensFrom_None`) that covered the known portion of the string.
 - `NoStructuredSignalsDetected` – Scoring could not confirm any molecule or catalog match; manual inspection required.
 
 **`match_quality` review / auto-accept tags**
