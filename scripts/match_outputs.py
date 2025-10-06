@@ -169,7 +169,9 @@ def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
         def _emit_bucket(bucket: str, bucket_rows: pd.DataFrame) -> None:
             if bucket_rows.empty:
                 return
-            lines.append(bucket)
+            count = int(len(bucket_rows))
+            pct_bucket = round(count / float(total) * 100, 2) if total else 0.0
+            lines.append(f"{bucket}: {count:,} ({pct_bucket}%)")
             match_molecule = _normalize(
                 bucket_rows.get("match_molecule(s)", pd.Series(["N/A"] * len(bucket_rows), index=bucket_rows.index)),
                 "N/A",
@@ -193,8 +195,7 @@ def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
             for _, row in grouped.head(5).iterrows():
                 pct_total = round(row["n"] / float(total) * 100, 2) if total else 0.0
                 lines.append(
-                    f"  match_molecule: {row['match_molecule']}: "
-                    f"match_quality: {row['match_quality']}: {int(row['n']):,} ({pct_total}%)"
+                    f"  {row['match_molecule']}: {row['match_quality']}: {int(row['n']):,} ({pct_total}%)"
                 )
 
         for bucket in bucket_order:
