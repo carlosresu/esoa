@@ -116,6 +116,7 @@ COMMON_UNKNOWN_STOPWORDS = {
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 _KNOWN_TOKENS_CACHE: Optional[Set[str]] = None
 _ENGLISH_COMMON_WORDS_CACHE: Optional[Set[str]] = None
+_DICTIONARY_WORDS_CACHE: Optional[Set[str]] = None
 
 
 def _extract_tokens(values: Iterable[object]) -> Set[str]:
@@ -195,6 +196,8 @@ def _english_common_words() -> Set[str]:
     words: Set[str] = set()
     project_root = Path(__file__).resolve().parent.parent
 
+    project_root = Path(__file__).resolve().parent.parent
+
     custom_wordlists = [
         project_root / "resources" / "common_nondrug_terms.txt",
         project_root / "inputs" / "english_common_words.txt",
@@ -210,24 +213,6 @@ def _english_common_words() -> Set[str]:
                         words.add(word)
         except Exception:
             pass
-
-    dictionary_candidates = [
-        Path("/usr/share/dict/words"),
-        Path("/usr/share/dict/american-english"),
-        Path("/usr/share/dict/web2"),
-        Path("/usr/share/dict/web2a"),
-    ]
-    for candidate in dictionary_candidates:
-        if not candidate.is_file():
-            continue
-        try:
-            with open(candidate, "r", encoding="utf-8", errors="ignore") as f:
-                for line in f:
-                    word = line.strip().lower()
-                    if word and word.isalpha():
-                        words.add(word)
-        except Exception:
-            continue
 
     if not words:
         # Minimal fallback so behaviour remains predictable if no dictionary is available.
@@ -250,6 +235,50 @@ def _english_common_words() -> Set[str]:
 
     _ENGLISH_COMMON_WORDS_CACHE = words
     return _ENGLISH_COMMON_WORDS_CACHE
+
+
+def _dictionary_words() -> Set[str]:
+    """Return a cached set of general English words from system dictionaries."""
+    global _DICTIONARY_WORDS_CACHE
+    if _DICTIONARY_WORDS_CACHE is not None:
+        return _DICTIONARY_WORDS_CACHE
+
+    words: Set[str] = set()
+    dictionary_candidates = [
+        Path("/usr/share/dict/words"),
+        Path("/usr/share/dict/american-english"),
+        Path("/usr/share/dict/web2"),
+        Path("/usr/share/dict/web2a"),
+    ]
+    for candidate in dictionary_candidates:
+        if not candidate.is_file():
+            continue
+        try:
+            with open(candidate, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    word = line.strip().lower()
+                    if word and word.isalpha():
+                        words.add(word)
+        except Exception:
+            continue
+
+    # ensure some expected nouns exist even if dictionary lookup fails
+    if not words:
+        words.update(
+            {
+                "donation",
+                "fluids",
+                "gauze",
+                "gloves",
+                "mask",
+                "masks",
+                "parenteral",
+                "prefilled",
+            }
+        )
+
+    _DICTIONARY_WORDS_CACHE = words
+    return _DICTIONARY_WORDS_CACHE
 
 def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
     """Produce human-readable distribution summaries for review files."""
@@ -478,6 +507,9 @@ def write_outputs(
         words = []
         known_tokens = _known_tokens()
         english_words = _english_common_words()
+        dictionary_words = _dictionary_words()
+        new_common_terms: Set[str] = set()
+        common_terms_path = Path(__file__).resolve().parent.parent / "resources" / "common_nondrug_terms.txt"
         for s in unknown["unknown_words"]:
             for w in str(s).split("|"):
                 w = w.strip()
@@ -488,15 +520,43 @@ def write_outputs(
                     continue
                 if lower in known_tokens:
                     continue
-                if len(lower) >= 4 and lower.isalpha() and lower in english_words:
-                    continue
+                if len(lower) >= 4 and lower.isalpha():
+                    if lower in english_words:
+                        continue
+                    if lower in dictionary_words:
+                        english_words.add(lower)
+                        new_common_terms.add(lower)
+                        continue
                 words.append(w)
+        unk_path = os.path.join(os.path.dirname(out_csv), "unknown_words.csv")
         if words:
             unk_df = pd.DataFrame({"word": words})
-            unk_df = unk_df.groupby("word").size().reset_index(name="count").sort_values("count", ascending=False)
-            unk_path = os.path.join(os.path.dirname(out_csv), "unknown_words.csv")
-            unk_df.to_csv(unk_path, index=False, encoding="utf-8")
-            # Feeds resolve_unknowns.py to produce the missed_generics report highlighted in README.
+            unk_df = (
+                unk_df.groupby("word")
+                .size()
+                .reset_index(name="count")
+                .sort_values("count", ascending=False)
+            )
+        else:
+            unk_df = pd.DataFrame(columns=["word", "count"])
+        unk_df.to_csv(unk_path, index=False, encoding="utf-8")
+        # Feeds resolve_unknowns.py to produce the missed_generics report highlighted in README.
+        if new_common_terms:
+            existing: Set[str] = set(english_words)
+            if common_terms_path.is_file():
+                try:
+                    with open(common_terms_path, "r", encoding="utf-8") as f:
+                        for line in f:
+                            text = line.strip().lower()
+                            if text:
+                                existing.add(text)
+                except Exception:
+                    pass
+            existing.update(new_common_terms)
+            common_terms_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(common_terms_path, "w", encoding="utf-8") as f:
+                for term in sorted(existing):
+                    f.write(f"{term}\n")
     _timed("Write unknown words CSV", _write_unknowns)
 
     _timed("Write summary.txt", lambda: _write_summary_text(out_small, out_csv))
