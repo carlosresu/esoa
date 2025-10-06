@@ -979,16 +979,6 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
         nonthera_flag = nonthera_label.at[idx] if idx in nonthera_label.index else ""
         if nonthera_flag:
             descriptors.append("Matches FDA food/non-therapeutic catalog")
-        if unk_label:
-            sources = []
-            if present_in_pnf.iat[pos]:
-                sources.append("PNF")
-            if present_in_who.iat[pos]:
-                sources.append("WHO")
-            if present_in_fda.iat[pos]:
-                sources.append("FDA")
-            source_text = "Known tokens from: " + ("/".join(sources) if sources else "none")
-            descriptors.append(source_text)
         detail_values.append("; ".join(descriptors))
     out["detail_final"] = detail_values
 
@@ -1019,7 +1009,23 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
 
     mask = residual_molecule & (~has_nonthera) & unknown_some
     if mask.any():
-        out.loc[mask, "match_molecule(s)"] = "PartialUnknownTokens"
+        # Build granular labels describing which datasets covered the known tokens.
+        source_labels: list[str] = []
+        for pos, idx in enumerate(out.index):
+            if not mask.iat[pos]:
+                continue
+            sources = []
+            if present_in_pnf.iat[pos]:
+                sources.append("PNF")
+            if present_in_who.iat[pos]:
+                sources.append("WHO")
+            if present_in_fda.iat[pos]:
+                sources.append("FDA")
+            suffix = "_".join(sources) if sources else "None"
+            source_labels.append((idx, f"PartialUnknownTokens_{suffix}"))
+        if source_labels:
+            idxs, labels = zip(*source_labels)
+            out.loc[list(idxs), "match_molecule(s)"] = list(labels)
         out.loc[mask & residual_quality, "match_quality"] = "unknown_tokens_present"
 
     mask = residual_molecule & (~has_nonthera) & (~unknown_any)
