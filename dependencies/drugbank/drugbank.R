@@ -51,10 +51,9 @@ dataset <- drugbank
 english_synonyms <- dataset$drugs$synonyms %>%
   mutate(language_lower = tolower(language)) %>%
   filter(!is.na(language_lower), str_detect(language_lower, "english")) %>%
-  transmute(name = normalize_name(synonym)) %>%
+  transmute(name = str_squish(normalize_name(synonym))) %>%
   filter(!is.na(name), name != "") %>%
-  filter(!str_detect(name, "[-+(),'/]")) %>%
-  filter(!str_detect(name, "[0-9]")) %>%
+  filter(str_detect(name, "^[a-z ]+$")) %>%
   distinct(name) %>%
   arrange(name)
 
