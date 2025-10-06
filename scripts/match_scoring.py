@@ -957,9 +957,9 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
             out.loc[others_mask, "reason_final"] = _annotate_unknown_with_presence(reason, out.loc[others_mask].index)
 
     unknown_map = {
-        "Single - Unknown": "Unknown tokens present (Single - Unknown: term not found in PNF/WHO/FDA)",
-        "Multiple - All Unknown": "Unknown tokens present (Multiple - All Unknown: no tokens found in PNF/WHO/FDA)",
-        "Multiple - Some Unknown": "Unknown tokens present (Multiple - Some Unknown: some tokens missing from PNF/WHO/FDA)",
+        "Single - Unknown": "Remaining tokens unknown to PNF/WHO/FDA",
+        "Multiple - All Unknown": "Remaining tokens unknown to PNF/WHO/FDA",
+        "Multiple - Some Unknown": "Remaining tokens unknown to PNF/WHO/FDA",
     }
     unknown_detail = out["unknown_kind"].map(unknown_map).fillna("")
 
@@ -1022,7 +1022,7 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
             if present_in_fda.iat[pos]:
                 sources.append("FDA")
             suffix = "_".join(sources) if sources else "None"
-            source_labels.append((idx, f"PartialUnknownTokens_{suffix}"))
+            source_labels.append((idx, f"PartiallyKnownTokensFrom_{suffix}"))
         if source_labels:
             idxs, labels = zip(*source_labels)
             out.loc[list(idxs), "match_molecule(s)"] = list(labels)
