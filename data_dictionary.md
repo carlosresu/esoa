@@ -25,6 +25,7 @@ table when validating new data or onboarding reviewers.
 | --- | --- | --- | --- |
 | `probable_brands` | Pipe-delimited display names of FDA brands detected in the row. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Blank when no brand triggered; helps auditors trace swaps. |
 | `did_brand_swap` | Indicates whether any FDA brand token was replaced with its generic. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | `True` even if the resulting text already contained the generic. |
+| `brand_swap_added_generic` | `True` only when the swap inserted new generic tokens into the text. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Drives the +10 confidence bonus once dose/form/route stay aligned. |
 | `fda_dose_corroborated` | `True` when FDA metadata confirms the detected dose. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Requires both a brand swap and matching FDA dose string. |
 | `fda_generics_list` | Canonical FDA generics surfaced during brand swaps. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Serialized as a pipe-delimited string during export; informs `generic_final` fallback. |
 
