@@ -249,9 +249,9 @@ def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
                 for segment in parts:
                     match = re.search(r"^Unknown tokens:\s*(\d+)", segment)
                     if match:
-                        count = int(match.group(1))
-                        label = "ContainsUnknowns: One" if count == 1 else "ContainsUnknowns: Multiple"
-                        rewritten.append(label)
+                        label = "ContainsUnknown(s)"
+                        if label not in rewritten:
+                            rewritten.append(label)
                         replaced = True
                     else:
                         rewritten.append(segment)
