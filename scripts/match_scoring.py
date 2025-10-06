@@ -979,7 +979,7 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
         descriptors: list[str] = []
         count_unknown = unknown_counts.iat[pos] if pos < len(unknown_counts) else 0
         if count_unknown:
-            descriptors.append(f"Unknown tokens remaining: {count_unknown}")
+            descriptors.append(f"Unknown tokens: {count_unknown}")
         nonthera_flag = nonthera_label.at[idx] if idx in nonthera_label.index else ""
         if nonthera_flag:
             descriptors.append("Matches FDA food/non-therapeutic catalog")
@@ -1039,12 +1039,11 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
             out.loc[route_to_others, "reason_final"] = "all_tokens_unknown"
             out.loc[route_to_others, "match_molecule(s)"] = "AllTokensUnknownTo_PNF_WHO_FDA"
             out.loc[route_to_others, "match_quality"] = "N/A"
-            # Update detail to reflect counts (already computed); nothing additional needed here.
 
     mask = residual_molecule & (~has_nonthera) & (~unknown_any)
     if mask.any():
-        out.loc[mask, "match_molecule(s)"] = "NoStructuredSignalsDetected"
-        out.loc[mask & residual_quality, "match_quality"] = "manual_review_required"
+        out.loc[mask, "match_molecule(s)"] = "NoReferenceCatalogMatches"
+        out.loc[mask & residual_quality, "match_quality"] = "no_reference_catalog_match"
 
     if "dose_recognized" in out.columns:
         out["dose_recognized"] = np.where(out["dose_sim"].astype(float) == 1.0, out["dose_recognized"], "N/A")
