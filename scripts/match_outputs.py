@@ -69,16 +69,53 @@ OUTPUT_COLUMNS = [
 
 # Common non-clinical nouns that should not be escalated as unknowns
 COMMON_UNKNOWN_STOPWORDS = {
+    "adhesive",
+    "adhesives",
+    "admin",
+    "administration",
+    "adh",
     "bottle",
     "bottles",
     "box",
     "boxes",
+    "breathing",
+    "catheter",
+    "catheters",
+    "cannula",
+    "cannulas",
+    "diluent",
+    "diluents",
+    "dressing",
+    "dressings",
+    "fluids",
+    "gauze",
+    "gauzes",
+    "glove",
+    "gloves",
+    "latex",
+    "mask",
+    "masks",
+    "mouthwash",
+    "needle",
+    "needles",
+    "ophthalmic",
+    "opthalmic",
+    "parenteral",
+    "prefilled",
+    "respirator",
+    "respirators",
     "syringe",
     "syringes",
+    "tube",
+    "tubes",
+    "tubing",
+    "ventilator",
+    "ventilators",
 }
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 _KNOWN_TOKENS_CACHE: Optional[Set[str]] = None
+_ENGLISH_COMMON_WORDS_CACHE: Optional[Set[str]] = None
 
 
 def _extract_tokens(values: Iterable[object]) -> Set[str]:
@@ -147,6 +184,72 @@ def _known_tokens() -> Set[str]:
 
     _KNOWN_TOKENS_CACHE = tokens
     return _KNOWN_TOKENS_CACHE
+
+
+def _english_common_words() -> Set[str]:
+    """Return a corpus of lowercase words that correspond to common English vocabulary."""
+    global _ENGLISH_COMMON_WORDS_CACHE
+    if _ENGLISH_COMMON_WORDS_CACHE is not None:
+        return _ENGLISH_COMMON_WORDS_CACHE
+
+    words: Set[str] = set()
+    project_root = Path(__file__).resolve().parent.parent
+
+    custom_wordlists = [
+        project_root / "resources" / "common_nondrug_terms.txt",
+        project_root / "inputs" / "english_common_words.txt",
+    ]
+    for custom_wordlist in custom_wordlists:
+        if not custom_wordlist.is_file():
+            continue
+        try:
+            with open(custom_wordlist, "r", encoding="utf-8") as f:
+                for line in f:
+                    word = line.strip().lower()
+                    if word and word.isalpha():
+                        words.add(word)
+        except Exception:
+            pass
+
+    dictionary_candidates = [
+        Path("/usr/share/dict/words"),
+        Path("/usr/share/dict/american-english"),
+        Path("/usr/share/dict/web2"),
+        Path("/usr/share/dict/web2a"),
+    ]
+    for candidate in dictionary_candidates:
+        if not candidate.is_file():
+            continue
+        try:
+            with open(candidate, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    word = line.strip().lower()
+                    if word and word.isalpha():
+                        words.add(word)
+        except Exception:
+            continue
+
+    if not words:
+        # Minimal fallback so behaviour remains predictable if no dictionary is available.
+        words.update(
+            {
+                "catheter",
+                "donation",
+                "fluids",
+                "gauze",
+                "gloves",
+                "mask",
+                "masks",
+                "ophthalmic",
+                "parenteral",
+                "prefilled",
+                "sutures",
+                "ventilator",
+            }
+        )
+
+    _ENGLISH_COMMON_WORDS_CACHE = words
+    return _ENGLISH_COMMON_WORDS_CACHE
 
 def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
     """Produce human-readable distribution summaries for review files."""
@@ -374,14 +477,18 @@ def write_outputs(
         ].copy()
         words = []
         known_tokens = _known_tokens()
+        english_words = _english_common_words()
         for s in unknown["unknown_words"]:
             for w in str(s).split("|"):
                 w = w.strip()
                 if not w:
                     continue
-                if w.lower() in COMMON_UNKNOWN_STOPWORDS:
+                lower = w.lower()
+                if lower in COMMON_UNKNOWN_STOPWORDS:
                     continue
-                if w.lower() in known_tokens:
+                if lower in known_tokens:
+                    continue
+                if len(lower) >= 4 and lower.isalpha() and lower in english_words:
                     continue
                 words.append(w)
         if words:
