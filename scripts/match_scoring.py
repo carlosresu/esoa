@@ -751,15 +751,19 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
 
     out["generic_final"] = out.apply(_derive_generic_final, axis=1)
 
-    is_candidate_like = out["generic_id"].notna()
-    auto_mask = is_candidate_like & present_in_pnf & has_atc_in_pnf & out["form_ok"] & out["route_ok"]
-    out.loc[auto_mask, "bucket_final"] = "Auto-Accept"
+    gid_series = out["generic_id"].fillna("").astype(str)
+    if {"generic_id", "atc_code"}.issubset(pnf_df.columns):
+        atc_counts = (
+            pnf_df.dropna(subset=["generic_id", "atc_code"])
+            .groupby("generic_id")["atc_code"]
+            .nunique()
+        )
+        single_atc_lookup = atc_counts.eq(1)
+    else:
+        single_atc_lookup = pd.Series(dtype=bool)
+    gid_single_atc = {gid: bool(val) for gid, val in single_atc_lookup.items()}
+    is_single_atc = gid_series.map(lambda gid: bool(gid) and gid_single_atc.get(gid, False)).astype(bool)
 
-    needs_rev_mask = (out["bucket_final"] == "") & (is_candidate_like | present_in_who | present_in_fda)
-    out.loc[needs_rev_mask, "bucket_final"] = "Needs review"
-    out.loc[needs_rev_mask, "why_final"] = "Needs review"
-
-    dose_mismatch_general = (out["dose_sim"].astype(float) < 1.0) & dose_present
     if "selected_variant" in out.columns:
         selected_variant_series = out["selected_variant"]
     else:
@@ -767,6 +771,22 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     selected_variant_present = (
         selected_variant_series.fillna("").astype(str).str.strip().ne("")
     )
+
+    is_candidate_like = out["generic_id"].notna()
+    base_auto_mask = is_candidate_like & present_in_pnf & has_atc_in_pnf & out["form_ok"] & out["route_ok"]
+
+    dose_values = out["dose_sim"].astype(float)
+    dose_mismatch_mask = selected_variant_present & (dose_values < 1.0)
+    dose_issue_mask = dose_mismatch_mask | (~dose_present) | (~selected_variant_present)
+
+    auto_mask = base_auto_mask & ((~dose_issue_mask) | is_single_atc)
+    out.loc[auto_mask, "bucket_final"] = "Auto-Accept"
+
+    needs_rev_mask = (out["bucket_final"] == "") & (is_candidate_like | present_in_who | present_in_fda)
+    out.loc[needs_rev_mask, "bucket_final"] = "Needs review"
+    out.loc[needs_rev_mask, "why_final"] = "Needs review"
+
+    dose_mismatch_general = (out["dose_sim"].astype(float) < 1.0) & dose_present
     who_has_ddd = False
     who_brand_swap = out["match_molecule(s)"].eq("ValidBrandSwappedForMoleculeWithATCinWHO")
     dose_mismatch_general = dose_mismatch_general & selected_variant_present
@@ -840,20 +860,11 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     out["reason_final"] = _mk_reason(out["reason_final"], DEFAULT_METADATA_GAP_REASON)
 
     # Provide consistent quality tags for Auto-Accept rows so summaries add up cleanly.
-    atc_counts = (
-        pnf_df.dropna(subset=["generic_id", "atc_code"])
-        .groupby("generic_id")["atc_code"]
-        .nunique()
-    )
-    gid_single_atc = {gid: count == 1 for gid, count in atc_counts.items()}
-
     auto_rows = out["bucket_final"].eq("Auto-Accept")
     quality_blank = out["match_quality"].astype(str).str.strip().eq("")
     route_present_mask = out["route"].astype(str).str.strip().ne("")
     form_present_mask = out["form"].astype(str).str.strip().ne("")
     dose_values = out["dose_sim"].astype(float)
-    gid_series = out["generic_id"].fillna("")
-    is_single_atc = gid_series.map(lambda gid: bool(gid) and gid_single_atc.get(gid, False)).astype(bool)
 
     exact_auto = (
         auto_rows
@@ -931,7 +942,32 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
             continue
 
         if reason == "Multiple - Some Unknown":
-            # Keep partial-unknown rows in the Needs review bucket; only annotate later via detail_final.
+            nonthera_here = (
+                mask
+                & nonthera_mask
+                & (~present_in_pnf)
+                & (~present_in_who)
+                & (~present_in_fda)
+            )
+            general_mask = mask & (~nonthera_here)
+
+            if nonthera_here.any():
+                out.loc[nonthera_here, "bucket_final"] = "Others"
+                out.loc[nonthera_here, "why_final"] = "Non-Therapeutic Medical Products"
+                out.loc[nonthera_here, "reason_final"] = "non_therapeutic_detected"
+                out.loc[nonthera_here, "match_molecule(s)"] = "NonTherapeuticCatalogOnly"
+                out.loc[nonthera_here, "match_quality"] = "nontherapeutic_catalog_match"
+
+            if general_mask.any():
+                out.loc[general_mask, "bucket_final"] = "Others"
+                blank_why = general_mask & out["why_final"].astype(str).str.strip().eq("")
+                out.loc[blank_why, "why_final"] = "Unknown"
+                reason_series = _annotate_unknown_with_presence(reason, out.loc[general_mask].index)
+                out.loc[general_mask, "reason_final"] = reason_series
+                quality_series = out["match_quality"].astype(str)
+                blank_quality = general_mask & quality_series.str.strip().eq("")
+                auto_quality = general_mask & quality_series.str.startswith("auto_", na=False)
+                out.loc[blank_quality | auto_quality, "match_quality"] = "contains_unknown_tokens"
             continue
 
         # Only fall back to the FDA food catalog when no molecule was identified in
@@ -1062,6 +1098,34 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
         out.loc[mask, "reason_final"] = "no_reference_catalog_match"
         out.loc[mask, "match_molecule(s)"] = "RowFailedAllMatchingSteps"
         out.loc[mask, "match_quality"] = "N/A"
+
+    unknown_any_mask = out["unknown_kind"].isin([
+        "Single - Unknown",
+        "Multiple - All Unknown",
+        "Multiple - Some Unknown",
+    ])
+    if unknown_any_mask.any():
+        out.loc[unknown_any_mask, "bucket_final"] = "Others"
+
+        why_series = out["why_final"].astype(str).str.strip()
+        nonthera_mask_existing = unknown_any_mask & why_series.eq("Non-Therapeutic Medical Products")
+        general_unknown_mask = unknown_any_mask & (~nonthera_mask_existing)
+
+        out.loc[general_unknown_mask, "why_final"] = "Unknown"
+
+        for reason_value in [
+            "Single - Unknown",
+            "Multiple - All Unknown",
+            "Multiple - Some Unknown",
+        ]:
+            reason_mask = general_unknown_mask & out["unknown_kind"].eq(reason_value)
+            if reason_mask.any():
+                out.loc[reason_mask, "reason_final"] = _annotate_unknown_with_presence(reason_value, out.loc[reason_mask].index)
+
+        quality_series = out["match_quality"].astype(str)
+        auto_quality = general_unknown_mask & quality_series.str.startswith("auto_", na=False)
+        blank_quality = general_unknown_mask & quality_series.str.strip().eq("")
+        out.loc[auto_quality | blank_quality, "match_quality"] = "contains_unknown_tokens"
 
     if "dose_recognized" in out.columns:
         out["dose_recognized"] = np.where(out["dose_sim"].astype(float) == 1.0, out["dose_recognized"], "N/A")
