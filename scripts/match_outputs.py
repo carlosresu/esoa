@@ -190,7 +190,6 @@ def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
         pct = round(count / float(total) * 100, 2) if total else 0.0
         lines.append(f"{bucket}: {count:,} ({pct}%)")
         if count:
-            lines.append(_render_qty_line(bucket_rows))
             if mode == "default" and "match_quality" in bucket_rows.columns:
                 _append_top_values(bucket_rows, "match_quality", "Match quality")
             elif mode == "molecule" and "match_molecule(s)" in bucket_rows.columns:
@@ -209,7 +208,6 @@ def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
         pct = round(count / float(total) * 100, 2) if total else 0.0
         lines.append(f"{bucket}: {count:,} ({pct}%)")
         if count:
-            lines.append(_render_qty_line(bucket_rows))
             if "why_final" in bucket_rows.columns and "reason_final" in bucket_rows.columns:
                 grouped = (
                     bucket_rows.groupby(["why_final", "reason_final"], dropna=False)
