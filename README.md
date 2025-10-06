@@ -140,6 +140,7 @@ Supervisor input needed
 
 - Builds Aho–Corasick automata of FDA brand names; maps each to one or more FDA-listed generics with optional dose/form metadata.
 - For each eSOA line, we detect brands in the main text and replace with the FDA generic, recording did_brand_swap = True.
+- Flags `brand_swap_added_generic` when a swap actually injects new generic tokens; the confidence bonus only applies when this flag is true and the swapped row still satisfies dose/form/route checks.
 - We do not swap text inside parentheses — assumption: parentheses annotate brands when the generic already leads (e.g., paracetamol (Biogesic)).
 
 Public health/program implications  
@@ -158,6 +159,7 @@ Supervisor input needed
 
 - Optionally loads `inputs/fda_food_products.csv` (scraped via `scripts/fda_ph_food_scraper.py`) and builds an automaton of brand and product strings.
 - Captures every hit in `non_therapeutic_hits`, distills canonical tokens in `non_therapeutic_tokens`, and highlights the highest scoring entry in `non_therapeutic_best`/`non_therapeutic_detail` so reviewers can see which registration number or company triggered the flag.
+- `non_therapeutic_summary` emits `non_therapeutic_detected` to make the Unknown-bucket routing obvious in pivots without expanding the nested JSON columns.
 - When a line resolves to an FDA food/non-therapeutic item and no PNF/WHO/FDA-drug molecule exists, scoring routes the row to the `Unknown` bucket with `why_final = "Unknown"` and `reason_final = "non_therapeutic_detected"`.
 - Tokens from the catalog are excluded from `unknown_words` so food-only strings don’t pollute the missed-generic report.
 
@@ -217,7 +219,7 @@ For each eSOA entry with at least one PNF candidate:
 - Falls back to a fuzzy PNF lookup (difflib) when exact and partial matches fail, catching common misspellings and UK/US spelling differences (e.g., Acetylcistine → Acetylcysteine, Cephalexin → Cefalexin, Trimetazidiine → Trimetazidine) before WHO/FDA heuristics engage.
 - `match_quality` now tags every record explicitly: Auto-Accept rows report `auto_exact_dose_route_form`, `dose_mismatch_same_atc`, or `dose_mismatch_varied_atc`, while review rows surface `dose_mismatch`, `route_mismatch`, `form_mismatch`, `who_*` metadata gaps, missing-dose/form/route indicators, or the new non-therapeutic / unknown-token signals. No rows fall back to a generic `unspecified` bucket.
 - Route and form substitutions that pass `route_ok`/`form_ok` remain Auto-Accept without additional tagging; the new dose tags focus solely on non-exact doses.
-- Confidence scoring: +60 generic present, +15 dose parsed, +10 route evidence, +15 ATC, +⌊dose_sim×10⌋, +10 extra when a clean brand swap aligns on dose/form/route.
+- Confidence scoring: +60 generic present, +15 dose parsed, +10 route evidence, +15 ATC, +⌊dose_sim×10⌋, +10 extra when `brand_swap_added_generic` is true and the swap still aligns on dose/form/route.
 - Auto-Accept when a PNF generic with ATC is present and both `form_ok` and `route_ok` are true. Dose mismatches therefore become visible through `dose_sim`/`match_quality` (and optional flagged notes) but do not block Auto-Accept.
 
 Public health/program implications  
