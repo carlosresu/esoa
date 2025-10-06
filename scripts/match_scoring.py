@@ -979,6 +979,16 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
         nonthera_flag = nonthera_label.at[idx] if idx in nonthera_label.index else ""
         if nonthera_flag:
             descriptors.append("Matches FDA food/non-therapeutic catalog")
+        if unk_label:
+            sources = []
+            if present_in_pnf.iat[pos]:
+                sources.append("PNF")
+            if present_in_who.iat[pos]:
+                sources.append("WHO")
+            if present_in_fda.iat[pos]:
+                sources.append("FDA")
+            source_text = "Known tokens from: " + ("/".join(sources) if sources else "none")
+            descriptors.append(source_text)
         detail_values.append("; ".join(descriptors))
     out["detail_final"] = detail_values
 

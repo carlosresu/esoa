@@ -132,7 +132,7 @@ table when validating new data or onboarding reviewers.
 | `match_molecule(s)` | Source labels describing which reference validated the molecule (PNF/WHO/FDA/brand). | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Drives reporting pivots. |
 | `generic_final` | Canonical molecule identifier(s) chosen after PNF→WHO→FDA fallback. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Pipe-delimited string; prefers `generic_id`, else WHO molecules, else FDA generics derived from alias/fuzzy matching. |
 | `match_quality` | Summary tag indicating why a row auto-accepted or still needs review. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Always populated; see the list of enumerated values below. |
-| `detail_final` | Supplemental descriptors describing unknown-token and FDA food detection outcomes. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Uses semicolon-separated phrases (no raw tokens) for easy aggregation. |
+| `detail_final` | Supplemental descriptors describing unknown-token and FDA food detection outcomes. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Semicolon-separated phrases (no raw tokens) that can include the involved catalog datastores (PNF/WHO/FDA). |
 
 **`match_molecule(s)` values in daily reporting**
 
