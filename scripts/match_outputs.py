@@ -192,20 +192,11 @@ def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
                 .reset_index(name="n")
                 .sort_values(by=["n", "match_molecule", "match_quality"], ascending=[False, True, True])
             )
-            top_rows = grouped.head(5)
-            shown = int(top_rows["n"].sum())
-            for _, row in top_rows.iterrows():
+            for _, row in grouped.iterrows():
                 pct_total = round(row["n"] / float(total) * 100, 2) if total else 0.0
                 lines.append(
                     f"  {row['match_molecule']}: {row['match_quality']}: {int(row['n']):,} "
                     f"({pct_total}% of global total)"
-                )
-            remainder = count - shown
-            if remainder > 0:
-                pct_total_remainder = round(remainder / float(total) * 100, 2) if total else 0.0
-                lines.append(
-                    f"  Other combinations: {remainder:,} "
-                    f"({pct_total_remainder}% of global total)"
                 )
 
         for bucket in bucket_order:
@@ -237,21 +228,12 @@ def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
             .str.strip()
             .replace({"": "N/A"})
         )
-        top = series.value_counts().head(limit)
-        bucket_count = len(bucket_df)
-        shown = int(top.sum())
-        for value, count in top.items():
+        counts = series.value_counts()
+        for value, count in counts.items():
             pct_total = round(count / float(total) * 100, 2) if total else 0.0
             lines.append(
                 f"    {label}: {value}: {int(count):,} "
                 f"({pct_total}% of global total)"
-            )
-        remainder = bucket_count - shown
-        if remainder > 0:
-            pct_total_remainder = round(remainder / float(total) * 100, 2) if total else 0.0
-            lines.append(
-                f"    {label}: Other values: {remainder:,} "
-                f"({pct_total_remainder}% of global total)"
             )
 
     for bucket in bucket_order:
