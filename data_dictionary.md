@@ -150,7 +150,8 @@ table when validating new data or onboarding reviewers.
 **`match_quality` review / auto-accept tags**
 
 - `auto_exact_dose_route_form` – Auto-Accept row with exact dose, route, and form alignment against the selected PNF variant.
-- `auto_policy_substitution` – Auto-Accept row that relied on approved route/form substitutions or tolerated dose variance.
+- `dose_mismatch_same_atc` – Auto-Accept row where the text dose differs but the PNF variant’s ATC is unique across all doses (policy allows the substitution).
+- `dose_mismatch_varied_atc` – Auto-Accept row with a non-exact dose where multiple ATC payloads exist across PNF variants; escalated for targeted reconciliation.
 - `dose_mismatch` – Recognized dose text disagrees with the selected PNF/WHO dose payload after normalization.
 - `form_mismatch` – Textual form or inferred form conflicts with the PNF-allowed form family for the chosen route.
 - `route_mismatch` – Textual route conflicts with the allowed routes for the candidate (including WHO fallbacks when PNF is missing).

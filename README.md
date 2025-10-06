@@ -215,7 +215,8 @@ For each eSOA entry with at least one PNF candidate:
 - Safely imputes missing form/route (`form_source`/`route_source`) from the chosen PNF variant when the text is silent and the inferred form would be coherent.
 - Emits `selected_form`, `selected_variant`, detailed dose fields, and `dose_recognized` when the dose matches exactly.
 - Falls back to a fuzzy PNF lookup (difflib) when exact and partial matches fail, catching common misspellings and UK/US spelling differences (e.g., Acetylcistine → Acetylcysteine, Cephalexin → Cefalexin, Trimetazidiine → Trimetazidine) before WHO/FDA heuristics engage.
-- `match_quality` now tags every record explicitly: Auto-Accept rows report `auto_exact_dose_route_form` or `auto_policy_substitution`, while review rows surface `dose_mismatch`, `route_mismatch`, `form_mismatch`, `who_*` metadata gaps, missing-dose/form/route indicators, or the new non-therapeutic / unknown-token signals. No rows fall back to a generic `unspecified` bucket.
+- `match_quality` now tags every record explicitly: Auto-Accept rows report `auto_exact_dose_route_form`, `dose_mismatch_same_atc`, or `dose_mismatch_varied_atc`, while review rows surface `dose_mismatch`, `route_mismatch`, `form_mismatch`, `who_*` metadata gaps, missing-dose/form/route indicators, or the new non-therapeutic / unknown-token signals. No rows fall back to a generic `unspecified` bucket.
+- Route and form substitutions that pass `route_ok`/`form_ok` remain Auto-Accept without additional tagging; the new dose tags focus solely on non-exact doses.
 - Confidence scoring: +60 generic present, +15 dose parsed, +10 route evidence, +15 ATC, +⌊dose_sim×10⌋, +10 extra when a clean brand swap aligns on dose/form/route.
 - Auto-Accept when a PNF generic with ATC is present and both `form_ok` and `route_ok` are true. Dose mismatches therefore become visible through `dose_sim`/`match_quality` (and optional flagged notes) but do not block Auto-Accept.
 

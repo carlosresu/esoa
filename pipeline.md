@@ -140,7 +140,10 @@ When `bucket_final` stays `Needs review`, downstream summaries pair `match_molec
 
 ### UnspecifiedSource
 
-- `auto_exact_dose_route_form` / `auto_policy_substitution` – Auto-Accept rows, distinguishing exact PNF matches from those that relied on allowed substitutions.
+- `auto_exact_dose_route_form` – Auto-Accept rows where the text matched the PNF dose/route/form exactly.
+- `dose_mismatch_same_atc` – Auto-Accept rows with non-exact doses, but the PNF variant’s ATC covers all dose presentations.
+- `dose_mismatch_varied_atc` – Auto-Accept rows with non-exact doses when multiple ATC payloads exist; flagged for reconciliation.
+- Approved route/form substitutions (e.g., sachet counted as tablet) are folded into these tags and no longer tracked separately.
 - `nontherapeutic_and_unknown_tokens` / `nontherapeutic_catalog_match` – FDA food/non-therapeutic catalog hits, optionally with residual unknown tokens.
 - `unknown_tokens_present` – Partial unknown tokens remain even after PNF/WHO/FDA lookups.
 - `manual_review_required` – No structured signals materialised; requires human triage.
