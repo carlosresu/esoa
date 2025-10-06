@@ -839,21 +839,48 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     out["reason_final"] = _mk_reason(out["reason_final"], DEFAULT_METADATA_GAP_REASON)
 
     # Provide consistent quality tags for Auto-Accept rows so summaries add up cleanly.
+    atc_counts = (
+        pnf_df.dropna(subset=["generic_id", "atc_code"])
+        .groupby("generic_id")["atc_code"]
+        .nunique()
+    )
+    gid_single_atc = {gid: count == 1 for gid, count in atc_counts.items()}
+
     auto_rows = out["bucket_final"].eq("Auto-Accept")
     quality_blank = out["match_quality"].astype(str).str.strip().eq("")
     route_present_mask = out["route"].astype(str).str.strip().ne("")
     form_present_mask = out["form"].astype(str).str.strip().ne("")
+    dose_values = out["dose_sim"].astype(float)
+    gid_series = out["generic_id"].fillna("")
+    is_single_atc = gid_series.map(lambda gid: bool(gid) and gid_single_atc.get(gid, False)).astype(bool)
+
     exact_auto = (
         auto_rows
         & quality_blank
         & route_present_mask
         & form_present_mask
-        & (out["dose_sim"].astype(float) == 1.0)
+        & (dose_values == 1.0)
     )
     out.loc[exact_auto, "match_quality"] = "auto_exact_dose_route_form"
 
-    residual_auto = auto_rows & quality_blank & (~exact_auto)
-    out.loc[residual_auto, "match_quality"] = "auto_policy_substitution"
+    dose_mismatch_single_atc = (
+        auto_rows
+        & quality_blank
+        & (dose_values < 1.0)
+        & is_single_atc
+    )
+    out.loc[dose_mismatch_single_atc, "match_quality"] = "dose_mismatch_same_atc"
+
+    dose_mismatch_multi_atc = (
+        auto_rows
+        & quality_blank
+        & (dose_values < 1.0)
+        & (~is_single_atc)
+    )
+    out.loc[dose_mismatch_multi_atc, "match_quality"] = "dose_mismatch_varied_atc"
+
+    remaining_auto = auto_rows & out["match_quality"].astype(str).str.strip().eq("")
+    out.loc[remaining_auto, "match_quality"] = "auto_exact_dose_route_form"
 
     unknown_single = out["unknown_kind"].eq("Single - Unknown")
     unknown_multi_all = out["unknown_kind"].eq("Multiple - All Unknown")
