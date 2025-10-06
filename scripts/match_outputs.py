@@ -151,22 +151,70 @@ def _known_tokens() -> Set[str]:
 def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
     """Produce human-readable distribution summaries for review files."""
     total = len(out_small)
-    lines: List[str] = ["Distribution Summary"]
-    qty_columns = ["qty_pnf", "qty_who", "qty_fda_drug", "qty_fda_food", "qty_unknown"]
     bucket_order = ["Auto-Accept", "Candidates", "Needs review", "Unknown"]
 
-    def _render_qty_line(bucket_df: pd.DataFrame) -> str:
-        summaries: dict[str, int] = {}
-        for col in qty_columns:
-            if col in bucket_df.columns:
-                summaries[col] = int(pd.to_numeric(bucket_df[col], errors="coerce").fillna(0).astype(int).sum())
-            else:
-                summaries[col] = 0
-        return (
-            f"  PNF: {summaries['qty_pnf']:,}, WHO: {summaries['qty_who']:,}, "
-            f"FDA drug: {summaries['qty_fda_drug']:,}, FDA food: {summaries['qty_fda_food']:,}, "
-            f"Unknowns: {summaries['qty_unknown']:,}"
-        )
+    if mode == "default":
+        lines: List[str] = []
+        seen: Set[str] = set()
+
+        def _normalize(series: pd.Series, fallback: str) -> pd.Series:
+            normalized = (
+                series.fillna("")
+                .astype(str)
+                .str.strip()
+                .replace({"": fallback})
+            )
+            return normalized
+
+        def _emit_bucket(bucket: str, bucket_rows: pd.DataFrame) -> None:
+            if bucket_rows.empty:
+                return
+            lines.append(bucket)
+            match_molecule = _normalize(
+                bucket_rows.get("match_molecule(s)", pd.Series(["N/A"] * len(bucket_rows), index=bucket_rows.index)),
+                "N/A",
+            )
+            match_quality = _normalize(
+                bucket_rows.get("match_quality", pd.Series(["N/A"] * len(bucket_rows), index=bucket_rows.index)),
+                "N/A",
+            )
+            grouped = (
+                pd.DataFrame(
+                    {
+                        "match_molecule": match_molecule,
+                        "match_quality": match_quality,
+                    }
+                )
+                .groupby(["match_molecule", "match_quality"], dropna=False)
+                .size()
+                .reset_index(name="n")
+                .sort_values(by=["n", "match_molecule", "match_quality"], ascending=[False, True, True])
+            )
+            for _, row in grouped.head(5).iterrows():
+                pct_total = round(row["n"] / float(total) * 100, 2) if total else 0.0
+                lines.append(
+                    f"  match_molecule: {row['match_molecule']}: "
+                    f"match_quality: {row['match_quality']}: {int(row['n']):,} ({pct_total}%)"
+                )
+
+        for bucket in bucket_order:
+            bucket_rows = out_small.loc[out_small["bucket_final"].eq(bucket)].copy()
+            _emit_bucket(bucket, bucket_rows)
+            seen.add(bucket)
+
+        extra_buckets = [
+            bucket
+            for bucket in out_small.get("bucket_final", pd.Series(dtype=str)).dropna().unique()
+            if bucket not in seen
+        ]
+        for bucket in sorted(extra_buckets):
+            bucket_rows = out_small.loc[out_small["bucket_final"].eq(bucket)].copy()
+            _emit_bucket(bucket, bucket_rows)
+
+        return lines
+
+    lines = ["Distribution Summary"]
+    qty_columns = ["qty_pnf", "qty_who", "qty_fda_drug", "qty_fda_food", "qty_unknown"]
 
     def _append_top_values(bucket_df: pd.DataFrame, column: str, label: str, limit: int = 5) -> None:
         if column not in bucket_df.columns:
@@ -189,9 +237,7 @@ def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
         pct = round(count / float(total) * 100, 2) if total else 0.0
         lines.append(f"{bucket}: {count:,} ({pct}%)")
         if count:
-            if mode == "default" and "match_quality" in bucket_rows.columns:
-                _append_top_values(bucket_rows, "match_quality", "Match quality")
-            elif mode == "molecule" and "match_molecule(s)" in bucket_rows.columns:
+            if mode == "molecule" and "match_molecule(s)" in bucket_rows.columns:
                 _append_top_values(bucket_rows, "match_molecule(s)", "Molecule")
             elif mode == "match" and "match_quality" in bucket_rows.columns:
                 _append_top_values(bucket_rows, "match_quality", "Match quality")
