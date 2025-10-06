@@ -1033,7 +1033,6 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
             out.loc[route_to_others, "bucket_final"] = "Others"
             out.loc[route_to_others, "why_final"] = "Unknown"
             out.loc[route_to_others, "reason_final"] = "all_tokens_unknown"
-        out.loc[mask & residual_quality, "match_quality"] = "unknown_tokens_present"
 
     mask = residual_molecule & (~has_nonthera) & (~unknown_any)
     if mask.any():
