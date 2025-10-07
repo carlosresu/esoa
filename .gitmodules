@@ -1,3 +1,6 @@
 [submodule "dependencies/atcd"]
 	path = dependencies/atcd
 	url = https://github.com/carlosresu/atcd
+[submodule "dependencies/drugbank_generics"]
+	path = dependencies/drugbank_generics
+	url = https://github.com/carlosresu/drugbank_generics
