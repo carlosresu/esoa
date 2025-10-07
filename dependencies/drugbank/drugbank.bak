@@ -1,0 +1,315 @@
+################################################################################
+# all generics + synonyms only, a-z and spaces only # ################################################################################
+
+# ensure_installed <- function(packages, repos = "https://cloud.r-project.org") {
+#   for (pkg in packages) {
+#     if (!requireNamespace(pkg, quietly = TRUE)) {
+#       install.packages(pkg, repos = repos)
+#     }
+#   }
+# }
+
+# get_script_dir <- function() {
+#   cmd_args <- commandArgs(trailingOnly = FALSE)
+#   file_arg <- grep("^--file=", cmd_args, value = TRUE)
+#   if (length(file_arg) > 0) {
+#     return(dirname(normalizePath(sub("^--file=", "", file_arg[1]))))
+#   }
+#   if (!is.null(sys.frames()[[1]]$ofile)) {
+#     return(dirname(normalizePath(sys.frames()[[1]]$ofile)))
+#   }
+#   getwd()
+# }
+
+# ensure_installed(c("tidyverse", "devtools"))
+# if (!requireNamespace("dbdataset", quietly = TRUE)) {
+#   devtools::install_github("interstellar-Consultation-Services/dbdataset", quiet = TRUE)
+# }
+
+# library(tidyverse)
+# library(dbdataset)
+
+# script_dir <- get_script_dir()
+# output_dir <- file.path(script_dir, "output")
+# output_path <- file.path(output_dir, "generics.csv")
+
+# if (!dir.exists(output_dir)) {
+#   dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+# }
+
+# normalize_name <- function(values) {
+#   trimmed <- trimws(values)
+#   transliterated <- iconv(trimmed, from = "", to = "ASCII//TRANSLIT")
+#   fallback_needed <- is.na(transliterated)
+#   if (any(fallback_needed)) {
+#     transliterated[fallback_needed] <- trimmed[fallback_needed]
+#   }
+#   tolower(transliterated)
+# }
+
+# # Source
+# dataset <- drugbank
+
+# # Synonyms column filtered to English (case-insensitive, allows combined strings)
+# english_synonyms <- dataset$drugs$synonyms %>%
+#   mutate(language_lower = tolower(language)) %>%
+#   filter(!is.na(language_lower), str_detect(language_lower, "english")) %>%
+#   transmute(name = str_squish(normalize_name(synonym))) %>%
+#   filter(!is.na(name), name != "") %>%
+#   filter(str_detect(name, "^[a-z ]+$")) %>%
+#   distinct(name) %>%
+#   arrange(name)
+
+# # Write CSV (single column)
+# write.csv(english_synonyms, output_path, row.names = FALSE, quote = TRUE)
+
+################################################################################
+# "generic","brand","route","form","atc_code","dosage","drugbank_id" #
+################################################################################
+
+# ensure_installed <- function(packages, repos = "https://cloud.r-project.org") {
+#   for (pkg in packages) {
+#     if (!requireNamespace(pkg, quietly = TRUE)) {
+#       install.packages(pkg, repos = repos)
+#     }
+#   }
+# }
+
+# get_script_dir <- function() {
+#   cmd_args <- commandArgs(trailingOnly = FALSE)
+#   file_arg <- grep("^--file=", cmd_args, value = TRUE)
+#   if (length(file_arg) > 0) {
+#     return(dirname(normalizePath(sub("^--file=", "", file_arg[1]))))
+#   }
+#   if (!is.null(sys.frames()[[1]]$ofile)) {
+#     return(dirname(normalizePath(sys.frames()[[1]]$ofile)))
+#   }
+#   getwd()
+# }
+
+# ensure_installed(c("tidyverse", "devtools"))
+# if (!requireNamespace("dbdataset", quietly = TRUE)) {
+#   devtools::install_github("interstellar-Consultation-Services/dbdataset", quiet = TRUE)
+# }
+
+# library(tidyverse)
+# library(dbdataset)
+
+# script_dir <- get_script_dir()
+# output_dir <- file.path(script_dir, "output")
+# output_path <- file.path(output_dir, "generics.csv")
+
+# if (!dir.exists(output_dir)) {
+#   dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+# }
+
+# normalize_name <- function(values) {
+#   trimmed <- trimws(values)
+#   transliterated <- iconv(trimmed, from = "", to = "ASCII//TRANSLIT")
+#   fallback_needed <- is.na(transliterated)
+#   if (any(fallback_needed)) {
+#     transliterated[fallback_needed] <- trimmed[fallback_needed]
+#   }
+#   tolower(transliterated)
+# }
+
+# # ================================
+# # Source
+# # ================================
+# dataset <- drugbank
+
+# # ================================
+# # Canonical generic names + English synonyms (normalized)
+# # Use ONLY id-based joins afterwards; names are for display/unification.
+# # ================================
+# drugs_gi <- dataset$drugs$general_information %>%
+#   transmute(
+#     drugbank_id,
+#     generic_name_raw = name,
+#     generic = normalize_name(name)
+#   )
+
+# synonyms_en <- dataset$drugs$synonyms %>%
+#   mutate(language_lower = tolower(language)) %>%
+#   filter(!is.na(language_lower), str_detect(language_lower, "english")) %>%
+#   transmute(
+#     drugbank_id,
+#     generic = synonym %>% normalize_name()
+#   ) %>%
+#   filter(!is.na(generic), generic != "", str_detect(generic, "^[a-z0-9 .+/-]+$"))
+
+# generic_name_map <- bind_rows(
+#   drugs_gi %>% select(drugbank_id, generic) %>% mutate(generic = normalize_name(generic)),
+#   synonyms_en %>% select(drugbank_id, generic)
+# ) %>%
+#   distinct(drugbank_id, generic)
+
+# # ================================
+# # ATC codes (per DrugBank ID)
+# # ================================
+# atc_tbl <- dataset$drugs$atc_codes %>%
+#   transmute(
+#     drugbank_id,
+#     atc_code = atc_code
+#   ) %>%
+#   distinct()
+
+# # ================================
+# # Route/Form/Dose candidates
+# # Prefer dosages (structured), but also harvest from products.
+# # ================================
+# dosages_tbl <- dataset$drugs$dosages %>%
+#   transmute(
+#     drugbank_id,
+#     route = str_squish(route),
+#     form = str_squish(form),
+#     dosage = str_squish(na_if(str_replace_all(str_squish(str_to_lower(strength)), "^-$", ""), ""))
+#   ) %>%
+#   mutate(
+#     route = na_if(route, ""),
+#     form  = na_if(form, "")
+#   ) %>%
+#   distinct()
+
+# # Products can contribute branded names and additional route/form info
+# products_tbl <- dataset$products %>%
+#   transmute(
+#     drugbank_id,
+#     brand_product_name = name,
+#     route = str_squish(route),
+#     form = str_squish(dosage_form),
+#     product_strength = str_squish(na_if(str_replace_all(str_squish(str_to_lower(strength)), "^-$", ""), "")),
+#     is_generic = tolower(generic) %in% c("true", "t", "1")
+#   ) %>%
+#   mutate(
+#     route = na_if(route, ""),
+#     form  = na_if(form, "")
+#   )
+
+# # Union of all known route/form/dose rows (dosages first; add product strengths as extra "dosage" signals)
+# route_form_tbl <- dosages_tbl %>%
+#   bind_rows(
+#     products_tbl %>%
+#       transmute(
+#         drugbank_id,
+#         route,
+#         form,
+#         dosage = product_strength
+#       )
+#   ) %>%
+#   filter(!is.na(route) | !is.na(form)) %>%
+#   # Normalize route/form text but keep readable casing
+#   mutate(
+#     route = str_squish(route),
+#     form  = str_squish(form)
+#   ) %>%
+#   distinct(drugbank_id, route, form, dosage)
+
+# # ================================
+# # Brand names (id-based, no fuzzy)
+# # ================================
+# brands_international <- dataset$drugs$international_brands %>%
+#   transmute(
+#     drugbank_id,
+#     brand = str_squish(brand)
+#   ) %>%
+#   filter(!is.na(brand), brand != "") %>%
+#   distinct()
+
+# brands_products <- products_tbl %>%
+#   filter(!is_generic) %>% # keep branded rows only
+#   transmute(
+#     drugbank_id,
+#     brand = str_squish(brand_product_name)
+#   ) %>%
+#   filter(!is.na(brand), brand != "") %>%
+#   distinct()
+
+# brand_map <- bind_rows(brands_international, brands_products) %>%
+#   distinct(drugbank_id, brand)
+
+# # ================================
+# # Build long-form rows:
+# # For each DrugBank ID:
+# #   - all unified generics (name + English synonyms, normalized)
+# #   - cross with all ATC codes for that ID
+# #   - paired to all known route/form rows
+# #   - attach any known brands (may be NA)
+# # ================================
+# # If a drug has an ATC but no route/form found, still emit rows with NA route/form.
+# route_form_fallback <- route_form_tbl %>%
+#   group_by(drugbank_id) %>%
+#   summarize(has_route_form = n() > 0, .groups = "drop")
+
+# # Cross-joins done safely by explicit expansions
+# base_rows <- atc_tbl %>%
+#   # ensure we keep drugs even if route/form missing
+#   left_join(route_form_fallback, by = "drugbank_id") %>%
+#   left_join(
+#     route_form_tbl,
+#     by = "drugbank_id",
+#     relationship = "many-to-many"
+#   ) %>%
+#   mutate(
+#     # If no route/form rows existed for this ID, keep a single NA route/form row
+#     route = ifelse(is.na(has_route_form), NA_character_, route),
+#     form = ifelse(is.na(has_route_form), NA_character_, form),
+#     dosage = ifelse(is.na(has_route_form), NA_character_, dosage)
+#   ) %>%
+#   select(drugbank_id, route, form, dosage, atc_code) %>%
+#   distinct()
+
+# # Attach generics (normalized) and brands (raw)
+# with_generics <- generic_name_map %>%
+#   inner_join(base_rows, by = "drugbank_id") %>%
+#   relocate(generic, .after = drugbank_id)
+
+# with_brands <- with_generics %>%
+#   left_join(brand_map, by = "drugbank_id") %>%
+#   relocate(brand, .after = generic)
+
+# # ================================
+# # Dose column rule:
+# # If within the SAME (drugbank_id, route, form) there are multiple ATC codes
+# # and the set of ATC codes varies by strength, keep dosage to disambiguate.
+# # Otherwise, blank out dosage for that group.
+# # Note: DrugBank generally assigns ATC at substance/indication level and not by dose,
+# # but we implement the rule generically.
+# # ================================
+# dose_rule <- with_brands %>%
+#   group_by(drugbank_id, route, form) %>%
+#   mutate(
+#     atc_per_group = n_distinct(atc_code),
+#     dosage_nonempty = !is.na(dosage) & dosage != ""
+#   ) %>%
+#   ungroup() %>%
+#   group_by(drugbank_id, route, form, atc_code) %>%
+#   mutate(any_dose_here = any(dosage_nonempty, na.rm = TRUE)) %>%
+#   ungroup() %>%
+#   mutate(
+#     dosage = if_else(atc_per_group > 1 & any_dose_here, dosage, NA_character_)
+#   ) %>%
+#   select(-atc_per_group, -dosage_nonempty, -any_dose_here)
+
+# # ================================
+# # Final selection + light normalization
+# # Leave filtering to the last step (only remove structurally empty names).
+# # ================================
+# final_long <- dose_rule %>%
+#   mutate(
+#     route = na_if(str_squish(route), ""),
+#     form  = na_if(str_squish(form), ""),
+#     brand = na_if(str_squish(brand), "")
+#   ) %>%
+#   select(
+#     generic, brand, route, form, atc_code, dosage, drugbank_id
+#   ) %>%
+#   distinct() %>%
+#   arrange(generic, brand, route, form, atc_code, dosage, drugbank_id)
+
+# # OPTIONAL: If you want to filter out rows lacking ATC codes or generics, do it here.
+# # (You asked to leave filtering to the last step.)
+# # final_long <- final_long %>% filter(!is.na(atc_code), !is.na(generic))
+
+# # Write CSV
+# write.csv(final_long, output_path, row.names = FALSE, quote = TRUE)
