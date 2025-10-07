@@ -225,3 +225,4 @@ output/*
 **/outputs/*
 dependencies/atcd
 .DS_Store
+prompt.txt
