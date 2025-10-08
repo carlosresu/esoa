@@ -681,12 +681,18 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
         out.get("pnf_hits_count", pd.Series([0] * len(out), index=out.index)),
         errors="coerce",
     ).fillna(0).astype(int)
+    qty_who = _count_listlike("who_molecules_list")
+    qty_fda_drug = _count_listlike("fda_generics_list")
+    qty_drugbank = _count_listlike("drugbank_generics_list")
+    qty_fda_food = _count_listlike("non_therapeutic_tokens")
+    qty_unknown = _count_listlike("unknown_words_list")
+
     out["qty_pnf"] = qty_pnf
-    out["qty_who"] = _count_listlike("who_molecules_list")
-    out["qty_fda_drug"] = _count_listlike("fda_generics_list")
-    out["qty_drugbank"] = _count_listlike("drugbank_generics_list")
-    out["qty_fda_food"] = _count_listlike("non_therapeutic_tokens")
-    out["qty_unknown"] = _count_listlike("unknown_words_list")
+    out["qty_who"] = qty_who
+    out["qty_fda_drug"] = qty_fda_drug
+    out["qty_drugbank"] = qty_drugbank
+    out["qty_fda_food"] = qty_fda_food
+    out["qty_unknown"] = qty_unknown
 
     unknown_kind_series = out.get(
         "unknown_kind",
@@ -738,6 +744,24 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     present_in_who = out["present_in_who"].astype(bool)
     present_in_fda = out["present_in_fda_generic"].astype(bool)
     present_in_drugbank = out.get("present_in_drugbank", pd.Series([False] * len(out), index=out.index)).astype(bool)
+
+    # Ensure qty columns reflect tiered source precedence: PNF → WHO → FDA Drug → DrugBank → FDA Food.
+    out.loc[present_in_pnf, "qty_who"] = 0
+    out.loc[present_in_pnf, "qty_fda_drug"] = 0
+    out.loc[present_in_pnf, "qty_drugbank"] = 0
+    out.loc[present_in_pnf, "qty_fda_food"] = 0
+
+    no_pnf = ~present_in_pnf
+    out.loc[no_pnf & present_in_who, "qty_fda_drug"] = 0
+    out.loc[no_pnf & present_in_who, "qty_drugbank"] = 0
+    out.loc[no_pnf & present_in_who, "qty_fda_food"] = 0
+
+    no_pnf_no_who = no_pnf & (~present_in_who)
+    out.loc[no_pnf_no_who & present_in_fda, "qty_drugbank"] = 0
+    out.loc[no_pnf_no_who & present_in_fda, "qty_fda_food"] = 0
+
+    no_pnf_no_who_no_fda = no_pnf_no_who & (~present_in_fda)
+    out.loc[no_pnf_no_who_no_fda & present_in_drugbank, "qty_fda_food"] = 0
     who_route_lists = [tokens if isinstance(tokens, list) else [] for tokens in out.get("who_route_tokens", [[] for _ in range(len(out))])]
     who_route_sets = [set(tokens) for tokens in who_route_lists]
     who_route_info_available = pd.Series([bool(tokens) for tokens in who_route_sets], index=out.index)
