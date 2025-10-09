@@ -188,15 +188,72 @@ def build_features(
     # 1) Validate inputs
     def _validate():
         required_pnf = {
-            "generic_id","generic_name","synonyms","atc_code","route_allowed","form_token",
-            "dose_kind","strength","unit","per_val","per_unit","pct","strength_mg","ratio_mg_per_ml"
+            "generic_id",
+            "generic_name",
+            "synonyms",
+            "atc_code",
+            "route_allowed",
+            "form_token",
+            "dose_kind",
+            "strength",
+            "unit",
+            "per_val",
+            "per_unit",
+            "pct",
+            "strength_mg",
+            "ratio_mg_per_ml",
+            "source",
+            "source_priority",
+            "drug_code",
+            "primary_code",
+            "route_evidence_reference",
         }
         missing = required_pnf - set(pnf_df.columns)
         if missing:
-            raise ValueError(f"pnf_prepared.csv missing columns: {missing}")
+            raise ValueError(f"reference catalogue missing columns: {missing}")
         if "raw_text" not in esoa_df.columns:
             raise ValueError("esoa_prepared.csv must contain a 'raw_text' column")
     _timed("Validate inputs", _validate)
+
+    gid_to_source: Dict[str, str] = {}
+    gid_to_priority: Dict[str, int] = {}
+    gid_to_primary_code: Dict[str, str] = {}
+    gid_to_drug_code: Dict[str, str] = {}
+    gid_to_route_ref: Dict[str, str] = {}
+    for row in (
+        pnf_df[
+            [
+                "generic_id",
+                "source",
+                "source_priority",
+                "primary_code",
+                "drug_code",
+                "route_evidence_reference",
+            ]
+        ]
+        .dropna(subset=["generic_id"])
+        .drop_duplicates()
+        .itertuples(index=False)
+    ):
+        gid = str(row.generic_id)
+        if not gid:
+            continue
+        if gid not in gid_to_source:
+            gid_to_source[gid] = str(row.source) if isinstance(row.source, str) else ""
+        if gid not in gid_to_priority:
+            try:
+                gid_to_priority[gid] = int(row.source_priority)
+            except Exception:
+                gid_to_priority[gid] = 99
+        if gid not in gid_to_primary_code:
+            code = str(row.primary_code) if isinstance(row.primary_code, str) else ""
+            gid_to_primary_code[gid] = code
+        if gid not in gid_to_drug_code:
+            drug_code = str(row.drug_code) if isinstance(row.drug_code, str) else ""
+            gid_to_drug_code[gid] = drug_code
+        if gid not in gid_to_route_ref:
+            ref = str(row.route_evidence_reference) if isinstance(row.route_evidence_reference, str) else ""
+            gid_to_route_ref[gid] = ref
 
     # 2) Map normalized PNF names to gid + original name
     pnf_name_to_gid: Dict[str, Tuple[str, str]] = {}
@@ -757,6 +814,13 @@ def build_features(
                 if any(not flag for flag in salt_flags):
                     gids = [g for g, is_salt in zip(gids, salt_flags) if not is_salt]
                     tokens = [t for t, is_salt in zip(tokens, salt_flags) if not is_salt]
+            if gids:
+                ordered = sorted(
+                    zip(gids, tokens),
+                    key=lambda pair: (gid_to_priority.get(str(pair[0]), 99), str(pair[0])),
+                )
+                gids = [g for g, _ in ordered]
+                tokens = [t for _, t in ordered]
             pnf_hits_gids.append(gids); pnf_hits_tokens.append(tokens); pnf_hits_count.append(len(gids))
             if gids: primary_gid.append(gids[0]); primary_token.append(tokens[0])
             else: primary_gid.append(None); primary_token.append(None)
@@ -1070,6 +1134,12 @@ def build_features(
             df["present_in_drugbank"] = df["drugbank_generics_list"].map(lambda xs: bool(xs))
         else:
             df["present_in_drugbank"] = False
+        df["reference_source"] = df["generic_id"].map(lambda gid: gid_to_source.get(str(gid), "") if gid is not None else "")
+        df["reference_priority"] = df["generic_id"].map(lambda gid: gid_to_priority.get(str(gid), 99) if gid is not None else 99)
+        df["reference_primary_code"] = df["generic_id"].map(lambda gid: gid_to_primary_code.get(str(gid), "") if gid is not None else "")
+        df["reference_drug_code"] = df["generic_id"].map(lambda gid: gid_to_drug_code.get(str(gid), "") if gid is not None else "")
+        df["reference_route_details"] = df["generic_id"].map(lambda gid: gid_to_route_ref.get(str(gid), "") if gid is not None else "")
+        df["present_in_annex"] = df["reference_source"].str.lower().eq("annex_f") & df["generic_id"].notna()
     _timed("Compute presence flags", _presence_flags)
 
     return df

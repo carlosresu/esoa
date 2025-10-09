@@ -261,8 +261,12 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
                 + df_cand["dose_sim"].astype(float) * 30.0
             )
 
+            df_cand["source_priority"] = pd.to_numeric(df_cand.get("source_priority"), errors="coerce").fillna(99)
             best_rows = (
-                df_cand.sort_values(["esoa_idx", "_score", "dose_sim"], ascending=[True, False, False])
+                df_cand.sort_values(
+                    ["esoa_idx", "_score", "source_priority", "dose_sim"],
+                    ascending=[True, False, True, False],
+                )
                 .drop_duplicates(subset=["esoa_idx"], keep="first")
                 .set_index("esoa_idx")
             )
@@ -303,6 +307,14 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
                     selected_per_unit=best_rows["per_unit"],
                     selected_ratio_mg_per_ml=best_rows["ratio_mg_per_ml"],
                     selected_pct=best_rows["pct"],
+                    reference_source=best_rows.get("source", pd.Series([""] * len(best_rows), index=best_rows.index)),
+                    reference_priority=best_rows.get("source_priority", pd.Series([99] * len(best_rows), index=best_rows.index)),
+                    drug_code_final=best_rows.get("drug_code", pd.Series([""] * len(best_rows), index=best_rows.index)),
+                    primary_code_final=best_rows.get("primary_code", pd.Series([""] * len(best_rows), index=best_rows.index)),
+                    reference_route_details=best_rows.get(
+                        "route_evidence_reference",
+                        pd.Series([""] * len(best_rows), index=best_rows.index),
+                    ),
                 )
 
                 best_by_idx = best_rows[
@@ -323,6 +335,11 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
                         "selected_per_unit",
                         "selected_ratio_mg_per_ml",
                         "selected_pct",
+                        "reference_source",
+                        "reference_priority",
+                        "drug_code_final",
+                        "primary_code_final",
+                        "reference_route_details",
                     ]
                 ].rename(columns={"_form_ok": "form_ok", "_route_ok": "route_ok"})
 
@@ -346,6 +363,11 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
         out["selected_per_unit"] = None
         out["selected_ratio_mg_per_ml"] = None
         out["selected_pct"] = None
+        out["reference_source"] = ""
+        out["reference_priority"] = 99
+        out["drug_code_final"] = ""
+        out["primary_code_final"] = ""
+        out["reference_route_details"] = ""
     else:
         out = df.merge(best_by_idx, left_on="esoa_idx", right_index=True, how="left")
         out["atc_code_final"] = out["atc_code_final"].where(out["atc_code_final"].notna(), None)
@@ -365,6 +387,11 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
         out["selected_per_unit"] = out["selected_per_unit"].where(out["selected_per_unit"].notna(), None)
         out["selected_ratio_mg_per_ml"] = out["selected_ratio_mg_per_ml"].where(out["selected_ratio_mg_per_ml"].notna(), None)
         out["selected_pct"] = out["selected_pct"].where(out["selected_pct"].notna(), None)
+        out["reference_source"] = out.get("reference_source", pd.Series([""] * len(out))).fillna("").astype(str)
+        out["reference_priority"] = pd.to_numeric(out.get("reference_priority"), errors="coerce").fillna(99).astype(int)
+        out["drug_code_final"] = out.get("drug_code_final", pd.Series([""] * len(out))).fillna("").astype(str)
+        out["primary_code_final"] = out.get("primary_code_final", pd.Series([""] * len(out))).fillna("").astype(str)
+        out["reference_route_details"] = out.get("reference_route_details", pd.Series([""] * len(out))).fillna("").astype(str)
 
     out["form_ok"] = out["form_ok"].astype(bool)
     out["route_ok"] = out["route_ok"].astype(bool)
@@ -454,6 +481,15 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
             for orig, add in zip(evidence_prefill[route_can_infer], inferred_evidence)
         ]
 
+    route_evidence_series = out.get("route_evidence").fillna("").astype(str)
+    reference_route_series = out.get("reference_route_details", pd.Series([""] * len(out))).fillna("").astype(str)
+    missing_route_evidence = route_evidence_series.str.strip().eq("")
+    with_reference = reference_route_series.str.strip().ne("")
+    fill_mask = missing_route_evidence & with_reference
+    if fill_mask.any():
+        out.loc[fill_mask, "route_evidence"] = reference_route_series[fill_mask]
+        out.loc[fill_mask & (~route_has_text), "route_source"] = out.loc[fill_mask & (~route_has_text), "route_source"].replace({"": "reference"})
+
     out["route_evidence"] = out["route_evidence"].fillna("")
 
     def _maybe_improve_selection(row: pd.Series) -> pd.Series:
@@ -481,16 +517,23 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
                 continue
             cand_form_norm = _normalize_form_token(candidate.get("form_token"))
             prefer_current = False
+            cand_priority = int(pd.to_numeric(candidate.get("source_priority"), errors="coerce") or 99)
+            best_priority = int(
+                pd.to_numeric(best_candidate.get("source_priority"), errors="coerce") or 99
+            ) if best_candidate is not None else 99
             if sim > best_sim + 1e-9:
                 prefer_current = True
             elif best_candidate is None:
                 prefer_current = True
-            elif abs(sim - best_sim) <= 1e-9 and esoa_dose.get("kind") == "ratio":
-                best_form_norm = _normalize_form_token(best_candidate.get("form_token"))
-                best_is_solid = best_form_norm in solid_forms
-                current_is_solid = cand_form_norm in solid_forms
-                if best_is_solid and not current_is_solid:
+            elif abs(sim - best_sim) <= 1e-9:
+                if cand_priority < best_priority:
                     prefer_current = True
+                elif cand_priority == best_priority and esoa_dose.get("kind") == "ratio":
+                    best_form_norm = _normalize_form_token(best_candidate.get("form_token"))
+                    best_is_solid = best_form_norm in solid_forms
+                    current_is_solid = cand_form_norm in solid_forms
+                    if best_is_solid and not current_is_solid:
+                        prefer_current = True
             if not prefer_current:
                 continue
             best_candidate = candidate
@@ -612,14 +655,22 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     route_present = pd.Series([bool(x) for x in out["route"]], index=out.index)
     route_evidence_present = pd.Series([bool(x) for x in out["route_evidence"]], index=out.index)
     generic_present = out["generic_id"].notna()
-    atc_present = pd.Series([isinstance(x, str) and len(x) > 0 for x in out["atc_code_final"]], index=out.index)
+    primary_code_series = out.get(
+        "primary_code_final",
+        pd.Series([""] * len(out), index=out.index),
+    ).fillna("").astype(str)
+    drug_code_series = out.get(
+        "drug_code_final",
+        pd.Series([""] * len(out), index=out.index),
+    ).fillna("").astype(str)
+    code_present = primary_code_series.str.strip().ne("") | drug_code_series.str.strip().ne("")
     dose_sim_clipped = out["dose_sim"].fillna(0.0).astype(float).clip(0.0, 1.0)
 
     score_series = (
         generic_present.astype(int) * 60
         + dose_present.astype(int) * 15
         + route_evidence_present.astype(int) * 10
-        + atc_present.astype(int) * 15
+        + code_present.astype(int) * 15
         + (dose_sim_clipped * 10).astype(int)
     )
     # Confidence weights mirror README guidance: strong emphasis on generic (60), then dose/ATC proof points, with optional bonus for corroborated brand swaps.
@@ -710,8 +761,8 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     has_nonthera = nonthera_summary.str.strip().ne("")
     probable_atc_series = out["probable_atc"].fillna("").astype(str)
     has_probable_atc = probable_atc_series.str.strip().ne("")
-    has_atc_in_pnf = atc_present
-    has_any_atc = has_atc_in_pnf | has_probable_atc
+    has_reference_code_in_catalogue = code_present.astype(bool)
+    has_any_primary_code = has_reference_code_in_catalogue | has_probable_atc
 
     out["bucket_final"] = ""
     out["why_final"] = ""
@@ -744,6 +795,7 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     present_in_who = out["present_in_who"].astype(bool)
     present_in_fda = out["present_in_fda_generic"].astype(bool)
     present_in_drugbank = out.get("present_in_drugbank", pd.Series([False] * len(out), index=out.index)).astype(bool)
+    present_in_annex = out.get("present_in_annex", pd.Series([False] * len(out), index=out.index)).astype(bool)
 
     # Ensure qty columns reflect tiered source precedence: PNF → WHO → FDA Drug → DrugBank → FDA Food.
     out.loc[present_in_pnf, "qty_who"] = 0
@@ -767,16 +819,24 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     who_route_info_available = pd.Series([bool(tokens) for tokens in who_route_sets], index=out.index)
     who_only_mask = present_in_who & (~present_in_pnf)
 
-    out.loc[present_in_pnf & has_atc_in_pnf, "match_molecule(s)"] = "ValidMoleculeWithATCinPNF"
+    out.loc[present_in_pnf & present_in_annex & has_reference_code_in_catalogue, "match_molecule(s)"] = "ValidMoleculeWithDrugCodeInAnnex"
+    out.loc[present_in_pnf & (~present_in_annex) & has_reference_code_in_catalogue, "match_molecule(s)"] = "ValidMoleculeWithATCinPNF"
     out.loc[(~present_in_pnf) & present_in_who, "match_molecule(s)"] = "ValidMoleculeWithATCinWHO/NotInPNF"
     out.loc[(~present_in_pnf) & (~present_in_who) & present_in_fda, "match_molecule(s)"] = "ValidMoleculeNoATCinFDA/NotInPNF"
     out.loc[(~present_in_pnf) & (~present_in_who) & (~present_in_fda) & present_in_drugbank, "match_molecule(s)"] = "ValidMoleculeInDrugBank"
 
-    pnf_without_atc = present_in_pnf & (~has_atc_in_pnf) & out["match_molecule(s)"].eq("")
-    out.loc[pnf_without_atc, "match_molecule(s)"] = "ValidMoleculeNoATCinPNF"
+    pnf_without_code = present_in_pnf & (~has_reference_code_in_catalogue) & out["match_molecule(s)"].eq("")
+    out.loc[pnf_without_code, "match_molecule(s)"] = "ValidMoleculeNoCodeInReference"
 
     out.loc[brand_swap_added & present_in_who, "match_molecule(s)"] = "ValidBrandSwappedForMoleculeWithATCinWHO"
-    out.loc[brand_swap_added & present_in_pnf & has_atc_in_pnf, "match_molecule(s)"] = "ValidBrandSwappedForGenericInPNF"
+    out.loc[
+        brand_swap_added & present_in_pnf & present_in_annex & has_reference_code_in_catalogue,
+        "match_molecule(s)",
+    ] = "ValidBrandSwappedForGenericInAnnex"
+    out.loc[
+        brand_swap_added & present_in_pnf & (~present_in_annex) & has_reference_code_in_catalogue,
+        "match_molecule(s)",
+    ] = "ValidBrandSwappedForGenericInPNF"
 
     def _unique_join(values: list[str]) -> str:
         seen: list[str] = []
@@ -836,17 +896,25 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     )
 
     is_candidate_like = out["generic_id"].notna()
-    base_auto_mask = is_candidate_like & present_in_pnf & has_atc_in_pnf & out["form_ok"] & out["route_ok"]
+    has_drug_code = drug_code_series.str.strip().ne("")
+    base_auto_mask = (
+        is_candidate_like
+        & present_in_pnf
+        & has_reference_code_in_catalogue
+        & out["form_ok"]
+        & out["route_ok"]
+    )
+    is_annex_match = present_in_annex & is_candidate_like
 
     dose_values = out["dose_sim"].astype(float)
     dose_mismatch_mask = selected_variant_present & (dose_values < 1.0)
     dose_issue_mask = dose_mismatch_mask | (~dose_present) | (~selected_variant_present)
 
-    auto_mask = base_auto_mask & ((~dose_issue_mask) | is_single_atc) & (~has_unknowns)
+    auto_mask = base_auto_mask & ((~dose_issue_mask) | is_single_atc | is_annex_match | has_drug_code) & (~has_unknowns)
     out.loc[auto_mask, "bucket_final"] = "Auto-Accept"
     out.loc[auto_mask, "why_final"] = "Auto-Accept"
 
-    review_mask = has_any_atc & (~auto_mask)
+    review_mask = has_any_primary_code & (~auto_mask)
     candidate_mask = review_mask & (~has_unknowns)
     needs_review_mask = review_mask & has_unknowns
 
