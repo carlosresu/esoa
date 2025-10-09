@@ -1,11 +1,16 @@
 # eSOA Drug Matching Pipeline
 
-This repository implements the **eSOA (electronic Statement of Account) drug matching pipeline**, a dose- and form-aware system that maps free-text medicine descriptions from hospital bills (eSOAs) to standardized drug references:
+This repository implements the **eSOA (electronic Statement of Account) drug matching pipeline**, a dose- and form-aware system that maps free-text medicine descriptions from hospital bills (eSOAs) to standardized drug references.  
+**Annex F is now the authoritative source of truth**: every record is keyed by the Annex F Drug Code first, with remaining references acting as supporting evidence or fallbacks.
 
-- **Philippine National Formulary (PNF)**
-- **FDA brand map** (brand → generic links from FDA PH online export)
-- **FDA Philippines food product catalog** (non-therapeutic identification and debug trail)
-- **WHO ATC classification** (international codes)
+Reference hierarchy used during matching:
+
+1. **Annex F** (normalized to `annex_f_prepared.csv`; primary identifier = Drug Code)
+2. **Philippine National Formulary (PNF)** (dose/form/route enrichment, ATC codes when Annex has gaps)
+3. **WHO ATC classification** (international codes; still required for program reporting but no longer the primary ID)
+4. **DrugBank generics** (synonym coverage)
+5. **FDA brand map** (brand → generic swaps feeding Annex/PNF matches)
+6. **FDA Philippines food product catalog** (non-therapeutic identification and debug trail)
 
 It prepares raw CSVs, parses text into structured features, detects candidate generics, scores/classifies matches, and outputs a labeled dataset with a detailed distribution summary and unknown token report. The goal is to support **public health operations and oversight**, not commercial decision-making.
 
@@ -53,37 +58,40 @@ field exists and how it is consumed downstream.
 
 ```mermaid
 flowchart TD
-    A[PNF CSV] --> B[Prepare PNF: normalize + parse dose/route/form]
-    A2[eSOA CSV] --> C[Prepare eSOA: normalize raw_text]
-    B --> D[PNF prepared CSV]
-    C --> E[eSOA prepared CSV]
+    A[Annex F CSV] --> B[Prepare Annex F: normalize, parse dose, infer route/form]
+    A2[PNF CSV] --> C[Prepare PNF: normalize + parse dose/route/form]
+    A3[eSOA CSV] --> D[Prepare eSOA: normalize raw_text]
+    B --> E[annex_f_prepared.csv]
+    C --> F[pnf_prepared.csv]
+    D --> G[esoa_prepared.csv]
 
-    F[FDA Portal Export] --> G[Build FDA Brand Map]
-    G --> H[fda_brand_map_YYYY-MM-DD.csv]
+    H[FDA Portal Export] --> I[Build FDA Brand Map]
+    I --> J[fda_brand_map_YYYY-MM-DD.csv]
 
-    D --> I[Build features]
-    E --> I
-    H --> I
-    I --> J[Brand to generic swaps]
-    I --> Jb[DrugBank generic overlay]
-    I --> J2[FDA food / non-therapeutic detection]
-    I --> K[Dose, route, form parsing]
-    I --> L[PNF and WHO molecule detection]
-    I --> M[Combination detection]
-    I --> N[Unknown token extraction]
+    E --> K[Build features]
+    F --> K
+    G --> K
+    J --> K
+    K --> L[Brand to generic swaps]
+    K --> Lb[DrugBank generic overlay]
+    K --> L2[FDA food / non-therapeutic detection]
+    K --> M[Dose, route, form parsing]
+    K --> N[Annex + PNF + WHO molecule detection]
+    K --> O[Combination detection]
+    K --> P[Unknown token extraction]
 
-    J --> O[Scoring and classification]
-    Jb --> O
-    J2 --> O
-    K --> O
-    L --> O
-    M --> O
-    N --> O
-    O --> P[Matched dataset CSV and XLSX]
-    O --> Q[Summary text reports]
-    O --> R[Unknown words CSV]
+    L --> Q[Scoring and classification]
+    Lb --> Q
+    L2 --> Q
+    M --> Q
+    N --> Q
+    O --> Q
+    P --> Q
+    Q --> R[Matched dataset CSV and XLSX]
+    Q --> S[Summary text reports]
+    Q --> T[Unknown words CSV]
 
-    R --> S[Resolve unknowns helper]
+    T --> U[Resolve unknowns helper]
 ```
 
 ---
@@ -120,10 +128,10 @@ Supervisor input needed
 
 ---
 
-2. Route & Form Detection ([scripts/routes_forms.py](https://github.com/carlosresu/esoa/blob/main/scripts/routes_forms.py) + [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py))
+2. Route & Form Detection ([scripts/routes_forms.py](https://github.com/carlosresu/esoa/blob/main/scripts/routes_forms.py), [scripts/prepare_annex_f.py](https://github.com/carlosresu/esoa/blob/main/scripts/prepare_annex_f.py), and [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py))
 
-- Recognizes forms (tablet, cap, MDI, DPI, susp, soln, spray, supp, etc.) and maps them to canonical routes (oral, inhalation, nasal, rectal, etc.), expanding common aliases (PO, per os, SL, IM, IV, etc.).
-- When an eSOA entry is missing the route but the form is present, the PNF-derived route is imputed and logged in `route_evidence`. If only WHO metadata is available, we map WHO Adm.R/UOM codes to the same canonical routes/forms so alignment with PNF logic remains consistent.
+- Recognizes forms (tablet, cap, MDI, DPI, susp, soln, spray, supp, etc.) and maps them to canonical routes (oral, inhalation, nasal, rectal, etc.), expanding common aliases (PO, per os, SL, IM, IV, etc.). Annex F gets additional heuristics for drops, ovules, shampoos, and packaging-driven inference (ampule/vial → injectable, large-volume bottles/bags → intravenous, nebules → inhalation).
+- When an eSOA entry is missing the route but the form is present, the Annex/PNF route is imputed and logged in `route_evidence`. If only WHO metadata is available, we map WHO Adm.R/UOM codes to the same canonical routes/forms so alignment with Annex/PNF logic remains consistent.
 - The scorer keeps a per-route interchange whitelist (`APPROVED_ROUTE_FORMS`) so, for example, tablets and capsules under the oral route both satisfy `form_ok`. Accepted substitutions are surfaced in `route_form_imputations`.
 - Suspicious but historically observed combinations (e.g., oral vials) live in `FLAGGED_ROUTE_FORM_EXCEPTIONS`; they remain valid yet receive a `flagged:` annotation so reviewers know why the match passed.
 - Solid oral forms are not auto-imputed when the detected dose is a ratio (mg/mL) to avoid creating impossible solid/liquid pairings.
@@ -314,7 +322,7 @@ Additional lines list the top molecules or match-quality drivers per bucket when
 pip install -r requirements.txt
 
 # Run full pipeline (writes to ./outputs)
-python run.py --pnf inputs/pnf.csv --esoa inputs/esoa.csv --out esoa_matched.csv
+python run.py --annex inputs/annex_f.csv --pnf inputs/pnf.csv --esoa inputs/esoa.csv --out esoa_matched.csv
 ```
 
 **DrugBank prerequisite**  
@@ -326,6 +334,7 @@ Optional flags
 - --skip-r — Skip ATC preprocessing
 - --skip-brandmap — Reuse existing FDA brand map
 - --skip-excel — Skip writing the XLSX workbook (CSV and summaries only)
+- --annex — Override Annex F CSV path (defaults to `inputs/annex_f.csv`; auto-writes `inputs/annex_f_prepared.csv`)
 
 ### Minimal/local run
 
@@ -360,6 +369,7 @@ python debug.py --pnf inputs/pnf.csv --esoa inputs/esoa.csv --out esoa_matched.c
 - [match_outputs.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_outputs.py) — CSV/Excel writers and summary
 - [match.py](https://github.com/carlosresu/esoa/blob/main/scripts/match.py) — Orchestrates matching
 - [prepare.py](https://github.com/carlosresu/esoa/blob/main/scripts/prepare.py) — Prepares PNF/eSOA inputs
+- [prepare_annex_f.py](https://github.com/carlosresu/esoa/blob/main/scripts/prepare_annex_f.py) — Prepares Annex F authoritative catalogue (names, dose, route/form, packaging metadata)
 - [reference_data.py](https://github.com/carlosresu/esoa/blob/main/scripts/reference_data.py) — Shared loaders for DrugBank generics and ignore-word lists reused across pipeline stages
 - [routes_forms.py](https://github.com/carlosresu/esoa/blob/main/scripts/routes_forms.py) — Form→route maps and parsing
 - [text_utils.py](https://github.com/carlosresu/esoa/blob/main/scripts/text_utils.py) — Normalization helpers
@@ -401,6 +411,9 @@ python debug.py --pnf inputs/pnf.csv --esoa inputs/esoa.csv --out esoa_matched.c
 
 6. FDA brand map cadence  
    `probable_brands` and brand-swap scoring depend on the freshness of `fda_brand_map_*.csv`. Confirm how often the brand export should be refreshed and who validates multi-generic mappings before they enter production.
+
+7. Annex F coverage gaps  
+   87 Annex F rows (primarily powders, concentrates, and dialysis solutions) still lack confident route/form inference. Decide whether to extend heuristic coverage (e.g., treating “dry powder dispenser” as inhalation) or maintain a manual curation list before enabling Auto-Accept for those cases.
 
 ---
 
