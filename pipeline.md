@@ -8,16 +8,16 @@ deep-diving into a particular step, the code comments explain the exact
 transformations performed and why policy constants are set the way they are.
 
 1. **Load Prepared Inputs**  
-   Resolve CLI paths (defaults under `inputs/`), verify the files exist, and read the prepared PNF and eSOA CSVs (`pnf_prepared.csv`, `esoa_prepared.csv`) into pandas data frames (see [run.py](https://github.com/carlosresu/esoa/blob/main/run.py) and [scripts/match.py](https://github.com/carlosresu/esoa/blob/main/scripts/match.py)).
+   Resolve CLI paths (defaults under `inputs/`), verify the files exist, and read the prepared Annex F, PNF, and eSOA CSVs (`annex_f_prepared.csv`, `pnf_prepared.csv`, `esoa_prepared.csv`) into pandas data frames (see [run.py](https://github.com/carlosresu/esoa/blob/main/run.py) and [scripts/match.py](https://github.com/carlosresu/esoa/blob/main/scripts/match.py)).
 
 2. **Validate Structural Expectations**  
-   Ensure the PNF frame exposes the required molecule, dose, route, and ATC fields and that the eSOA frame includes `raw_text` (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)).
+   Ensure the unified reference catalogue exposes Annex/PNF molecule, dose, route, priority, and identifier fields, and that the eSOA frame includes `raw_text` (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)).
 
 3. **Index Reference Vocabularies**  
-   Build normalized PNF name lookups, load WHO ATC exports (including regex caches, DDD metadata, and WHO route/form mappings), and prepare the FDA brand map automata plus generic token set (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)).
+   Build normalized Annex F + PNF name lookups (Annex priority), load WHO ATC exports (including regex caches, DDD metadata, and WHO route/form mappings), and prepare the FDA brand map automata plus generic token set (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)).
 
-4. **Construct PNF Search Automata**  
-   Create normalized/compact Aho–Corasick automatons and train the partial token index used for fallback matches (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)).
+4. **Construct Search Automata**  
+   Create normalized/compact Aho–Corasick automatons for the combined reference set and train the partial token index used for fallback matches (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)).
 
 5. **Normalize eSOA Text**  
    Produce the working frame with `raw_text`, parenthetical captures, `esoa_idx`, and normalized text variants (`normalized`, `norm_compact`) (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)).
@@ -32,7 +32,7 @@ transformations performed and why policy constants are set the way they are.
    Re-run dose parsing and route/form detection against the swapped text to produce `dosage_parsed`, `route`, `form`, and refreshed evidence fields (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)).
 
 9. **Detect Molecules Across References**  
-   Execute PNF automaton scans (`pnf_hits_gids`, `pnf_hits_tokens`) using expanded alias sets (parenthetical trade names, slash/plus splits, curated abbreviations), fall back to partial and fuzzy matches for near-miss spellings, and detect WHO molecules with ATC/DDD metadata (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)).
+   Execute Annex/PNF automaton scans (`pnf_hits_gids`, `pnf_hits_tokens`) using expanded alias sets (parenthetical trade names, slash/plus splits, curated abbreviations), fall back to partial and fuzzy matches for near-miss spellings, and detect WHO molecules with ATC/DDD metadata. Annex hits are prioritized via `source_priority` before scoring (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)).
 
 10. **Overlay DrugBank Generics**  
     Load the DrugBank generics export via [scripts/reference_data.py](https://github.com/carlosresu/esoa/blob/main/scripts/reference_data.py), scan `match_basis` for contiguous token matches, populate `drugbank_generics_list`, and set `present_in_drugbank`. These tokens are also merged into the shared ignore-word pool so valid DrugBank synonyms never appear as unknowns, and [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) labels rows as `ValidMoleculeInDrugBank` when no other catalogue explains the text.
@@ -41,44 +41,45 @@ transformations performed and why policy constants are set the way they are.
     Optionally load `fda_food_products.csv`, capture every matching entry in `non_therapeutic_hits`, summarize the highest scoring registration in `non_therapeutic_detail`, record the structured winner in `non_therapeutic_best`, emit `non_therapeutic_summary`, and retain canonical tokens in `non_therapeutic_tokens` for downstream unknown filtering and review context (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)). When no therapeutic molecule is recognized, scoring promotes these rows to the Unknown bucket with `reason_final = "non_therapeutic_detected"` (see [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py)).
 
 12. **Classify Combinations and Extract Unknowns**  
-   Use known-generic heuristics to set `looks_combo_final`, count contributing actives in `combo_known_generics_count`, record `combo_reason`, gather `unknown_words_list`, and derive presence flags for PNF, WHO, FDA, and DrugBank generics (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)). DrugBank tokens contribute to `qty_drugbank` and are stripped from the unknown pool before scoring.
+   Use known-generic heuristics to set `looks_combo_final`, count contributing actives in `combo_known_generics_count`, record `combo_reason`, gather `unknown_words_list`, and derive presence flags for Annex F, PNF, WHO, FDA, and DrugBank generics (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)). DrugBank tokens contribute to `qty_drugbank` and are stripped from the unknown pool before scoring.
 
 13. **Score Candidates and Select Best PNF Variant**
-   Join eSOA rows to matching PNF variants, enforce route compatibility, compute preliminary scores, and select the best variant per `esoa_idx` along with dose/form metadata (see [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py)).
+   Join eSOA rows to matching Annex F/PNF variants, enforce route compatibility, compute preliminary scores, and select the best variant per `esoa_idx` along with dose/form metadata. Annex rows carry `source_priority = 1`, ensuring Drug Codes outrank ATC-only matches (see [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py)).
 
 14. **Refine Dose, Form, and Route Alignment**
-   Recalculate `dose_sim`, infer missing form/route when safe, use WHO route/form tokens when PNF data is absent, upgrade selections when ratio logic prefers liquid formulations, and track route/form validations plus `route_form_imputations` (see [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py)).
+   Recalculate `dose_sim`, infer missing form/route when safe, use WHO route/form tokens when local data is absent, upgrade selections when ratio logic prefers liquid formulations, and track route/form validations plus `route_form_imputations`. Annex route evidence is injected via `reference_route_details` when the raw text lacked explicit clues (see [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py)).
 
 15. **Aggregate Scoring Attributes**
-   Compute confidence components (including the +10 bonus when `brand_swap_added_generic` is true and dose/form/route align), aggregate recognized molecule lists, set `probable_atc`, expose `form_ok`/`route_ok`, and derive `generic_final` (PNF `generic_id` when available, otherwise WHO molecules or FDA generics) as the canonical molecule field (see [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py)).
+   Compute confidence components (including the +10 bonus when `brand_swap_added_generic` is true and dose/form/route align), aggregate recognized molecule lists, set `probable_atc`, expose `form_ok`/`route_ok`, and derive `generic_final` plus Annex-specific metadata: `reference_source`, `reference_priority`, `drug_code_final`, `primary_code_final`, and `reference_route_details` (see [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py)).
 
 16. **Bucketize and Annotate Outcomes**
     Populate `bucket_final`, `match_molecule(s)`, `match_quality`, `why_final`, and `reason_final`, ensuring Auto-Accept logic and review annotations remain consistent (see [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py)).
-    - **Auto-Accept** — PNF match with ATC, `form_ok`/`route_ok`, and no unresolved tokens.
-    - **Candidates** — ATC assigned via PNF or WHO (including FDA brand swaps) but Auto-Accept criteria not met; no unknown tokens remain.
-    - **Needs review** — ATC assigned yet one or more tokens stay unresolved; `match_quality` pinpoints the outstanding issues.
-    - **Unknown** — No ATC payload was found, including FDA food/non-therapeutic detections.
+    - **Auto-Accept** — Annex F or PNF match with a reference code (`drug_code_final` or `primary_code_final`), `form_ok`/`route_ok`, and no unresolved tokens.
+    - **Candidates** — Reference code assigned via Annex, PNF, WHO, or FDA brand swap but Auto-Accept criteria not met; no unknown tokens remain.
+    - **Needs review** — Reference code assigned yet one or more tokens stay unresolved; `match_quality` pinpoints the outstanding issues.
+    - **Unknown** — No therapeutic reference matched, including FDA food/non-therapeutic detections.
 
 17. **Write Outputs and Summaries**
-    Persist the curated data set to CSV/XLSX, generate distribution summaries, and freeze workbook panes for review convenience (see [scripts/match_outputs.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_outputs.py)).
+    Persist the curated data set to CSV/XLSX, generate distribution summaries, and freeze workbook panes for review convenience. Outputs now include Annex metadata columns so reviewers can pivot on Drug Code and source priority (see [scripts/match_outputs.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_outputs.py)).
 
 18. **Post-processing (Optional)**
     Run [resolve_unknowns.py](https://github.com/carlosresu/esoa/blob/main/resolve_unknowns.py) to analyse the generated `unknown_words.csv` report and produce follow-up clues, then accumulate timing information before exiting (see [run.py](https://github.com/carlosresu/esoa/blob/main/run.py)).
 
-## Auto-Accept Reference (PNF-backed exacts)
+## Auto-Accept Reference (Annex/PNF-backed exacts)
 
-Rows land in the **Auto-Accept** bucket when scoring finds a PNF variant with an
-ATC code (`present_in_pnf` + `atc_code_final`) and both `form_ok` and `route_ok`
-evaluate to `True`. These cases keep `match_quality`/`reason_final` blank because
-no review flags were raised. The summary generated by
-`scripts/match_outputs.py` also breaks out the high-confidence exacts:
+Rows land in the **Auto-Accept** bucket when scoring finds an Annex F or PNF
+variant with a trusted identifier (`drug_code_final` or `primary_code_final`),
+`form_ok` and `route_ok` are `True`, and no unresolved tokens remain. These
+cases keep `match_quality`/`reason_final` blank because no review flags were
+raised. The summary generated by `scripts/match_outputs.py` also breaks out the
+high-confidence exacts:
 
-- `ValidGenericInPNF, exact dose/route/form match` – Auto-accepts whose
-  canonical text already used the PNF generic and the parsed dose/form/route
-  matched perfectly (`dose_sim == 1.0`).
-- `ValidBrandSwappedForGenericInPNF: exact dose/form/route match` – Brand swap
-  identified the PNF generic, the swap aligned on all clinical metadata, and the
-  row stayed Auto-Accept. `did_brand_swap = True` pinpoints these rows.
+- `ValidMoleculeWithDrugCodeInAnnex: exact dose/route/form match` – Auto-accepts
+  whose canonical text aligned perfectly with the Annex F listing (`dose_sim == 1.0`).
+- `ValidGenericInPNF, exact dose/route/form match` – Auto-accepts where the PNF
+  variant (rather than Annex) provided the reference code and the parsed dose/form/route
+  matched exactly.
+- `ValidBrandSwappedForGenericInAnnex: exact dose/form/route match` / `ValidBrandSwappedForGenericInPNF: exact dose/form/route match` – Brand swaps that aligned on all clinical metadata and retained the Auto-Accept status. `did_brand_swap = True` pinpoints these rows.
 
 Rows that auto-accept but are not listed above typically needed minor
 inference—e.g., the route was imputed from the PNF variant or the input lacked
@@ -101,6 +102,16 @@ When `bucket_final` stays `Needs review`, downstream summaries pair `match_molec
 - `no_dose_and_form_available` – Both dose and form are missing in the textual evidence. Supply the missing context or reject.
 - `who_does_not_provide_route_info` – WHO provided the molecule but no Adm.R tokens, so we cannot validate the route stated (or missing) in text. Check clinical route manually.
 
+### ValidMoleculeWithDrugCodeInAnnex
+
+- `no_dose_available` – Annex F supplied the drug code, but the record lacked dose evidence. Capture the strength before approval.
+- `route_form_mismatch` – Textual route/form conflicts with Annex-implied allowances. Determine whether to adjust heuristics or correct the source data.
+- `no_form_and_route_available` – Neither form nor route was available to validate against Annex hints. Provide administration details.
+- `no_form_available` / `no_route_available` – Missing individual attributes that prevent verification; supplement before accepting.
+- `no_dose_and_form_available`, `no_dose_and_route_available`, `no_dose_form_and_route_available` – Combinations of missing fields that block automatic approval. Resolve the gaps or escalate.
+- `dose_mismatch` – Parsed dosing disagrees with the Annex strength. Confirm packaging vs. billing text and reconcile.
+- `no_dose_available_annex_heuristic` – (When present) indicates Annex heuristics inferred the form/route but dose proof is still outstanding.
+
 ### ValidMoleculeWithATCinPNF
 
 - `no_dose_available` – The text mapped cleanly to a PNF generic with ATC coverage but contained no dose evidence. Review the record for missing strength information.
@@ -113,7 +124,7 @@ When `bucket_final` stays `Needs review`, downstream summaries pair `match_molec
 - `no_dose_form_and_route_available` – None of the three attributes were captured; the molecule alone is insufficient for approval. Complete the clinical details.
 - `no_route_available` – The route could not be parsed or inferred, leaving the PNF route list unchecked. Confirm administration route.
 
-### ValidBrandSwappedForGenericInPNF
+### ValidBrandSwappedForGenericInAnnex / ValidBrandSwappedForGenericInPNF
 
 - `no_dose_available` – FDA brand mapping surfaced a PNF generic, but the record lacked dose evidence. Validate the strength prior to acceptance.
 - `route_form_mismatch` – Textual route/form disagrees with the PNF whitelist even after the brand swap. Investigate whether the source data or whitelist needs correction.

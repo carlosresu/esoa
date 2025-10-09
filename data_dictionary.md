@@ -49,7 +49,8 @@ table when validating new data or onboarding reviewers.
 | `form_ok` | `True` when the detected or inferred form is compatible with PNF rules. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Evaluated against `APPROVED_ROUTE_FORMS` and exception flags. |
 | `route_ok` | `True` when the route aligns with the PNF variant’s allowed routes. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | False when route evidence conflicts with PNF allowances. |
 | `route_form_imputations` | Notes about accepted substitutions or flagged invalid route/form combos. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Empty when no alerts are needed. |
-| `route_evidence` | Final evidence string combining text cues and PNF imputations. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py); appended [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Adds `pnf:` markers when the route was inferred from the selected variant. |
+| `route_evidence` | Final evidence string combining text cues and Annex/PNF imputations. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py); appended [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Adds `pnf:` or `reference` markers when inference occurred. |
+| `reference_route_details` | Route evidence supplied directly by the Annex/PNF reference row when text was silent. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py); finalized [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Helps auditors trace packaging-based inferences (e.g., ampule→intravenous). |
 
 ## Molecule Detection & Coverage
 
@@ -58,6 +59,7 @@ table when validating new data or onboarding reviewers.
 | `molecules_recognized` | **Pipe-delimited list of confirmed generic molecule strings used for ATC assignment and downstream matching.** | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | This is the canonical resolved-generic string reviewers rely on. |
 | `molecules_recognized_list` | List form of the recognized molecules. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Duplicates removed; serialized as a Python list in CSV. |
 | `molecules_recognized_count` | Count of entries in `molecules_recognized`. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Integer value. |
+| `present_in_annex` | `True` when `match_basis` matched an Annex F entry (Drug Code priority). | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Derived from `reference_source == "annex_f"`. |
 | `present_in_pnf` | `True` when `match_basis` hit at least one non-salt PNF entry. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Set after salt filtering and partial fallback. |
 | `present_in_who` | `True` when WHO detection produced any ATC code. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Derived from `who_atc_codes`. |
 | `present_in_fda_generic` | `True` when FDA generic tokens appear in `match_basis`. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Highlights text already aligned with FDA generics. |
@@ -105,6 +107,15 @@ table when validating new data or onboarding reviewers.
 | `selected_pct` | Percent strength from PNF when relevant. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Float or `None`. |
 | `dose_sim` | Final dose similarity (0.0 or 1.0) after recomputation with the selected PNF variant. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Enforces exact equality (after unit conversion) by design. |
 
+## Reference Catalogue Metadata
+
+| Column | Meaning | First Assigned | Notes |
+| --- | --- | --- | --- |
+| `reference_source` | Source label for the matched catalogue row (`annex_f` or `pnf`). | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Enables reporting split between Annex-first and PNF fallback matches. |
+| `reference_priority` | Numeric priority used for tie-breaking (1 = Annex F, 2 = PNF). | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py); consumed [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Lower values outrank higher ones when scores tie. |
+| `reference_primary_code` | Preferred identifier for the matched row (Annex Drug Code or PNF ATC). | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Feeds confidence scoring and reporting pivots. |
+| `reference_drug_code` | Raw Annex Drug Code when present. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Blank for PNF-only rows. |
+
 ## Combination & Unknown Analysis
 
 | Column | Meaning | First Assigned | Notes |
@@ -136,21 +147,25 @@ table when validating new data or onboarding reviewers.
 
 | Column | Meaning | First Assigned | Notes |
 | --- | --- | --- | --- |
-| `atc_code_final` | ATC code inherited from the selected PNF row (if any). | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | `None` when the PNF row lacks an ATC. |
+| `drug_code_final` | Annex F Drug Code selected for the row (blank when PNF-only). | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Primary identifier whenever an Annex match exists. |
+| `primary_code_final` | Preferred identifier used for confidence (Annex Drug Code or PNF ATC). | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Mirrors `reference_primary_code` after final selection. |
+| `atc_code_final` | ATC code inherited from the selected PNF row (if any). | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | `None` when the chosen variant lacks an ATC or Annex supplants it. |
 | `confidence` | Composite 0–100 score covering generic, dose, route, ATC, and brand-swap bonus. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Higher values suggest stronger auto-match evidence. |
-| `match_molecule(s)` | Source labels describing which reference validated the molecule (PNF/WHO/FDA/brand). | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Drives reporting pivots. |
-| `generic_final` | Canonical molecule identifier(s) chosen after PNF→WHO→FDA fallback. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Pipe-delimited string; prefers `generic_id`, else WHO molecules, else FDA generics derived from alias/fuzzy matching. |
+| `match_molecule(s)` | Source labels describing which reference validated the molecule (Annex/PNF/WHO/FDA/brand). | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Drives reporting pivots. |
+| `generic_final` | Canonical molecule identifier(s) chosen after Annex→PNF→WHO→FDA fallback. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Pipe-delimited string; prefers Annex/PNF `generic_id`, else WHO molecules, else FDA generics. |
 | `match_quality` | Summary tag indicating why a row auto-accepted or still needs review. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Always populated; see the list of enumerated values below. |
 | `detail_final` | Supplemental descriptors describing unknown-token counts and FDA food detection outcomes. | [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) | Semicolon-separated phrases (no raw tokens); when unknown tokens remain, shows `Unknown tokens remaining: <count>`. |
 
 **`match_molecule(s)` values in daily reporting**
 
-- `ValidMoleculeWithATCinPNF` – Exact or inferred PNF generic with ATC coverage survived scoring.
-- `ValidBrandSwappedForGenericInPNF` – FDA brand map swapped the text to a PNF generic that subsequently passed scoring checks.
+- `ValidMoleculeWithDrugCodeInAnnex` – Annex F generic (Drug Code) satisfied scoring checks.
+- `ValidMoleculeWithATCinPNF` – PNF generic with ATC coverage survived scoring after Annex failed or was absent.
+- `ValidBrandSwappedForGenericInAnnex` – FDA brand map swap resolved to an Annex F generic that passed subsequent checks.
+- `ValidBrandSwappedForGenericInPNF` – FDA brand map swap resolved to a PNF generic that passed subsequent checks.
 - `ValidBrandSwappedForMoleculeWithATCinWHO` – Brand swap landed on a WHO molecule (no PNF coverage) that still carried ATC metadata.
 - `ValidMoleculeWithATCinWHO/NotInPNF` – WHO molecule matched without any PNF hit; we rely entirely on WHO metadata.
 - `ValidMoleculeNoATCinFDA/NotInPNF` – FDA generic matched but neither PNF nor WHO produced a molecule/ATC pairing.
-- `ValidMoleculeNoATCinPNF` – PNF matched but the prepared PNF extract lacks an ATC for the selected variant.
+- `ValidMoleculeNoCodeInReference` – Annex/PNF generic matched but no reference code (Drug Code or ATC) was available.
 - `NonTherapeuticFoodWithUnknownTokens` – FDA food/non-therapeutic catalog match present together with residual unknown tokens.
 - `NonTherapeuticFoodNoMolecule` – FDA food/non-therapeutic catalog match and no therapeutic molecule confirmed.
 - `NonTherapeuticCatalogOnly` – FDA food/non-therapeutic catalog matched while therapeutic catalogs had no coverage.
@@ -161,9 +176,9 @@ table when validating new data or onboarding reviewers.
 
 **`match_quality` review / auto-accept tags**
 
-- `auto_exact_dose_route_form` – Auto-Accept row with exact dose, route, and form alignment against the selected PNF variant.
-- `dose_mismatch_same_atc` – Auto-Accept row where the text dose differs but the PNF variant’s ATC is unique across all doses (policy allows the substitution).
-- `dose_mismatch_varied_atc` – Auto-Accept row with a non-exact dose where multiple ATC payloads exist across PNF variants; escalated for targeted reconciliation.
+- `auto_exact_dose_route_form` – Auto-Accept row with exact dose, route, and form alignment against the selected Annex/PNF variant.
+- `dose_mismatch_same_atc` – Auto-Accept row where the text dose differs but the reference code is unique across variants (policy allows the substitution).
+- `dose_mismatch_varied_atc` – Auto-Accept row with a non-exact dose where multiple reference codes exist across variants; escalated for targeted reconciliation.
 - `dose_mismatch` – Recognized dose text disagrees with the selected PNF/WHO dose payload after normalization.
 - `form_mismatch` – Textual form or inferred form conflicts with the PNF-allowed form family for the chosen route.
 - `route_mismatch` – Textual route conflicts with the allowed routes for the candidate (including WHO fallbacks when PNF is missing).
