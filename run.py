@@ -506,6 +506,7 @@ def main_entry() -> None:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     # Flags align with README guidance: allow skipping R preprocessing or FDA brand rebuilds when rerunning.
+    parser.add_argument("--annex", default=f"{DEFAULT_INPUTS_DIR}/annex_f.csv", help="Path to Annex F CSV")
     parser.add_argument("--pnf", default=f"{DEFAULT_INPUTS_DIR}/pnf.csv", help="Path to PNF CSV")
     parser.add_argument("--esoa", default=f"{DEFAULT_INPUTS_DIR}/esoa.csv", help="Path to eSOA CSV")
     parser.add_argument("--out", default="esoa_matched.csv", help="Output CSV filename (saved under ./outputs)")
@@ -517,11 +518,13 @@ def main_entry() -> None:
     outdir = _ensure_outputs_dir()
     inputs_dir = _ensure_inputs_dir()
     # Resolve the requested raw inputs, enforcing the fallback search behavior.
+    annex_path = _resolve_input_path(args.annex)
     pnf_path = _resolve_input_path(args.pnf)
     esoa_path = _resolve_esoa_path(args.esoa)
     out_path = outdir / Path(args.out).name
 
     from scripts.prepare import prepare as _prepare
+    from scripts.prepare_annex_f import prepare_annex_f as _prepare_annex
     from scripts.match import match as _match
 
     timings = TimingCollector()
@@ -536,14 +539,24 @@ def main_entry() -> None:
         t = run_with_spinner("Build FDA brand map", lambda: build_brand_map(inputs_dir, outfile=None))
         timings.add("Build FDA brand map", t)
 
-    # Prepare inputs prior to matching (PNF normalization + eSOA renaming).
-    t = run_with_spinner("Prepare inputs", lambda: _prepare(str(pnf_path), str(esoa_path), str(inputs_dir)))
+    # Prepare inputs prior to matching (Annex F + PNF normalization + eSOA renaming).
+    prepared_paths: dict[str, str] = {}
+
+    def _prepare_all() -> None:
+        ann_out = _prepare_annex(str(annex_path), str(inputs_dir / "annex_f_prepared.csv"))
+        prepared_paths["annex"] = ann_out
+        pnf_out, esoa_out = _prepare(str(pnf_path), str(esoa_path), str(inputs_dir))
+        prepared_paths["pnf"] = pnf_out
+        prepared_paths["esoa"] = esoa_out
+
+    t = run_with_spinner("Prepare inputs", _prepare_all)
     timings.add("Prepare inputs", t)
 
     # Let tqdm own the console for matching; no outer spinner here.
     _match(
-        str(inputs_dir / "pnf_prepared.csv"),
-        str(inputs_dir / "esoa_prepared.csv"),
+        prepared_paths.get("annex", str(inputs_dir / "annex_f_prepared.csv")),
+        prepared_paths.get("pnf", str(inputs_dir / "pnf_prepared.csv")),
+        prepared_paths.get("esoa", str(inputs_dir / "esoa_prepared.csv")),
         str(out_path),
         timing_hook=timings.add,
         skip_excel=args.skip_excel,
