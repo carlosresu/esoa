@@ -72,6 +72,95 @@ OUTPUT_COLUMNS = [
 # Reserved for pipeline-specific tokens we know are safe to ignore.
 COMMON_UNKNOWN_STOPWORDS: Set[str] = set(load_ignore_words())
 
+FRIENDLY_MOLECULE_LABELS = {
+    "ValidMoleculeWithDrugCodeInAnnex": "Annex generic (Drug Code)",
+    "ValidBrandSwappedForGenericInAnnex": "Annex brand swap",
+    "ValidMoleculeWithATCinPNF": "PNF generic (ATC)",
+    "ValidBrandSwappedForGenericInPNF": "PNF brand swap",
+    "ValidMoleculeWithATCinWHO/NotInPNF": "WHO-only generic (ATC)",
+    "ValidBrandSwappedForMoleculeWithATCinWHO": "WHO brand swap",
+    "ValidMoleculeNoATCinFDA/NotInPNF": "FDA generic (no ATC)",
+    "ValidMoleculeInDrugBank": "DrugBank generic",
+    "ValidMoleculeNoCodeInReference": "Reference generic w/o code",
+    "NonTherapeuticCatalogOnly": "Non-therapeutic catalogue hit",
+    "NonTherapeuticFoodWithUnknownTokens": "Non-therapeutic food + unknown tokens",
+    "AllTokensUnknownTo_PNF_WHO_FDA": "All tokens unknown (PNF/WHO/FDA)",
+    "RowFailedAllMatchingSteps": "No catalogue match",
+}
+
+FRIENDLY_MATCH_QUALITY_LABELS = {
+    "auto_exact_dose_route_form": "Exact dose / route / form",
+    "dose_mismatch_same_atc": "Dose mismatch (same ATC)",
+    "dose_mismatch_varied_atc": "Dose mismatch (different ATCs)",
+    "dose_mismatch": "Dose mismatch",
+    "no_dose_available": "Dose missing",
+    "no_dose_form_and_route_available": "Dose, form & route missing",
+    "no_dose_and_form_available": "Dose & form missing",
+    "no_form_and_route_available": "Form & route missing",
+    "no_form_available": "Form missing",
+    "form_mismatch": "Form mismatch",
+    "route_mismatch": "Route mismatch",
+    "route_form_mismatch": "Route & form mismatch",
+    "contains_unknown_tokens": "Contains unknown tokens",
+    "nontherapeutic_catalog_match": "Non-therapeutic catalogue hit",
+    "nontherapeutic_and_unknown_tokens": "Non-therapeutic + unknown tokens",
+    "no_reference_catalog_match": "No reference match",
+    "review_required_metadata_insufficient": "Metadata insufficient",
+    "who_does_not_provide_dose_info": "WHO missing dose info",
+    "who_does_not_provide_route_info": "WHO missing route info",
+    "candidate_ready": "Candidate ready",
+    "candidate_ready_for_atc_assignment": "Candidate ready for ATC",
+    "who_atc_assigned": "WHO ATC assigned",
+    "fda_brand_linked": "FDA brand linked",
+}
+
+_ABBREVIATION_LOOKUP = {
+    "pnf": "PNF",
+    "who": "WHO",
+    "fda": "FDA",
+    "atc": "ATC",
+    "ddd": "DDD",
+}
+
+
+def _prettify_label_fallback(raw: str) -> str:
+    raw = raw.replace("(", " (").replace(")", ") ")
+    parts = [part for part in raw.replace("/", " / ").split("_") if part]
+    words: List[str] = []
+    for part in parts:
+        token = part.strip()
+        if not token:
+            continue
+        key = token.lower()
+        if key in _ABBREVIATION_LOOKUP:
+            words.append(_ABBREVIATION_LOOKUP[key])
+        elif token.isupper():
+            words.append(token)
+        elif len(token) <= 3:
+            words.append(token.upper())
+        else:
+            words.append(token.capitalize())
+    label = " ".join(words).replace(" / ", "/").strip()
+    return label or raw
+
+
+def _friendly_label(value: str, mapping: dict[str, str]) -> str:
+    if not isinstance(value, str):
+        return value
+    trimmed = value.strip()
+    if not trimmed:
+        return trimmed
+    if trimmed.upper() == "N/A":
+        return "N/A"
+    if trimmed.startswith("PartiallyKnownTokensFrom_"):
+        sources = [src for src in trimmed.split("_")[1:] if src]
+        sources_display = "/".join(
+            _ABBREVIATION_LOOKUP.get(src.lower(), src.upper() if len(src) <= 3 else src)
+            for src in sources
+        ) or "catalogues"
+        return f"Partial tokens from {sources_display}"
+    return mapping.get(trimmed, _prettify_label_fallback(trimmed))
+
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 _KNOWN_TOKENS_CACHE: Optional[Set[str]] = None
 
@@ -179,6 +268,8 @@ def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
                 bucket_rows.get("match_quality", pd.Series(["N/A"] * len(bucket_rows), index=bucket_rows.index)),
                 "N/A",
             )
+            match_molecule = match_molecule.map(lambda val: _friendly_label(val, FRIENDLY_MOLECULE_LABELS))
+            match_quality = match_quality.map(lambda val: _friendly_label(val, FRIENDLY_MATCH_QUALITY_LABELS))
             grouped = (
                 pd.DataFrame(
                     {
@@ -227,6 +318,10 @@ def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
             .str.strip()
             .replace({"": "N/A"})
         )
+        if column == "match_molecule(s)":
+            series = series.map(lambda val: _friendly_label(val, FRIENDLY_MOLECULE_LABELS))
+        elif column == "match_quality":
+            series = series.map(lambda val: _friendly_label(val, FRIENDLY_MATCH_QUALITY_LABELS))
         counts = series.value_counts()
         for value, count in counts.items():
             pct_total = round(count / float(total) * 100, 2) if total else 0.0
@@ -266,7 +361,8 @@ def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
                 )
                 for _, row in grouped.head(5).iterrows():
                     pct_local = round(row["n"] / float(count) * 100, 2) if count else 0.0
-                    lines.append(f"    {row['why_final']}: {row['reason_final']}: {int(row['n']):,} ({pct_local}%)")
+                    reason = _friendly_label(str(row["reason_final"]), FRIENDLY_MATCH_QUALITY_LABELS)
+                    lines.append(f"    {row['why_final']}: {reason}: {int(row['n']):,} ({pct_local}%)")
 
     return lines
 
