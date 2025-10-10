@@ -739,12 +739,64 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     qty_fda_food = _count_listlike("non_therapeutic_tokens")
     qty_unknown = _count_listlike("unknown_words_list")
 
-    out["qty_pnf"] = qty_pnf
-    out["qty_who"] = qty_who
-    out["qty_fda_drug"] = qty_fda_drug
-    out["qty_drugbank"] = qty_drugbank
-    out["qty_fda_food"] = qty_fda_food
-    out["qty_unknown"] = qty_unknown
+    def _unique_join(values: list[str]) -> str:
+        seen: list[str] = []
+        for val in values:
+            if not isinstance(val, str):
+                continue
+            item = val.strip()
+            if not item or item in seen:
+                continue
+            seen.append(item)
+        return "|".join(seen)
+
+    def _derive_generic_final(row: pd.Series) -> str:
+        gid = row.get("generic_id")
+        if isinstance(gid, str) and gid.strip():
+            return gid.strip()
+
+        who_list = row.get("who_molecules_list")
+        if isinstance(who_list, list):
+            joined = _unique_join([str(v) for v in who_list if isinstance(v, str)])
+            if joined:
+                return joined
+
+        fda_list = row.get("fda_generics_list")
+        if isinstance(fda_list, list):
+            joined = _unique_join([str(v) for v in fda_list if isinstance(v, str)])
+            if joined:
+                return joined
+        drugbank_list = row.get("drugbank_generics_list")
+        if isinstance(drugbank_list, list):
+            joined = _unique_join([str(v) for v in drugbank_list if isinstance(v, str)])
+            if joined:
+                return joined
+        return ""
+
+    generic_final_series = out.apply(_derive_generic_final, axis=1)
+
+    new_columns_df = pd.DataFrame(
+        {
+            "qty_pnf": qty_pnf,
+            "qty_who": qty_who,
+            "qty_fda_drug": qty_fda_drug,
+            "qty_drugbank": qty_drugbank,
+            "qty_fda_food": qty_fda_food,
+            "qty_unknown": qty_unknown,
+            "bucket_final": "",
+            "why_final": "",
+            "reason_final": "",
+            "match_quality": "",
+            "match_molecule(s)": "",
+            "detail_final": "",
+            "generic_final": generic_final_series,
+        },
+        index=out.index,
+    )
+    overlapping_cols = [col for col in new_columns_df.columns if col in out.columns]
+    if overlapping_cols:
+        out = out.drop(columns=overlapping_cols)
+    out = out.join(new_columns_df)
 
     unknown_kind_series = out.get(
         "unknown_kind",
@@ -764,13 +816,6 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     has_probable_atc = probable_atc_series.str.strip().ne("")
     has_reference_code_in_catalogue = code_present.astype(bool)
     has_any_primary_code = has_reference_code_in_catalogue | has_probable_atc
-
-    out["bucket_final"] = ""
-    out["why_final"] = ""
-    out["reason_final"] = ""
-    out["match_quality"] = ""
-    out["match_molecule(s)"] = ""
-    out["detail_final"] = ""
 
     missing_strings: list[str] = []
     for has_dose, has_form, has_route in zip(dose_present, form_present, route_present):
@@ -838,42 +883,6 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
         brand_swap_added & present_in_pnf & (~present_in_annex) & has_reference_code_in_catalogue,
         "match_molecule(s)",
     ] = "ValidBrandSwappedForGenericInPNF"
-
-    def _unique_join(values: list[str]) -> str:
-        seen: list[str] = []
-        for val in values:
-            if not isinstance(val, str):
-                continue
-            item = val.strip()
-            if not item or item in seen:
-                continue
-            seen.append(item)
-        return "|".join(seen)
-
-    def _derive_generic_final(row: pd.Series) -> str:
-        gid = row.get("generic_id")
-        if isinstance(gid, str) and gid.strip():
-            return gid.strip()
-
-        who_list = row.get("who_molecules_list")
-        if isinstance(who_list, list):
-            joined = _unique_join([str(v) for v in who_list if isinstance(v, str)])
-            if joined:
-                return joined
-
-        fda_list = row.get("fda_generics_list")
-        if isinstance(fda_list, list):
-            joined = _unique_join([str(v) for v in fda_list if isinstance(v, str)])
-            if joined:
-                return joined
-        drugbank_list = row.get("drugbank_generics_list")
-        if isinstance(drugbank_list, list):
-            joined = _unique_join([str(v) for v in drugbank_list if isinstance(v, str)])
-            if joined:
-                return joined
-        return ""
-
-    out["generic_final"] = out.apply(_derive_generic_final, axis=1)
 
     gid_series = out["generic_id"].fillna("").astype(str)
     if {"generic_id", "atc_code"}.issubset(pnf_df.columns):
