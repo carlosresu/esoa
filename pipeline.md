@@ -7,8 +7,17 @@ include descriptive docstrings and comments that mirror this walkthrough.  When
 deep-diving into a particular step, the code comments explain the exact
 transformations performed and why policy constants are set the way they are.
 
-1. **Load Prepared Inputs**  
-   Resolve CLI paths (defaults under `inputs/`), verify the files exist, and read the prepared Annex F, PNF, and eSOA CSVs (`annex_f_prepared.csv`, `pnf_prepared.csv`, `esoa_prepared.csv`) into pandas data frames (see [run.py](https://github.com/carlosresu/esoa/blob/main/run.py) and [scripts/match.py](https://github.com/carlosresu/esoa/blob/main/scripts/match.py)).
+Before the numbered stages below, `run.py` now handles shared orchestration:
+
+- Bootstraps `requirements.txt` with pip when needed, so a separate `--skip-install` flag is no longer required.
+- Ensures `inputs/` and `outputs/` exist, then prunes dated WHO ATC exports and brand-map snapshots after the run.
+- Concatenates partitioned `esoa_pt_*.csv` files into a temporary `esoa_combined.csv` before invoking the preparation step.
+- Optionally runs the WHO ATC R preprocessors (guarded by `--skip-r`) to keep ATC and DDD extracts fresh.
+- Builds or reuses the FDA brand map (`--skip-brandmap`), silencing console output while still surfacing failures.
+- Wraps each stage in a live spinner, records per-step timings, and prints a grouped summary once matching completes.
+
+1. **Prepare and Load Inputs**  
+   Resolve CLI paths (defaults under `inputs/`), concatenate partitioned eSOA files when present, and run the preparation layer: [scripts/prepare_annex_f.py](https://github.com/carlosresu/esoa/blob/main/scripts/prepare_annex_f.py) produces `annex_f_prepared.csv` while [scripts/prepare.py](https://github.com/carlosresu/esoa/blob/main/scripts/prepare.py) emits `pnf_prepared.csv` and `esoa_prepared.csv`. The matching core then reads these normalized CSVs (see [run.py](https://github.com/carlosresu/esoa/blob/main/run.py) and [scripts/match.py](https://github.com/carlosresu/esoa/blob/main/scripts/match.py)).
 
 2. **Validate Structural Expectations**  
    Ensure the unified reference catalogue exposes Annex/PNF molecule, dose, route, priority, and identifier fields, and that the eSOA frame includes `raw_text` (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)).
@@ -62,8 +71,8 @@ transformations performed and why policy constants are set the way they are.
 17. **Write Outputs and Summaries**
     Persist the curated data set to CSV/XLSX, generate distribution summaries, and freeze workbook panes for review convenience. Outputs now include Annex metadata columns so reviewers can pivot on Drug Code and source priority (see [scripts/match_outputs.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_outputs.py)).
 
-18. **Post-processing (Optional)**
-    Run [resolve_unknowns.py](https://github.com/carlosresu/esoa/blob/main/resolve_unknowns.py) to analyse the generated `unknown_words.csv` report and produce follow-up clues, then accumulate timing information before exiting (see [run.py](https://github.com/carlosresu/esoa/blob/main/run.py)).
+18. **Post-processing & Timing Summary**
+    Automatically run whichever `resolve_unknowns.py` is available (project root or `scripts/`) to analyse `unknown_words.csv`, then emit the grouped timing roll-up captured during each spinner stage. Finished runs also prune dated ATC/brand-map exports to keep disk usage in check (see [run.py](https://github.com/carlosresu/esoa/blob/main/run.py)).
 
 ## Auto-Accept Reference (Annex/PNF-backed exacts)
 

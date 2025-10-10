@@ -317,11 +317,13 @@ Additional lines list the top molecules or match-quality drivers per bucket when
 
 ## 🛠️ Running the Pipeline
 
-```bash
-# Python 3.10+ (R optional for ATC preprocessing)
-pip install -r requirements.txt
+`run.py` now self-bootstraps `requirements.txt`, ensures `inputs/` and `outputs/` exist, concatenates partitioned `inputs/esoa_pt_*.csv` files into a temporary `esoa_combined.csv`, and shows live spinners plus grouped timing totals for every major stage. R remains optional and is only required when you want to refresh the WHO ATC exports.
 
-# Run full pipeline (writes to ./outputs)
+```bash
+# Python 3.10+ (optional virtualenv setup shown for reproducibility)
+pip install -r requirements.txt  # run.py will do this automatically if you skip it
+
+# Run full pipeline (writes fresh artifacts to ./outputs)
 python run.py --annex inputs/annex_f.csv --pnf inputs/pnf.csv --esoa inputs/esoa.csv --out esoa_matched.csv
 ```
 
@@ -330,11 +332,11 @@ Refresh `dependencies/drugbank/output/generics.csv` (or drop a curated copy in `
 
 Optional flags
 
-- --skip-install — Skip pip install
-- --skip-r — Skip ATC preprocessing
-- --skip-brandmap — Reuse existing FDA brand map
-- --skip-excel — Skip writing the XLSX workbook (CSV and summaries only)
-- --annex — Override Annex F CSV path (defaults to `inputs/annex_f.csv`; auto-writes `inputs/annex_f_prepared.csv`)
+- `--skip-r` — Skip the WHO ATC R preprocessing stage
+- `--skip-brandmap` — Reuse the most recent FDA brand map instead of rebuilding
+- `--skip-excel` — Skip writing the XLSX workbook (CSV and summaries only)
+- `--annex` / `--pnf` / `--esoa` — Override default input paths (relative paths fall back to `inputs/`)
+- `--out` — Override the matched CSV filename (always placed under `./outputs`)
 
 ### Minimal/local run
 
@@ -344,7 +346,7 @@ For incremental testing without touching external data sources or emitting Excel
 python run_minimal.py --pnf inputs/pnf.csv --esoa inputs/esoa.csv --out esoa_matched.csv
 ```
 
-This wrapper invokes `run.py` with `--skip-install --skip-r --skip-brandmap --skip-excel`, leaving only the CSV and summary outputs.
+This helper invokes `run.py` with `--skip-r --skip-brandmap --skip-excel`, keeping dependency bootstrapping and path resolution identical to the full runner while limiting the workload to CSV and summary generation.
 
 ### Profiling the pipeline
 

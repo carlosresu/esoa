@@ -7,6 +7,8 @@ with docstrings summarizing their responsibilities and contain refreshed inline
 comments that describe how each column is derived.  Use them alongside this
 table when validating new data or onboarding reviewers.
 
+`run.py` now orchestrates dependency bootstrapping, input preparation, and the post-run execution of `resolve_unknowns.py`, so the companion outputs mentioned below (e.g., `unknown_words.csv`) are regenerated automatically each time the pipeline completes.
+
 ## Text & Normalization
 
 | Column | Meaning | First Assigned | Notes |
