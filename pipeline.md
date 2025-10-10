@@ -15,6 +15,7 @@ Before the numbered stages below, `run.py` now handles shared orchestration:
 - Optionally runs the WHO ATC R preprocessors (guarded by `--skip-r`) to keep ATC and DDD extracts fresh.
 - Builds or reuses the FDA brand map (`--skip-brandmap`), silencing console output while still surfacing failures.
 - Wraps each stage in a live spinner, records per-step timings, and prints a grouped summary once matching completes.
+- Chooses a safe worker pool size (auto-tuned via `resolve_worker_count`, overridable with `ESOA_MAX_WORKERS`) so CPU-heavy phases can execute concurrently without starving smaller laptops.
 
 1. **Prepare and Load Inputs**  
    Resolve CLI paths (defaults under `inputs/`), concatenate partitioned eSOA files when present, and run the preparation layer: [scripts/prepare_annex_f.py](https://github.com/carlosresu/esoa/blob/main/scripts/prepare_annex_f.py) produces `annex_f_prepared.csv` while [scripts/prepare.py](https://github.com/carlosresu/esoa/blob/main/scripts/prepare.py) emits `pnf_prepared.csv` and `esoa_prepared.csv`. The matching core then reads these normalized CSVs (see [run.py](https://github.com/carlosresu/esoa/blob/main/run.py) and [scripts/match.py](https://github.com/carlosresu/esoa/blob/main/scripts/match.py)).
@@ -35,13 +36,13 @@ Before the numbered stages below, `run.py` now handles shared orchestration:
    Parse dosage structures via [scripts/dose.py](https://github.com/carlosresu/esoa/blob/main/scripts/dose.py), compute `dose_recognized`, and collect `route_raw`, `form_raw`, and `route_evidence_raw` (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)).
 
 7. **Apply FDA Brand → Generic Substitutions**  
-   Scan normalized text for brand hits, score candidate generics, swap into `match_basis`, and populate `probable_brands`, `did_brand_swap`, `brand_swap_added_generic`, `fda_generics_list`, and `fda_dose_corroborated`; recompute `match_basis_norm_basic` (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)).
+   Scan normalized text for brand hits, score candidate generics, swap into `match_basis`, and populate `probable_brands`, `did_brand_swap`, `brand_swap_added_generic`, `fda_generics_list`, and `fda_dose_corroborated`; recompute `match_basis_norm_basic` (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)). Large batches spill across a worker pool so each process builds the Aho–Corasick automata once and applies swaps concurrently.
 
 8. **Re-parse Dose / Route / Form on `match_basis`**  
    Re-run dose parsing and route/form detection against the swapped text to produce `dosage_parsed`, `route`, `form`, and refreshed evidence fields (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)).
 
 9. **Detect Molecules Across References**  
-   Execute Annex/PNF automaton scans (`pnf_hits_gids`, `pnf_hits_tokens`) using expanded alias sets (parenthetical trade names, slash/plus splits, curated abbreviations), fall back to partial and fuzzy matches for near-miss spellings, and detect WHO molecules with ATC/DDD metadata. Annex hits are prioritized via `source_priority` before scoring (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)).
+   Execute Annex/PNF automaton scans (`pnf_hits_gids`, `pnf_hits_tokens`) using expanded alias sets (parenthetical trade names, slash/plus splits, curated abbreviations), fall back to partial and fuzzy matches for near-miss spellings, and detect WHO molecules with ATC/DDD metadata. Annex hits are prioritized via `source_priority` before scoring (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)). WHO regex passes now run in parallel when millions of tokens are involved, keeping the wall-clock impact in check.
 
 10. **Overlay DrugBank Generics**  
     Load the DrugBank generics export via [scripts/reference_data.py](https://github.com/carlosresu/esoa/blob/main/scripts/reference_data.py), scan `match_basis` for contiguous token matches, populate `drugbank_generics_list`, and set `present_in_drugbank`. These tokens are also merged into the shared ignore-word pool so valid DrugBank synonyms never appear as unknowns, and [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) labels rows as `ValidMoleculeInDrugBank` when no other catalogue explains the text.
