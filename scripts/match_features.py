@@ -10,6 +10,7 @@ import difflib
 import numpy as np, pandas as pd
 import ahocorasick  # type: ignore
 from .aho import build_molecule_automata, scan_pnf_all
+from .concurrency import maybe_parallel_map
 from .combos import SALT_TOKENS, looks_like_combination, split_combo_segments
 from .routes_forms import extract_route_and_form
 from .text_utils import (
@@ -438,10 +439,12 @@ def build_features(
     df = [None]
     def _mk_base():
         tmp = esoa_df[["raw_text"]].copy()
-        tmp["parentheticals"] = tmp["raw_text"].map(extract_parenthetical_phrases)
+        raw_values = tmp["raw_text"].tolist()
+        tmp["parentheticals"] = maybe_parallel_map(raw_values, extract_parenthetical_phrases)
         tmp["esoa_idx"] = tmp.index
-        tmp["normalized"] = tmp["raw_text"].map(normalize_text)
-        tmp["norm_compact"] = tmp["normalized"].map(lambda s: re.sub(r"[ \-]", "", s))
+        normalized_values = maybe_parallel_map(raw_values, normalize_text)
+        tmp["normalized"] = normalized_values
+        tmp["norm_compact"] = [re.sub(r"[ \-]", "", s) for s in normalized_values]
         df.append(tmp)
     _timed("Normalize ESOA text", _mk_base)
     df = df[-1]
@@ -619,9 +622,20 @@ def build_features(
     # 7) Dose/route/form on original normalized text
     def _dose_route_form_raw():
         from .dose import extract_dosage as _extract_dosage
-        df["dosage_parsed_raw"] = df["normalized"].map(_extract_dosage)
-        df["dose_recognized"] = df["dosage_parsed_raw"].map(_friendly_dose)
-        df["route_raw"], df["form_raw"], df["route_evidence_raw"] = zip(*df["normalized"].map(extract_route_and_form))
+        norm_values = df["normalized"].tolist()
+        dosage_parsed = maybe_parallel_map(norm_values, _extract_dosage)
+        df["dosage_parsed_raw"] = dosage_parsed
+        df["dose_recognized"] = [_friendly_dose(item) for item in dosage_parsed]
+        route_triplets = maybe_parallel_map(norm_values, extract_route_and_form)
+        if route_triplets:
+            routes, forms, evidences = zip(*route_triplets)
+            df["route_raw"] = list(routes)
+            df["form_raw"] = list(forms)
+            df["route_evidence_raw"] = list(evidences)
+        else:
+            df["route_raw"] = []
+            df["form_raw"] = []
+            df["route_evidence_raw"] = []
     _timed("Parse dose/route/form (raw)", _dose_route_form_raw)
 
     # 8) Brand → Generic swap (if brand map available)
@@ -796,8 +810,19 @@ def build_features(
     # 9) Dose/route/form on match_basis
     def _dose_route_form_basis():
         from .dose import extract_dosage as _extract_dosage
-        df["dosage_parsed"] = df["match_basis"].map(_extract_dosage)
-        df["route"], df["form"], df["route_evidence"] = zip(*df["match_basis"].map(extract_route_and_form))
+        basis_values = df["match_basis"].tolist()
+        dosage_parsed = maybe_parallel_map(basis_values, _extract_dosage)
+        df["dosage_parsed"] = dosage_parsed
+        route_triplets = maybe_parallel_map(basis_values, extract_route_and_form)
+        if route_triplets:
+            routes, forms, evidences = zip(*route_triplets)
+            df["route"] = list(routes)
+            df["form"] = list(forms)
+            df["route_evidence"] = list(evidences)
+        else:
+            df["route"] = []
+            df["form"] = []
+            df["route_evidence"] = []
     _timed("Parse dose/route/form (basis)", _dose_route_form_basis)
 
     # 10) PNF hits (Aho-Corasick) on match_basis
