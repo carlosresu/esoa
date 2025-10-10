@@ -195,7 +195,7 @@ def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
                 pct_total = round(row["n"] / float(total) * 100, 2) if total else 0.0
                 lines.append(
                     f"  {row['match_molecule']}: {row['match_quality']}: {int(row['n']):,} "
-                    f"({pct_total}% of global total)"
+                    f"({pct_total}%)"
                 )
 
         for bucket in bucket_order:
@@ -232,7 +232,7 @@ def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
             pct_total = round(count / float(total) * 100, 2) if total else 0.0
             lines.append(
                 f"    {label}: {value}: {int(count):,} "
-                f"({pct_total}% of global total)"
+                f"({pct_total}%)"
             )
 
     for bucket in bucket_order:
