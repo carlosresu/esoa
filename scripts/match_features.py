@@ -5,12 +5,12 @@
 from __future__ import annotations
 import sys, time, glob, os, re
 from collections import defaultdict
-from typing import Tuple, Optional, List, Dict, Set, Callable
+from typing import Tuple, Optional, List, Dict, Set, Callable, Any
 import difflib
 import numpy as np, pandas as pd
 import ahocorasick  # type: ignore
 from .aho import build_molecule_automata, scan_pnf_all
-from .concurrency import maybe_parallel_map
+from .concurrency import maybe_parallel_map, resolve_worker_count
 from .combos import SALT_TOKENS, looks_like_combination, split_combo_segments
 from .routes_forms import extract_route_and_form
 from .text_utils import (
@@ -103,6 +103,291 @@ WHO_UOM_TO_CANONICAL: dict[str, set[str]] = {
     "tu": {"tablet", "solution", "injection"},
     "lsu": {"tablet", "solution"},
 }
+
+_BRAND_SWAP_CONTEXT: Dict[str, Any] | None = None
+_WHO_DETECT_CONTEXT: Dict[str, Any] | None = None
+
+
+def _string_or_empty(value: object) -> str:
+    """Return a safe string representation without propagating NaN/None."""
+    if isinstance(value, str):
+        return value
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except Exception:
+        pass
+    return str(value)
+
+
+def _clean_generic_for_swap(name: str) -> str:
+    """Strip parenthetical or descriptive suffixes before swapping brands."""
+    base = _base_name(name)
+    base = re.sub(r"\(.*?\)", " ", base)
+    base = re.split(r"\bas\b", base, 1)[0]
+    base = re.sub(r"\s+", " ", base).strip()
+    return base or _base_name(name)
+
+
+def _prepare_brand_context_from_records(
+    records: List[Dict[str, Any]],
+    pnf_name_set: Set[str],
+    drugbank_name_set: Set[str],
+) -> Dict[str, Any] | None:
+    """Build brand automata inside worker processes from serialized records."""
+    if not records:
+        return None
+    brand_df = pd.DataFrame.from_records(records)
+    if brand_df.empty:
+        return None
+    norm_auto, comp_auto, brand_lookup = build_brand_automata(brand_df)
+    return {
+        "A_norm": norm_auto,
+        "A_comp": comp_auto,
+        "brand_lookup": brand_lookup,
+        "pnf_name_set": set(pnf_name_set),
+        "drugbank_name_set": set(drugbank_name_set),
+    }
+
+
+def _brand_swap_worker_init(payload: Dict[str, Any]) -> None:
+    """Initializer for process pool brand swaps."""
+    global _BRAND_SWAP_CONTEXT
+    records = payload.get("brand_records") or []
+    pnf_names = payload.get("pnf_name_set") or []
+    drugbank_names = payload.get("drugbank_name_set") or []
+    _BRAND_SWAP_CONTEXT = _prepare_brand_context_from_records(records, set(pnf_names), set(drugbank_names))
+
+
+def _brand_swap_core(
+    norm: object,
+    comp: object,
+    form: object,
+    friendly: object,
+    context: Dict[str, Any] | None,
+) -> Tuple[str, bool, bool, bool, str, List[str]]:
+    """Shared implementation for both serial and parallel brand swaps."""
+    if not context:
+        return (_string_or_empty(norm), False, False, False, "", [])
+
+    auto_norm = context.get("A_norm")
+    auto_comp = context.get("A_comp")
+    brand_lookup = context.get("brand_lookup") or {}
+    pnf_name_set: Set[str] = context.get("pnf_name_set", set())
+    drugbank_name_set: Set[str] = context.get("drugbank_name_set", set())
+
+    norm_text = _string_or_empty(norm)
+    comp_text = _string_or_empty(comp)
+    form_lower = _string_or_empty(form).lower()
+    friendly_text = _string_or_empty(friendly)
+    friendly_lower = friendly_text.lower()
+
+    if not auto_norm or not auto_comp or not brand_lookup:
+        return (norm_text, False, False, False, "", [])
+
+    found_keys: List[str] = []
+    lengths: Dict[str, int] = {}
+    if norm_text:
+        for _, bn in auto_norm.iter(norm_text):  # type: ignore[attr-defined]
+            found_keys.append(bn)
+            lengths[bn] = max(lengths.get(bn, 0), len(bn))
+    if comp_text:
+        for _, bn in auto_comp.iter(comp_text):  # type: ignore[attr-defined]
+            found_keys.append(bn)
+            lengths[bn] = max(lengths.get(bn, 0), len(bn))
+    if not found_keys:
+        return (norm_text, False, False, False, "", [])
+
+    uniq_keys = list(dict.fromkeys(found_keys))
+    uniq_keys.sort(key=lambda k: (-lengths.get(k, len(k)), k))
+
+    out = norm_text
+    replaced_any = False
+    inserted_generic = False
+    primary_option = None
+    row_brand_labels: Set[str] = set()
+    row_generics_raw: List[str] = []
+
+    for bn in uniq_keys:
+        options = brand_lookup.get(bn, [])
+        if options:
+            for opt in options:
+                if getattr(opt, "brand", None):
+                    row_brand_labels.add(str(opt.brand))
+
+        chosen_generic = None
+        local_primary = None
+
+        if options:
+            def _score(match) -> int:
+                sc = 0
+                if friendly_lower and getattr(match, "dosage_strength", None):
+                    strength = (match.dosage_strength or "").lower()
+                    if friendly_lower in strength:
+                        sc += 2
+                if form_lower and getattr(match, "dosage_form", None):
+                    if form_lower == (match.dosage_form or "").lower():
+                        sc += 1
+                gen_base = _normalize_text_basic(_base_name(match.generic))
+                if gen_base in pnf_name_set:
+                    sc += 3
+                return sc
+            sorted_options = sorted(options, key=_score, reverse=True)
+            if sorted_options:
+                local_primary = sorted_options[0]
+                chosen_generic = local_primary.generic
+
+        if local_primary:
+            primary_option = local_primary
+
+        if not chosen_generic:
+            continue
+
+        clean_generic = _clean_generic_for_swap(chosen_generic)
+        gd_norm = normalize_text(clean_generic)
+        if not gd_norm:
+            gd_norm = normalize_text(chosen_generic)
+
+        canonical_generic = _normalize_text_basic(_base_name(chosen_generic))
+        if canonical_generic:
+            row_generics_raw.append(canonical_generic)
+
+        norm_basic_current = _normalize_text_basic(out)
+        generic_basic = _normalize_text_basic(clean_generic)
+        root_token = generic_basic.split()[0] if generic_basic else ""
+        tokens_set = set(norm_basic_current.split())
+
+        has_generic_already = False
+        if root_token and root_token in tokens_set:
+            has_generic_already = True
+        elif generic_basic and generic_basic in norm_basic_current:
+            has_generic_already = True
+        elif generic_basic in pnf_name_set and generic_basic in tokens_set:
+            has_generic_already = True
+        elif generic_basic and generic_basic in drugbank_name_set and generic_basic in norm_basic_current:
+            has_generic_already = True
+
+        if has_generic_already:
+            new_out = re.sub(rf"\b{re.escape(bn)}\b", "", out)
+            new_out = re.sub(r"\s+", " ", new_out).strip()
+            if new_out != out:
+                replaced_any = True
+                out = new_out
+            continue
+
+        new_out = re.sub(rf"\b{re.escape(bn)}\b", gd_norm, out)
+        if new_out != out:
+            replaced_any = True
+            inserted_generic = True
+            out = new_out
+
+    out = re.sub(r"\s+", " ", out).strip()
+
+    fda_hit = False
+    if primary_option and friendly_lower:
+        ds = getattr(primary_option, "dosage_strength", "") or ""
+        if ds and friendly_lower in ds.lower():
+            fda_hit = True
+
+    if not row_brand_labels and uniq_keys:
+        row_brand_labels.update(uniq_keys)
+    labels_joined = "|".join(sorted(row_brand_labels)) if row_brand_labels else ""
+
+    uniq_generics: List[str] = []
+    seen_generics: Set[str] = set()
+    for g in row_generics_raw:
+        if g and g not in seen_generics:
+            uniq_generics.append(g)
+            seen_generics.add(g)
+
+    return (out, bool(replaced_any), bool(inserted_generic), bool(fda_hit), labels_joined, uniq_generics)
+
+
+def _brand_swap_worker(row: Tuple[object, object, object, object]) -> Tuple[str, bool, bool, bool, str, List[str]]:
+    """ProcessPool worker entry point for brand swapping."""
+    return _brand_swap_core(row[0], row[1], row[2], row[3], _BRAND_SWAP_CONTEXT)
+
+
+def _who_worker_init(payload: Dict[str, Any]) -> None:
+    """Initializer for WHO detection workers."""
+    global _WHO_DETECT_CONTEXT
+    pattern = payload.get("pattern")
+    regex = re.compile(pattern) if pattern else None
+    codes_source = payload.get("codes_by_name") or {}
+    details = payload.get("details_by_code") or {}
+    # Ensure sets are reconstructed to avoid accidental mutation.
+    codes_map = {k: set(v) for k, v in codes_source.items()}
+    _WHO_DETECT_CONTEXT = {
+        "regex": regex,
+        "codes_by_name": codes_map,
+        "details_by_code": details,
+    }
+
+
+def _who_detect_core(
+    text: object,
+    text_norm: object,
+    context: Dict[str, Any] | None,
+) -> Tuple[List[str], List[str], bool, str, List[str], List[str]]:
+    """Shared WHO detection logic used in both serial and parallel execution."""
+    if not context:
+        return ([], [], False, "", [], [])
+    regex = context.get("regex")
+    if not regex:
+        return ([], [], False, "", [], [])
+    codes_by_name = context.get("codes_by_name") or {}
+    details_by_code = context.get("details_by_code") or {}
+
+    source_text = _string_or_empty(text)
+    norm_text = _string_or_empty(text_norm)
+
+    names, codes = detect_all_who_molecules(source_text, regex, codes_by_name, pre_normalized=norm_text)
+    sorted_codes = sorted(codes)
+
+    has_ddd = False
+    adm_r_values: Set[str] = set()
+    route_tokens: Set[str] = set()
+    form_tokens: Set[str] = set()
+
+    for code in sorted_codes:
+        for detail in details_by_code.get(code, []):
+            ddd_val = detail.get("ddd")
+            if pd.notna(ddd_val) and str(ddd_val).strip():
+                has_ddd = True
+            uom_val = detail.get("uom")
+            if pd.notna(uom_val):
+                uom_key = str(uom_val).strip().lower()
+                form_tokens.update(WHO_UOM_TO_CANONICAL.get(uom_key, set()))
+            adm_r_val = detail.get("adm_r")
+            if pd.notna(adm_r_val):
+                adm_r_text = str(adm_r_val).strip()
+                if adm_r_text:
+                    adm_key = adm_r_text.lower()
+                    mapped_routes = WHO_ADM_ROUTE_MAP.get(adm_key)
+                    if mapped_routes:
+                        route_tokens.update(mapped_routes)
+                    else:
+                        route_tokens.add(adm_key)
+                    form_tokens.update(WHO_FORM_TO_CANONICAL.get(adm_key, set()))
+    if route_tokens:
+        adm_r_values.update(route_tokens)
+
+    adm_r_display = "|".join(sorted(adm_r_values)) if adm_r_values else ""
+    return (
+        names,
+        sorted_codes,
+        has_ddd,
+        adm_r_display,
+        sorted(route_tokens),
+        sorted(form_tokens),
+    )
+
+
+def _who_worker(row: Tuple[object, object]) -> Tuple[List[str], List[str], bool, str, List[str], List[str]]:
+    """ProcessPool worker entry point for WHO detection."""
+    return _who_detect_core(row[0], row[1], _WHO_DETECT_CONTEXT)
 
 # Local lightweight spinner so this module is self-contained
 def _run_with_spinner(label: str, func: Callable[[], None]) -> float:
@@ -648,121 +933,54 @@ def build_features(
             df["probable_brands"] = ""
             df["fda_generics_list"] = [[] for _ in range(len(df))]
             return
-        mb_list, swapped = [], []
-        fda_hits = []
-        probable_brand_hits: List[str] = []
-        fda_generics_lists: List[List[str]] = []
-        swap_inserted_flags: List[bool] = []
+        normalized_values = df["normalized"].tolist()
+        compact_values = df["norm_compact"].tolist()
+        form_values = df["form_raw"].tolist() if "form_raw" in df.columns else [""] * len(df)
+        dose_values = df["dose_recognized"].tolist()
+        payload = list(zip(normalized_values, compact_values, form_values, dose_values))
 
-        def _clean_generic_for_swap(name: str) -> str:
-            base = _base_name(name)
-            base = re.sub(r"\(.*?\)", " ", base)
-            base = re.split(r"\bas\b", base, 1)[0]
-            base = re.sub(r"\s+", " ", base).strip()
-            # Strips parenthetical brand annotations so swaps don't rewrite contextual notes (README: avoid touching parentheses when generic already present).
-            return base or _base_name(name)
+        worker_count = resolve_worker_count(task_size=len(payload))
+        local_context = {
+            "A_norm": B_norm,
+            "A_comp": B_comp,
+            "brand_lookup": brand_lookup,
+            "pnf_name_set": pnf_name_set,
+            "drugbank_name_set": drugbank_name_set,
+        }
 
-        for norm, comp, form, friendly, parens in zip(
-            df["normalized"], df["norm_compact"], df["form_raw"], df["dose_recognized"], df["parentheticals"]
-        ):
-            # Scan each row for brand hits across both normalized and compact automatons.
-            # Inline selection/scoring identical to prior implementation
-            found_keys: List[str] = []
-            lengths: Dict[str, int] = {}
-            row_brand_labels: set[str] = set()
-            row_generics_raw: List[str] = []
-            for _, bn in B_norm.iter(norm):  # type: ignore
-                found_keys.append(bn); lengths[bn] = max(lengths.get(bn, 0), len(bn))
-            for _, bn in B_comp.iter(comp):  # type: ignore
-                found_keys.append(bn); lengths[bn] = max(lengths.get(bn, 0), len(bn))
-            if not found_keys:
-                mb_list.append(norm); swapped.append(False); fda_hits.append(False); probable_brand_hits.append(""); fda_generics_lists.append([]); swap_inserted_flags.append(False); continue
-            uniq_keys = list(dict.fromkeys(found_keys))
-            # Prioritize longer matches first to favor more specific brand tokens.
-            uniq_keys.sort(key=lambda k: (-lengths.get(k, len(k)), k))
+        if worker_count <= 1:
+            results = [
+                _brand_swap_core(norm, comp, form, friendly, local_context)
+                for norm, comp, form, friendly in payload
+            ]
+        else:
+            brand_records = brand_df[0].fillna("").to_dict("records")
+            init_payload = {
+                "brand_records": brand_records,
+                "pnf_name_set": list(pnf_name_set),
+                "drugbank_name_set": list(drugbank_name_set),
+            }
+            results = maybe_parallel_map(
+                payload,
+                _brand_swap_worker,
+                max_workers=worker_count,
+                initializer=_brand_swap_worker_init,
+                initargs=(init_payload,),
+                parallel_threshold=1000,
+                chunksize=400,
+            )
 
-            out = norm; replaced_any = False; inserted_generic = False
-            primary_option = None
-            for bn in uniq_keys:
-                options = brand_lookup.get(bn, [])
-                chosen_generic = None
-                if options:
-                    for opt in options:
-                        if getattr(opt, "brand", None):
-                            row_brand_labels.add(str(opt.brand))
-                    # score
-                    def _score(m):
-                        sc = 0
-                        if friendly and getattr(m, "dosage_strength", None) and friendly.lower() in (m.dosage_strength or "").lower(): sc += 2
-                        if form and getattr(m, "dosage_form", None) and form.lower() == (m.dosage_form or "").lower(): sc += 1
-                        gen_base = _normalize_text_basic(_base_name(m.generic))
-                        if gen_base in pnf_name_to_gid: sc += 3
-                        return sc
-                    # Prefer candidates that align on dose, form, and PNF membership.
-                    options = sorted(options, key=_score, reverse=True)
-                    if options:
-                        primary_option = options[0]
-                        chosen_generic = primary_option.generic
-                if not chosen_generic:
-                    continue
-                clean_generic = _clean_generic_for_swap(chosen_generic)
-                gd_norm = normalize_text(clean_generic)
-                if not gd_norm:
-                    gd_norm = normalize_text(chosen_generic)
+        if results:
+            mb_list, swapped, swap_inserted_flags, fda_hits, probable_brand_hits, fda_generics_lists = zip(*results)
+        else:
+            mb_list = swapped = swap_inserted_flags = fda_hits = probable_brand_hits = fda_generics_lists = ()
 
-                canonical_generic = _normalize_text_basic(_base_name(chosen_generic))
-                if canonical_generic:
-                    row_generics_raw.append(canonical_generic)
-
-                norm_basic_current = _normalize_text_basic(out)
-                generic_basic = _normalize_text_basic(clean_generic)
-                root_token = generic_basic.split()[0] if generic_basic else ""
-                tokens_set = set(norm_basic_current.split())
-                has_generic_already = False
-                if root_token and root_token in tokens_set:
-                    has_generic_already = True
-                elif generic_basic and generic_basic in norm_basic_current:
-                    has_generic_already = True
-                elif generic_basic in pnf_name_set and generic_basic in tokens_set:
-                    has_generic_already = True
-                elif generic_basic and generic_basic in drugbank_name_set and generic_basic in norm_basic_current:
-                    has_generic_already = True
-
-                if has_generic_already:
-                    new_out = re.sub(rf"\b{re.escape(bn)}\b", "", out)
-                    new_out = re.sub(r"\s+", " ", new_out).strip()
-                    if new_out != out:
-                        replaced_any = True
-                        out = new_out
-                    continue
-
-                new_out = re.sub(rf"\b{re.escape(bn)}\b", gd_norm, out)
-                if new_out != out:
-                    replaced_any = True
-                    inserted_generic = True
-                    out = new_out
-            out = re.sub(r"\s+", " ", out).strip()
-            # FDA dose corroboration
-            fda_hit = False
-            if primary_option and friendly:
-                ds = getattr(primary_option, "dosage_strength", "") or ""
-                if ds and friendly.lower() in ds.lower():
-                    fda_hit = True
-            if not row_brand_labels and uniq_keys:
-                row_brand_labels.update(uniq_keys)
-            labels_joined = "|".join(sorted(row_brand_labels)) if row_brand_labels else ""
-            mb_list.append(out); swapped.append(replaced_any); swap_inserted_flags.append(inserted_generic); fda_hits.append(fda_hit); probable_brand_hits.append(labels_joined)
-            uniq_generics: List[str] = []
-            for g in row_generics_raw:
-                if g and g not in uniq_generics:
-                    uniq_generics.append(g)
-            fda_generics_lists.append(uniq_generics)
-        df["match_basis"] = mb_list
-        df["did_brand_swap"] = swapped
-        df["brand_swap_added_generic"] = swap_inserted_flags
-        df["fda_dose_corroborated"] = fda_hits
-        df["probable_brands"] = probable_brand_hits
-        df["fda_generics_list"] = fda_generics_lists
+        df["match_basis"] = list(mb_list)
+        df["did_brand_swap"] = [bool(x) for x in swapped]
+        df["brand_swap_added_generic"] = [bool(x) for x in swap_inserted_flags]
+        df["fda_dose_corroborated"] = [bool(x) for x in fda_hits]
+        df["probable_brands"] = list(probable_brand_hits)
+        df["fda_generics_list"] = [list(x) for x in fda_generics_lists]
     _timed("Apply brand→generic swaps", _brand_swap)
 
     def _drugbank_hits():
@@ -995,58 +1213,7 @@ def build_features(
 
     # 12) WHO molecule detection
     def _who_detect():
-        if who_regex is not None:
-            who_names_all, who_atc_all = [], []
-            who_ddd_flags: List[bool] = []
-            who_adm_r_cols: List[str] = []
-            who_route_cols: List[List[str]] = []
-            who_form_cols: List[List[str]] = []
-            for txt, txt_norm in zip(df["match_basis"].tolist(), df["match_basis_norm_basic"].tolist()):
-                names, codes = detect_all_who_molecules(txt, who_regex, codes_by_name, pre_normalized=txt_norm)
-                who_names_all.append(names)
-                sorted_codes = sorted(codes)
-                who_atc_all.append(sorted_codes)
-
-                has_ddd = False
-                adm_r_values: set[str] = set()
-                route_tokens: set[str] = set()
-                form_tokens: set[str] = set()
-                for code in sorted_codes:
-                    for detail in who_details_by_code.get(code, []):
-                        ddd_val = detail.get("ddd")
-                        if pd.notna(ddd_val) and str(ddd_val).strip():
-                            has_ddd = True
-                        uom_val = detail.get("uom")
-                        if pd.notna(uom_val):
-                            uom_key = str(uom_val).strip().lower()
-                            form_tokens.update(WHO_UOM_TO_CANONICAL.get(uom_key, set()))
-                        adm_r_val = detail.get("adm_r")
-                        if pd.notna(adm_r_val):
-                            adm_r_text = str(adm_r_val).strip()
-                            if adm_r_text:
-                                adm_key = adm_r_text.lower()
-                                mapped_routes = WHO_ADM_ROUTE_MAP.get(adm_key)
-                                if mapped_routes:
-                                    route_tokens.update(mapped_routes)
-                                else:
-                                    route_tokens.add(adm_key)
-                                form_tokens.update(WHO_FORM_TO_CANONICAL.get(adm_key, set()))
-                if route_tokens:
-                    adm_r_values.update(route_tokens)
-                who_ddd_flags.append(has_ddd)
-                who_adm_r_cols.append("|".join(sorted(adm_r_values)) if adm_r_values else "")
-                who_route_cols.append(sorted(route_tokens))
-                who_form_cols.append(sorted(form_tokens))
-
-            df["who_molecules_list"] = who_names_all
-            df["who_atc_codes_list"] = who_atc_all
-            df["who_molecules"] = df["who_molecules_list"].map(lambda xs: "|".join(xs) if xs else "")
-            df["who_atc_codes"] = df["who_atc_codes_list"].map(lambda xs: "|".join(xs) if xs else "")
-            df["who_atc_has_ddd"] = who_ddd_flags
-            df["who_atc_adm_r"] = who_adm_r_cols
-            df["who_route_tokens"] = who_route_cols
-            df["who_form_tokens"] = who_form_cols
-        else:
+        if who_regex is None:
             df["who_molecules_list"] = [[] for _ in range(len(df))]
             df["who_atc_codes_list"] = [[] for _ in range(len(df))]
             df["who_molecules"] = ""
@@ -1055,6 +1222,62 @@ def build_features(
             df["who_atc_adm_r"] = ""
             df["who_route_tokens"] = [[] for _ in range(len(df))]
             df["who_form_tokens"] = [[] for _ in range(len(df))]
+            return
+
+        basis_values = df["match_basis"].tolist()
+        norm_basic_values = df["match_basis_norm_basic"].tolist()
+        payload = list(zip(basis_values, norm_basic_values))
+
+        worker_count = resolve_worker_count(task_size=len(payload))
+        local_context = {
+            "regex": who_regex,
+            "codes_by_name": codes_by_name,
+            "details_by_code": who_details_by_code,
+        }
+
+        if worker_count <= 1:
+            results = [
+                _who_detect_core(text, norm_text, local_context)
+                for text, norm_text in payload
+            ]
+        else:
+            init_payload = {
+                "pattern": who_regex.pattern,
+                "codes_by_name": {k: list(v) for k, v in codes_by_name.items()},
+                "details_by_code": who_details_by_code,
+            }
+            results = maybe_parallel_map(
+                payload,
+                _who_worker,
+                max_workers=worker_count,
+                initializer=_who_worker_init,
+                initargs=(init_payload,),
+                parallel_threshold=1000,
+                chunksize=400,
+            )
+
+        if results:
+            (
+                who_names_all,
+                who_atc_all,
+                who_ddd_flags,
+                who_adm_r_cols,
+                who_route_cols,
+                who_form_cols,
+            ) = map(list, zip(*results))
+        else:
+            who_names_all = who_atc_all = who_adm_r_cols = []
+            who_route_cols = who_form_cols = []
+            who_ddd_flags = []
+
+        df["who_molecules_list"] = who_names_all
+        df["who_atc_codes_list"] = who_atc_all
+        df["who_molecules"] = df["who_molecules_list"].map(lambda xs: "|".join(xs) if xs else "")
+        df["who_atc_codes"] = df["who_atc_codes_list"].map(lambda xs: "|".join(xs) if xs else "")
+        df["who_atc_has_ddd"] = who_ddd_flags
+        df["who_atc_adm_r"] = who_adm_r_cols
+        df["who_route_tokens"] = who_route_cols
+        df["who_form_tokens"] = who_form_cols
     _timed("Detect WHO molecules", _who_detect)
 
     # 13) Combination detection helpers

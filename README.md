@@ -338,6 +338,9 @@ Optional flags
 - `--annex` / `--pnf` / `--esoa` — Override default input paths (relative paths fall back to `inputs/`)
 - `--out` — Override the matched CSV filename (always placed under `./outputs`)
 
+⚙️ **Parallelism controls**  
+CPU-heavy stages (brand swaps, WHO detection, scoring passes) now fan out across a process pool when large datasets are detected. Set `ESOA_MAX_WORKERS=<N>` to pin the worker count (use `1` to force serial execution, or leave unset to auto-detect cores). In restricted sandboxes the helpers fall back to single-process execution automatically.
+
 ### Minimal/local run
 
 For incremental testing without touching external data sources or emitting Excel, use:

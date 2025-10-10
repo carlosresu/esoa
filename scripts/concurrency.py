@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import math
 import os
+import multiprocessing
 from concurrent.futures import ProcessPoolExecutor
 from typing import Callable, Iterable, Sequence, TypeVar, List
 
@@ -65,11 +66,16 @@ def maybe_parallel_map(
     *,
     max_workers: int | None = None,
     parallel_threshold: int = 2000,
+    initializer: Callable[..., None] | None = None,
+    initargs: tuple | tuple[object, ...] = (),
+    chunksize: int | None = None,
 ) -> List[R]:
     """Apply func across seq, using a process pool when the workload is large enough.
 
     The ESOA_MAX_WORKERS env var can pin the worker count (set to 1 to disable
     parallelism). On small workloads the function falls back to serial execution.
+    Optional initializer/initargs mirror `concurrent.futures.ProcessPoolExecutor`
+    so callers can hydrate per-process state (e.g., heavy lookup tables).
     """
     values = list(seq)
     count = len(values)
@@ -78,12 +84,40 @@ def maybe_parallel_map(
 
     workers = resolve_worker_count(explicit=max_workers, task_size=count)
     if workers <= 1 or count < parallel_threshold:
+        if initializer:
+            initializer(*initargs)
         return [func(item) for item in values]
 
     # Balance chunks so each worker gets at least a few hundred items.
-    chunksize = max(1, min(1000, count // (workers * 4)))
-    with ProcessPoolExecutor(max_workers=workers) as executor:
-        return list(executor.map(func, values, chunksize=chunksize))
+    computed_chunksize = chunksize or max(1, min(1000, count // (workers * 4)))
+
+    def _run_with_executor(mp_ctx: multiprocessing.context.BaseContext | None = None) -> List[R]:
+        with ProcessPoolExecutor(
+            max_workers=workers,
+            initializer=initializer,
+            initargs=initargs,
+            mp_context=mp_ctx,
+        ) as executor:
+            return list(executor.map(func, values, chunksize=computed_chunksize))
+
+    try:
+        return _run_with_executor()
+    except (OSError, PermissionError):
+        # Try again using a fork-based context when available (macOS sandbox can
+        # reject the default start method due to semaphore limits).
+        try:
+            fork_ctx = multiprocessing.get_context("fork")
+        except (AttributeError, ValueError):
+            fork_ctx = None
+        if fork_ctx is not None:
+            try:
+                return _run_with_executor(fork_ctx)
+            except (OSError, PermissionError):
+                pass
+        # Restricted environments may still disallow new workers; fall back to serial execution.
+        if initializer:
+            initializer(*initargs)
+        return [func(item) for item in values]
 
 
 __all__ = ["maybe_parallel_map", "resolve_worker_count"]
