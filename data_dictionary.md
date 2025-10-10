@@ -9,6 +9,8 @@ table when validating new data or onboarding reviewers.
 
 `run.py` now orchestrates dependency bootstrapping, input preparation, and the post-run execution of `resolve_unknowns.py`, so the companion outputs mentioned below (e.g., `unknown_words.csv`) are regenerated automatically each time the pipeline completes.
 
+⚙️ **Performance note:** Brand swaps, WHO detection, and other CPU-heavy transforms now fan out across a worker pool when large batches are processed. The helpers keep row order stable, so the column definitions below remain unchanged even when the pipeline runs in parallel.
+
 ## Text & Normalization
 
 | Column | Meaning | First Assigned | Notes |
