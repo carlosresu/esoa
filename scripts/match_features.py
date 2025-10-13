@@ -23,7 +23,12 @@ from .text_utils import (
 from .reference_data import load_drugbank_generics, load_ignore_words
 from .who_molecules import detect_all_who_molecules, load_who_molecules
 from .brand_map import load_latest_brandmap, build_brand_automata, fda_generics_set
-from .pnf_aliases import expand_generic_aliases, SPECIAL_GENERIC_ALIASES, apply_spelling_rules
+from .pnf_aliases import (
+    expand_generic_aliases,
+    SPECIAL_GENERIC_ALIASES,
+    apply_spelling_rules,
+    SALT_FORM_SUFFIXES,
+)
 from .pnf_partial import PnfTokenIndex
 
 # Reference dictionaries describing canonical route/form mappings leveraged
@@ -421,6 +426,22 @@ def _run_with_spinner(label: str, func: Callable[[], None]) -> float:
     return elapsed
 
 DOSE_OR_UNIT_RX = re.compile(r"(?:(\b\d+(?:[.,]\d+)?\s*(?:mg|g|mcg|ug|iu|lsu|ml|l|%)(?:\b|/))|(\b\d+(?:[.,]\d+)?\b))", re.I)
+DOSE_UNIT_SUFFIXES: tuple[str, ...] = (
+    "mg",
+    "g",
+    "mcg",
+    "ug",
+    "iu",
+    "lsu",
+    "ml",
+    "l",
+    "%",
+    "mgml",
+    "mcgml",
+    "gml",
+    "unit",
+    "units",
+)
 GENERIC_TOKEN_RX = re.compile(r"[a-z]+", re.I)
 
 def _friendly_dose(d: dict) -> str:
@@ -469,6 +490,63 @@ def build_features(
 
     ignore_words = load_ignore_words()
     stopword_tokens_all: Set[str] = set(STOPWORD_TOKENS) | ignore_words
+
+    def _normalize_token(token: str) -> str:
+        norm = _normalize_text_basic(token)
+        return norm if norm else ""
+
+    form_noise_tokens: Set[str] = set()
+    route_noise_tokens: Set[str] = set()
+    for values in FOOD_FORM_KEYWORDS.values():
+        for raw in values:
+            norm = _normalize_token(raw)
+            if norm:
+                form_noise_tokens.add(norm)
+
+    for raw in WHO_ADM_ROUTE_MAP.keys():
+        norm = _normalize_token(raw)
+        if norm:
+            route_noise_tokens.add(norm)
+    for values in WHO_ADM_ROUTE_MAP.values():
+        for raw in values:
+            norm = _normalize_token(raw)
+            if norm:
+                route_noise_tokens.add(norm)
+
+    salt_suffix_tokens: Set[str] = set()
+    for raw in SALT_FORM_SUFFIXES:
+        norm = _normalize_token(raw)
+        if norm:
+            salt_suffix_tokens.add(norm)
+
+    salt_tokens: Set[str] = set()
+    for raw in SALT_TOKENS:
+        norm = _normalize_token(raw)
+        if norm:
+            salt_tokens.add(norm)
+
+    non_molecule_tokens: Set[str] = (
+        stopword_tokens_all
+        | form_noise_tokens
+        | route_noise_tokens
+        | salt_suffix_tokens
+        | {
+            "vial",
+            "vials",
+            "ampule",
+            "ampoule",
+            "sachet",
+            "sachets",
+            "prefilled",
+            "prefill",
+            "drop",
+            "drops",
+            "dose",
+            "doses",
+            "unit",
+            "units",
+        }
+    )
 
     # 1) Validate inputs
     def _validate():
@@ -1092,6 +1170,35 @@ def build_features(
     def _pnf_fuzzy():
         if not pnf_alias_keys or not pnf_trigram_index:
             return
+        dose_suffixes = DOSE_UNIT_SUFFIXES
+
+        def _token_is_noise(token: str) -> bool:
+            if not token:
+                return True
+            if token in non_molecule_tokens:
+                return True
+            if token in salt_tokens and len(token) <= 4:
+                return True
+            lower = token.lower()
+            if lower.isdigit():
+                return True
+            stripped = lower.replace(".", "")
+            if stripped.isdigit():
+                return True
+            if any(ch.isdigit() for ch in lower):
+                for suffix in dose_suffixes:
+                    if lower.endswith(suffix):
+                        return True
+            return False
+
+        def _segment_is_noise(segment_tokens: List[str]) -> bool:
+            filtered = [tok for tok in segment_tokens if tok]
+            if not filtered:
+                return True
+            if all(_token_is_noise(tok) for tok in filtered):
+                return True
+            return False
+
         for idx, row in df.loc[df["generic_id"].isna()].iterrows():
             basis = row.get("match_basis_norm_basic") or ""
             if not isinstance(basis, str) or not basis:
@@ -1113,6 +1220,8 @@ def build_features(
                 for start in range(0, len(tokens) - window + 1):
                     segment_tokens = tokens[start:start + window]
                     if not segment_tokens:
+                        continue
+                    if _segment_is_noise(segment_tokens):
                         continue
                     candidate = " ".join(segment_tokens)
                     if len(candidate.replace(" ", "")) < 3:
