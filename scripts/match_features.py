@@ -241,7 +241,7 @@ def _fuzzy_core(basis: str, context: Dict[str, Any]) -> Optional[List[Dict[str, 
         tris = _generate_trigrams(tok_lower)
         if not tris:
             continue
-        if any(tri in pnf_trigram_index for tri in tris):
+        if any(tri in trigram_index for tri in tris):
             looks_suspicious = True
             break
 
