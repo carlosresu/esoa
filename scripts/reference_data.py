@@ -40,7 +40,9 @@ def _iter_csv_column(frame: pd.DataFrame, candidates: Iterable[str]) -> Iterable
 
 
 @lru_cache(maxsize=None)
-def load_drugbank_generics(project_root: str | Path | None = None) -> Tuple[Set[str], Set[str], Dict[str, Set[Tuple[str, ...]]]]:
+def load_drugbank_generics(
+    project_root: str | Path | None = None,
+) -> Tuple[Set[str], Set[str], Dict[str, Set[Tuple[str, ...]]], Dict[str, str]]:
     """
     Load DrugBank generics (prefer the freshly exported dependencies/drugbank/output/generics.csv).
 
@@ -48,14 +50,16 @@ def load_drugbank_generics(project_root: str | Path | None = None) -> Tuple[Set[
         - normalized_names: Unique normalized generic phrases (lowercase, punctuation-stripped).
         - token_pool: All individual tokens present across the normalized names.
         - token_index: first-token -> set of token tuples representing each generic phrase.
+        - display_lookup: normalized generic -> representative display string.
     """
     root = _project_root(project_root)
     candidates = [
         root / "dependencies" / "drugbank" / "output" / "generics.csv",
         root / "inputs" / "generics.csv",
+        root / "inputs" / "drugbank_generics.csv",
     ]
 
-    normalized_names: Set[str] = set()
+    normalized_map: Dict[str, str] = {}
     for path in candidates:
         if not path.is_file():
             continue
@@ -65,15 +69,15 @@ def load_drugbank_generics(project_root: str | Path | None = None) -> Tuple[Set[
             continue
         for raw in _iter_csv_column(frame, ("name", "generic")):
             norm = _normalize_text_basic(raw)
-            if norm:
-                normalized_names.add(norm)
-        if normalized_names:
+            if norm and norm not in normalized_map:
+                normalized_map[norm] = raw.strip()
+        if normalized_map:
             # Prefer the first successfully loaded dataset (dependencies path takes precedence).
             break
 
     token_pool: Set[str] = set()
     token_index: Dict[str, Set[Tuple[str, ...]]] = {}
-    for name in normalized_names:
+    for name in normalized_map.keys():
         tokens = tuple(name.split())
         if not tokens:
             continue
@@ -81,7 +85,9 @@ def load_drugbank_generics(project_root: str | Path | None = None) -> Tuple[Set[
         first = tokens[0]
         bucket = token_index.setdefault(first, set())
         bucket.add(tokens)
-    return normalized_names, token_pool, token_index
+
+    normalized_names = set(normalized_map.keys())
+    return normalized_names, token_pool, token_index, normalized_map
 
 
 DEFAULT_IGNORE_TOKENS: Set[str] = {
