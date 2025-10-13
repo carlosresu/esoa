@@ -111,6 +111,7 @@ WHO_UOM_TO_CANONICAL: dict[str, set[str]] = {
 
 _BRAND_SWAP_CONTEXT: Dict[str, Any] | None = None
 _WHO_DETECT_CONTEXT: Dict[str, Any] | None = None
+_PNF_FUZZY_CONTEXT: Dict[str, Any] | None = None
 
 
 def _string_or_empty(value: object) -> str:
@@ -155,6 +156,204 @@ def _prepare_brand_context_from_records(
         "pnf_name_set": set(pnf_name_set),
         "drugbank_name_set": set(drugbank_name_set),
     }
+
+
+def _pnf_fuzzy_worker_init(payload: Dict[str, Any]) -> None:
+    """Bootstrap heavy fuzzy matching artifacts inside worker processes."""
+    global _PNF_FUZZY_CONTEXT
+    if not payload:
+        _PNF_FUZZY_CONTEXT = None
+        return
+    ctx: Dict[str, Any] = {
+        "pnf_trigram_index": {tri: set(vals) for tri, vals in payload.get("pnf_trigram_index", {}).items()},
+        "pnf_name_to_gid": {str(k): (str(v[0]), str(v[1])) for k, v in payload.get("pnf_name_to_gid", {}).items()},
+        "non_molecule_tokens": set(payload.get("non_molecule_tokens", [])),
+        "salt_tokens": set(payload.get("salt_tokens", [])),
+        "dose_suffixes": tuple(payload.get("dose_suffixes", DOSE_UNIT_SUFFIXES)),
+        "therapeutic_tokens": set(payload.get("therapeutic_tokens", [])),
+        "brand_token_lookup": set(payload.get("brand_token_lookup", [])),
+    }
+    ctx["skip_tokens"] = set(ctx["non_molecule_tokens"]) | set(ctx["brand_token_lookup"])
+    _PNF_FUZZY_CONTEXT = ctx
+
+
+def _pnf_fuzzy_worker(task: Tuple[object, str]) -> Tuple[object, Optional[Tuple[str, str]]]:
+    """Entry point for process pool evaluation of fuzzy matches."""
+    idx, basis = task
+    ctx = _PNF_FUZZY_CONTEXT or {}
+    match = _pnf_fuzzy_core(basis, ctx)
+    return idx, match
+
+
+def _pnf_fuzzy_core(basis: str, context: Dict[str, Any]) -> Optional[Tuple[str, str]]:
+    """Best-effort fuzzy match of normalized basis text against the PNF catalogue."""
+    if not basis:
+        return None
+    pnf_trigram_index: Dict[str, Set[str]] = context.get("pnf_trigram_index") or {}
+    pnf_name_to_gid: Dict[str, Tuple[str, str]] = context.get("pnf_name_to_gid") or {}
+    if not pnf_trigram_index or not pnf_name_to_gid:
+        return None
+
+    non_molecule_tokens: Set[str] = context.get("non_molecule_tokens", set())
+    salt_tokens: Set[str] = context.get("salt_tokens", set())
+    dose_suffixes: Tuple[str, ...] = context.get("dose_suffixes", DOSE_UNIT_SUFFIXES)
+    therapeutic_tokens: Set[str] = context.get("therapeutic_tokens", set())
+    brand_token_lookup: Set[str] = context.get("brand_token_lookup", set())
+    skip_tokens: Set[str] = context.get("skip_tokens") or (set(non_molecule_tokens) | set(brand_token_lookup))
+
+    candidate_tokens = _tokenize_unknowns(basis)
+    if not candidate_tokens:
+        candidate_tokens = [tok for tok in basis.split() if tok]
+
+    looks_suspicious = False
+    for token in candidate_tokens:
+        tok_lower = token.lower()
+        if len(tok_lower) < 3:
+            continue
+        if tok_lower in skip_tokens:
+            continue
+        if tok_lower in therapeutic_tokens:
+            continue
+        if tok_lower in salt_tokens and len(tok_lower) <= 4:
+            continue
+        if tok_lower.isdigit():
+            continue
+        tris = _generate_trigrams(tok_lower)
+        if not tris:
+            continue
+        if any(tri in pnf_trigram_index for tri in tris):
+            looks_suspicious = True
+            break
+
+    if not looks_suspicious:
+        return None
+
+    def _token_is_noise(token: str) -> bool:
+        if not token:
+            return True
+        if token in non_molecule_tokens:
+            return True
+        if token in salt_tokens and len(token) <= 4:
+            return True
+        lower = token.lower()
+        if lower.isdigit():
+            return True
+        stripped = lower.replace(".", "")
+        if stripped.isdigit():
+            return True
+        if any(ch.isdigit() for ch in lower):
+            for suffix in dose_suffixes:
+                if lower.endswith(suffix):
+                    return True
+        return False
+
+    def _segment_is_noise(segment_tokens: List[str]) -> bool:
+        filtered = [tok for tok in segment_tokens if tok]
+        if not filtered:
+            return True
+        if all(_token_is_noise(tok) for tok in filtered):
+            return True
+        return False
+
+    tokens = [tok for tok in basis.split() if tok]
+    if not tokens:
+        return None
+
+    candidate_forms_map: Dict[str, str] = {}
+
+    def _register(form: str, origin: str) -> None:
+        norm = form.strip()
+        if not norm:
+            return
+        if norm not in candidate_forms_map:
+            candidate_forms_map[norm] = origin
+
+    max_window = min(4, len(tokens))
+    for window in range(1, max_window + 1):
+        for start in range(0, len(tokens) - window + 1):
+            segment_tokens = tokens[start:start + window]
+            if not segment_tokens:
+                continue
+            if _segment_is_noise(segment_tokens):
+                continue
+            candidate = " ".join(segment_tokens)
+            if len(candidate.replace(" ", "")) < 3:
+                continue
+            _register(candidate, candidate)
+            for variant in apply_spelling_rules(candidate):
+                _register(variant, candidate)
+            if len(segment_tokens) > 1:
+                sorted_variant = " ".join(sorted(segment_tokens))
+                _register(sorted_variant, candidate)
+                for variant in apply_spelling_rules(sorted_variant):
+                    _register(variant, candidate)
+
+    if not candidate_forms_map:
+        return None
+
+    for form, origin in list(candidate_forms_map.items()):
+        compact = form.replace(" ", "")
+        if compact:
+            _register(compact, origin)
+
+    form_trigram_cache: Dict[str, Set[str]] = {}
+    for form in list(candidate_forms_map.keys()):
+        trigrams = _generate_trigrams(form)
+        if trigrams:
+            form_trigram_cache[form] = trigrams
+        else:
+            candidate_forms_map.pop(form, None)
+
+    if not form_trigram_cache:
+        return None
+
+    candidate_counts: Dict[str, int] = {}
+    for form, tris in form_trigram_cache.items():
+        for tri in tris:
+            for key in pnf_trigram_index.get(tri, set()):
+                candidate_counts[key] = candidate_counts.get(key, 0) + 1
+
+    if not candidate_counts:
+        return None
+
+    sorted_candidates = sorted(candidate_counts.items(), key=lambda kv: kv[1], reverse=True)[:50]
+    best_score = 0.0
+    best_gid: Optional[str] = None
+    best_span = ""
+    phonetic_cache: Dict[str, Set[str]] = {}
+
+    for key, _overlap in sorted_candidates:
+        gid_display = pnf_name_to_gid.get(key)
+        if not gid_display:
+            continue
+        gid = gid_display[0]
+        if gid is None:
+            continue
+        key_tris = _generate_trigrams(key)
+        if not key_tris:
+            continue
+        for form, tris in form_trigram_cache.items():
+            if len(form) >= 2 and len(key) >= 2 and form[:2] != key[:2]:
+                continue
+            edit_sim = difflib.SequenceMatcher(None, form, key).ratio()
+            if edit_sim < 0.72:
+                continue
+            union = tris | key_tris
+            if not union:
+                continue
+            jaccard = len(tris & key_tris) / len(union)
+            if form not in phonetic_cache:
+                phonetic_cache[form] = apply_spelling_rules(form)
+            domain_bonus = 0.1 if key in phonetic_cache[form] else 0.0
+            score = edit_sim * 0.6 + jaccard * 0.3 + domain_bonus
+            if score > best_score:
+                best_score = score
+                best_gid = gid
+                best_span = candidate_forms_map.get(form, form)
+
+    if best_score >= 0.88 and best_gid:
+        return best_gid, best_span
+    return None
 
 
 def _brand_swap_worker_init(payload: Dict[str, Any]) -> None:
@@ -1170,153 +1369,112 @@ def build_features(
     def _pnf_fuzzy():
         if not pnf_alias_keys or not pnf_trigram_index:
             return
-        dose_suffixes = DOSE_UNIT_SUFFIXES
 
-        def _token_is_noise(token: str) -> bool:
-            if not token:
-                return True
-            if token in non_molecule_tokens:
-                return True
-            if token in salt_tokens and len(token) <= 4:
-                return True
-            lower = token.lower()
-            if lower.isdigit():
-                return True
-            stripped = lower.replace(".", "")
-            if stripped.isdigit():
-                return True
-            if any(ch.isdigit() for ch in lower):
-                for suffix in dose_suffixes:
-                    if lower.endswith(suffix):
-                        return True
+        unresolved_mask = df["generic_id"].isna()
+        if not unresolved_mask.any():
+            return
+
+        skip_tokens = set(non_molecule_tokens) | set(brand_token_lookup)
+        therapeutic_skip = set(therapeutic_tokens)
+        salt_skip = set(salt_tokens)
+
+        def _looks_like_misspelling(norm_basis: str) -> bool:
+            if not isinstance(norm_basis, str) or not norm_basis:
+                return False
+            candidate_tokens = _tokenize_unknowns(norm_basis)
+            if not candidate_tokens:
+                candidate_tokens = [tok for tok in norm_basis.split() if tok]
+            for token in candidate_tokens:
+                tok_lower = token.lower()
+                if len(tok_lower) < 3:
+                    continue
+                if tok_lower in skip_tokens:
+                    continue
+                if tok_lower in therapeutic_skip:
+                    continue
+                if tok_lower in salt_skip and len(tok_lower) <= 4:
+                    continue
+                if tok_lower.isdigit():
+                    continue
+                tris = _generate_trigrams(tok_lower)
+                if not tris:
+                    continue
+                if any(tri in pnf_trigram_index for tri in tris):
+                    return True
             return False
 
-        def _segment_is_noise(segment_tokens: List[str]) -> bool:
-            filtered = [tok for tok in segment_tokens if tok]
-            if not filtered:
-                return True
-            if all(_token_is_noise(tok) for tok in filtered):
-                return True
-            return False
-
-        for idx, row in df.loc[df["generic_id"].isna()].iterrows():
-            basis = row.get("match_basis_norm_basic") or ""
+        tasks: List[Tuple[object, str]] = []
+        unresolved_indices = df.index[unresolved_mask]
+        for idx in unresolved_indices:
+            basis = df.at[idx, "match_basis_norm_basic"]
             if not isinstance(basis, str) or not basis:
                 continue
-            tokens = [tok for tok in basis.split() if tok]
-            if not tokens:
+            if not _looks_like_misspelling(basis):
                 continue
-            candidate_forms_map: Dict[str, str] = {}
+            tasks.append((idx, basis))
 
-            def _register(form: str, origin: str) -> None:
-                norm = form.strip()
-                if not norm:
-                    return
-                if norm not in candidate_forms_map:
-                    candidate_forms_map[norm] = origin
+        if not tasks:
+            return
 
-            max_window = min(4, len(tokens))
-            for window in range(1, max_window + 1):
-                for start in range(0, len(tokens) - window + 1):
-                    segment_tokens = tokens[start:start + window]
-                    if not segment_tokens:
-                        continue
-                    if _segment_is_noise(segment_tokens):
-                        continue
-                    candidate = " ".join(segment_tokens)
-                    if len(candidate.replace(" ", "")) < 3:
-                        continue
-                    _register(candidate, candidate)
-                    for variant in apply_spelling_rules(candidate):
-                        _register(variant, candidate)
-                    if len(segment_tokens) > 1:
-                        sorted_variant = " ".join(sorted(segment_tokens))
-                        _register(sorted_variant, candidate)
-                        for variant in apply_spelling_rules(sorted_variant):
-                            _register(variant, candidate)
+        shared_context = {
+            "pnf_trigram_index": pnf_trigram_index,
+            "pnf_name_to_gid": pnf_name_to_gid,
+            "non_molecule_tokens": non_molecule_tokens,
+            "salt_tokens": salt_tokens,
+            "dose_suffixes": DOSE_UNIT_SUFFIXES,
+            "therapeutic_tokens": therapeutic_skip,
+            "brand_token_lookup": brand_token_lookup,
+            "skip_tokens": skip_tokens,
+        }
 
-            if not candidate_forms_map:
+        worker_count = resolve_worker_count(task_size=len(tasks))
+        if worker_count <= 1:
+            results = [(idx, _pnf_fuzzy_core(basis, shared_context)) for idx, basis in tasks]
+        else:
+            init_payload = {
+                "pnf_trigram_index": pnf_trigram_index,
+                "pnf_name_to_gid": pnf_name_to_gid,
+                "non_molecule_tokens": list(non_molecule_tokens),
+                "salt_tokens": list(salt_tokens),
+                "dose_suffixes": list(DOSE_UNIT_SUFFIXES),
+                "therapeutic_tokens": list(therapeutic_skip),
+                "brand_token_lookup": list(brand_token_lookup),
+            }
+            results = maybe_parallel_map(
+                tasks,
+                _pnf_fuzzy_worker,
+                max_workers=worker_count,
+                initializer=_pnf_fuzzy_worker_init,
+                initargs=(init_payload,),
+                parallel_threshold=200,
+                chunksize=64,
+            )
+
+        for idx, match in results:
+            if not match:
                 continue
-
-            for form, origin in list(candidate_forms_map.items()):
-                compact = form.replace(" ", "")
-                if compact:
-                    _register(compact, origin)
-
-            form_trigram_cache: Dict[str, Set[str]] = {}
-            for form in list(candidate_forms_map.keys()):
-                trigrams = _generate_trigrams(form)
-                if trigrams:
-                    form_trigram_cache[form] = trigrams
-                else:
-                    candidate_forms_map.pop(form, None)
-
-            if not form_trigram_cache:
-                continue
-
-            candidate_counts: Dict[str, int] = {}
-            for form, tris in form_trigram_cache.items():
-                for tri in tris:
-                    for key in pnf_trigram_index.get(tri, set()):
-                        candidate_counts[key] = candidate_counts.get(key, 0) + 1
-
-            if not candidate_counts:
-                continue
-
-            sorted_candidates = sorted(candidate_counts.items(), key=lambda kv: kv[1], reverse=True)[:50]
-            best_score = 0.0
-            best_gid: Optional[str] = None
-            best_span = ""
-            phonetic_cache: Dict[str, Set[str]] = {}
-
-            for key, _overlap in sorted_candidates:
-                gid, _display = pnf_name_to_gid.get(key, (None, None))
-                if gid is None:
-                    continue
-                key_tris = _generate_trigrams(key)
-                if not key_tris:
-                    continue
-                for form, tris in form_trigram_cache.items():
-                    if len(form) >= 2 and len(key) >= 2 and form[:2] != key[:2]:
-                        continue
-                    edit_sim = difflib.SequenceMatcher(None, form, key).ratio()
-                    if edit_sim < 0.72:
-                        continue
-                    union = tris | key_tris
-                    if not union:
-                        continue
-                    jaccard = len(tris & key_tris) / len(union)
-                    if form not in phonetic_cache:
-                        phonetic_cache[form] = apply_spelling_rules(form)
-                    domain_bonus = 0.1 if key in phonetic_cache[form] else 0.0
-                    score = edit_sim * 0.6 + jaccard * 0.3 + domain_bonus
-                    if score > best_score:
-                        best_score = score
-                        best_gid = gid
-                        best_span = candidate_forms_map.get(form, form)
-
-            if best_score >= 0.88 and best_gid:
-                df.at[idx, "generic_id"] = best_gid
-                df.at[idx, "molecule_token"] = best_span
-                current_gids = df.at[idx, "pnf_hits_gids"] if "pnf_hits_gids" in df.columns else None
-                if isinstance(current_gids, list):
-                    if best_gid not in current_gids:
-                        current_gids.append(best_gid)
-                    df.at[idx, "pnf_hits_gids"] = current_gids
-                else:
-                    df.at[idx, "pnf_hits_gids"] = [best_gid]
-                current_tokens = df.at[idx, "pnf_hits_tokens"] if "pnf_hits_tokens" in df.columns else None
-                if isinstance(current_tokens, list):
-                    if best_span not in current_tokens:
-                        current_tokens.append(best_span)
-                    df.at[idx, "pnf_hits_tokens"] = current_tokens
-                else:
-                    df.at[idx, "pnf_hits_tokens"] = [best_span]
-                try:
-                    current_count = int(df.at[idx, "pnf_hits_count"])
-                except Exception:
-                    current_count = 0
-                df.at[idx, "pnf_hits_count"] = current_count + 1 if current_count >= 0 else 1
+            best_gid, best_span = match
+            df.at[idx, "generic_id"] = best_gid
+            df.at[idx, "molecule_token"] = best_span
+            current_gids = df.at[idx, "pnf_hits_gids"] if "pnf_hits_gids" in df.columns else None
+            if isinstance(current_gids, list):
+                if best_gid not in current_gids:
+                    current_gids.append(best_gid)
+                df.at[idx, "pnf_hits_gids"] = current_gids
+            else:
+                df.at[idx, "pnf_hits_gids"] = [best_gid]
+            current_tokens = df.at[idx, "pnf_hits_tokens"] if "pnf_hits_tokens" in df.columns else None
+            if isinstance(current_tokens, list):
+                if best_span not in current_tokens:
+                    current_tokens.append(best_span)
+                df.at[idx, "pnf_hits_tokens"] = current_tokens
+            else:
+                df.at[idx, "pnf_hits_tokens"] = [best_span]
+            try:
+                current_count = int(df.at[idx, "pnf_hits_count"])
+            except Exception:
+                current_count = 0
+            df.at[idx, "pnf_hits_count"] = current_count + 1 if current_count >= 0 else 1
     _timed("Fuzzy PNF fallback", _pnf_fuzzy)
 
     # 12) WHO molecule detection
