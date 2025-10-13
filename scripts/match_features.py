@@ -258,11 +258,15 @@ def _brand_swap_core(
         generic_basic = _normalize_text_basic(clean_generic)
         root_token = generic_basic.split()[0] if generic_basic else ""
         tokens_set = set(norm_basic_current.split())
+        generic_compact = generic_basic.replace(" ", "") if generic_basic else ""
+        current_compact = norm_basic_current.replace(" ", "")
 
         has_generic_already = False
         if root_token and root_token in tokens_set:
             has_generic_already = True
         elif generic_basic and generic_basic in norm_basic_current:
+            has_generic_already = True
+        elif generic_compact and generic_compact in current_compact:
             has_generic_already = True
         elif generic_basic in pnf_name_set and generic_basic in tokens_set:
             has_generic_already = True
@@ -270,11 +274,6 @@ def _brand_swap_core(
             has_generic_already = True
 
         if has_generic_already:
-            new_out = re.sub(rf"\b{re.escape(bn)}\b", "", out)
-            new_out = re.sub(r"\s+", " ", new_out).strip()
-            if new_out != out:
-                replaced_any = True
-                out = new_out
             continue
 
         new_out = re.sub(rf"\b{re.escape(bn)}\b", gd_norm, out)
@@ -1269,6 +1268,19 @@ def build_features(
             who_names_all = who_atc_all = who_adm_r_cols = []
             who_route_cols = who_form_cols = []
             who_ddd_flags = []
+
+        pnf_counts = pd.to_numeric(
+            df.get("pnf_hits_count", pd.Series([0] * len(df))),
+            errors="coerce",
+        ).fillna(0).astype(int)
+        skip_who = pnf_counts.gt(0).tolist()
+        if any(skip_who):
+            who_names_all = [list() if skip else list(names) for names, skip in zip(who_names_all, skip_who)]
+            who_atc_all = [list() if skip else list(codes) for codes, skip in zip(who_atc_all, skip_who)]
+            who_ddd_flags = [False if skip else bool(flag) for flag, skip in zip(who_ddd_flags, skip_who)]
+            who_adm_r_cols = ["" if skip else adm for adm, skip in zip(who_adm_r_cols, skip_who)]
+            who_route_cols = [list() if skip else list(routes) for routes, skip in zip(who_route_cols, skip_who)]
+            who_form_cols = [list() if skip else list(forms) for forms, skip in zip(who_form_cols, skip_who)]
 
         df["who_molecules_list"] = who_names_all
         df["who_atc_codes_list"] = who_atc_all
