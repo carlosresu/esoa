@@ -120,13 +120,10 @@ table when validating new data or onboarding reviewers.
 | `reference_primary_code` | Preferred identifier for the matched row (Annex Drug Code or PNF ATC). | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Feeds confidence scoring and reporting pivots. |
 | `reference_drug_code` | Raw Annex Drug Code when present. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Blank for PNF-only rows. |
 
-## Combination & Unknown Analysis
+## Unknown Token Analysis
 
 | Column | Meaning | First Assigned | Notes |
 | --- | --- | --- | --- |
-| `looks_combo_final` | `True` when at least two known generics are detected (combination product). | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Built from PNF/WHO/FDA known tokens. |
-| `combo_reason` | Textual explanation of the combo heuristic outcome. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | `combo/known-generics>=2` or `single/heuristic`. |
-| `combo_known_generics_count` | Number of unique known generic tokens that triggered combo detection. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Integer. |
 | `unknown_kind` | Qualifies unresolved tokens (`None`, `Single - Unknown`, etc.). | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Guides reviewer triage. |
 | `unknown_words_list` | List of normalized tokens not recognized in PNF/WHO/FDA vocabularies. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Used by [resolve_unknowns.py](https://github.com/carlosresu/esoa/blob/main/resolve_unknowns.py); serialized to string. |
 | `unknown_words` | Pipe-delimited string version of `unknown_words_list`. | [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) | Empty when every token is known. |
