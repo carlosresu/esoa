@@ -155,6 +155,7 @@ def _prepare_brand_context_from_records(
     records: List[Dict[str, Any]],
     pnf_name_set: Set[str],
     drugbank_name_set: Set[str],
+    fda_generic_set: Set[str],
 ) -> Dict[str, Any] | None:
     """Build brand automata inside worker processes from serialized records."""
     if not records:
@@ -169,6 +170,7 @@ def _prepare_brand_context_from_records(
         "brand_lookup": brand_lookup,
         "pnf_name_set": set(pnf_name_set),
         "drugbank_name_set": set(drugbank_name_set),
+        "fda_generic_set": set(fda_generic_set),
     }
 
 
@@ -401,7 +403,13 @@ def _brand_swap_worker_init(payload: Dict[str, Any]) -> None:
     records = payload.get("brand_records") or []
     pnf_names = payload.get("pnf_name_set") or []
     drugbank_names = payload.get("drugbank_name_set") or []
-    _BRAND_SWAP_CONTEXT = _prepare_brand_context_from_records(records, set(pnf_names), set(drugbank_names))
+    fda_generics = payload.get("fda_generic_set") or []
+    _BRAND_SWAP_CONTEXT = _prepare_brand_context_from_records(
+        records,
+        set(pnf_names),
+        set(drugbank_names),
+        set(fda_generics),
+    )
 
 
 def _brand_swap_core(
@@ -420,6 +428,7 @@ def _brand_swap_core(
     brand_lookup = context.get("brand_lookup") or {}
     pnf_name_set: Set[str] = context.get("pnf_name_set", set())
     drugbank_name_set: Set[str] = context.get("drugbank_name_set", set())
+    fda_generic_set: Set[str] = context.get("fda_generic_set", set())
 
     norm_text = _string_or_empty(norm)
     comp_text = _string_or_empty(comp)
@@ -458,7 +467,15 @@ def _brand_swap_core(
         if options:
             for opt in options:
                 if getattr(opt, "brand", None):
-                    row_brand_labels.add(str(opt.brand))
+                    brand_label = str(opt.brand)
+                    brand_norm = _normalize_text_basic(_base_name(brand_label))
+                    if brand_norm and (
+                        brand_norm in pnf_name_set
+                        or brand_norm in drugbank_name_set
+                        or brand_norm in fda_generic_set
+                    ):
+                        continue
+                    row_brand_labels.add(brand_label)
 
         chosen_generic = None
         local_primary = None
@@ -534,7 +551,15 @@ def _brand_swap_core(
             fda_hit = True
 
     if not row_brand_labels and uniq_keys:
-        row_brand_labels.update(uniq_keys)
+        for key in uniq_keys:
+            key_norm = _normalize_text_basic(_base_name(key))
+            if key_norm and (
+                key_norm in pnf_name_set
+                or key_norm in drugbank_name_set
+                or key_norm in fda_generic_set
+            ):
+                continue
+            row_brand_labels.add(key)
     labels_joined = "|".join(sorted(row_brand_labels)) if row_brand_labels else ""
 
     uniq_generics: List[str] = []
@@ -934,7 +959,7 @@ def build_features(
     for name in fda_gens:
         fda_tokens.update(_tokenize_unknowns(name))
 
-    drugbank_name_set, drugbank_tokens, drugbank_token_index = load_drugbank_generics()
+    drugbank_name_set, drugbank_tokens, drugbank_token_index, drugbank_display_lookup = load_drugbank_generics()
     drugbank_name_set = set(drugbank_name_set)
     drugbank_tokens = set(drugbank_tokens)
     therapeutic_tokens: Set[str] = pnf_tokens | who_tokens | fda_tokens | drugbank_tokens
@@ -1349,6 +1374,7 @@ def build_features(
             "brand_lookup": brand_lookup,
             "pnf_name_set": pnf_name_set,
             "drugbank_name_set": drugbank_name_set,
+            "fda_generic_set": set(fda_gens),
         }
 
         if worker_count <= 1:
@@ -1362,6 +1388,7 @@ def build_features(
                 "brand_records": brand_records,
                 "pnf_name_set": list(pnf_name_set),
                 "drugbank_name_set": list(drugbank_name_set),
+                "fda_generic_set": list(fda_gens),
             }
             results = maybe_parallel_map(
                 payload,
@@ -1402,6 +1429,23 @@ def build_features(
             tokens = norm.split()
             token_count = len(tokens)
             matches: List[str] = []
+            seen_keys: Set[str] = set()
+
+            def _record_match(candidate_norm: str) -> None:
+                if not candidate_norm:
+                    return
+                compact = candidate_norm.replace(" ", "")
+                dedupe_key = compact or candidate_norm
+                if dedupe_key in seen_keys:
+                    return
+                display = (
+                    drugbank_display_lookup.get(candidate_norm)
+                    or drugbank_display_lookup.get(compact)
+                    or candidate_norm
+                )
+                seen_keys.add(dedupe_key)
+                matches.append(display)
+
             for pos, token in enumerate(tokens):
                 candidates = drugbank_token_index.get(token)
                 if not candidates:
@@ -1411,15 +1455,23 @@ def build_features(
                     if length == 0 or pos + length > token_count:
                         continue
                     if tuple(tokens[pos:pos + length]) == cand_tokens:
-                        matches.append(" ".join(cand_tokens))
-            seen: Set[str] = set()
-            uniq: List[str] = []
-            for name in matches:
-                if name not in seen:
-                    seen.add(name)
-                    uniq.append(name)
-            hits_list.append(uniq)
-            present_flags.append(bool(uniq))
+                        candidate_norm = " ".join(cand_tokens)
+                        _record_match(candidate_norm)
+
+            # Fallback for spaced tokens whose reference form is compacted (e.g., acetyl + cysteine => acetylcysteine).
+            for start in range(token_count):
+                for end in range(start + 2, min(token_count, start + 6) + 1):
+                    segment_compact = "".join(tokens[start:end])
+                    if segment_compact in drugbank_display_lookup:
+                        _record_match(segment_compact)
+
+            # Whole-string compact lookup as final fallback.
+            whole_compact = norm.replace(" ", "")
+            if whole_compact in drugbank_display_lookup:
+                _record_match(whole_compact)
+
+            hits_list.append(matches)
+            present_flags.append(bool(matches))
         df["drugbank_generics_list"] = hits_list
         df["present_in_drugbank"] = present_flags
 
@@ -1753,20 +1805,101 @@ def build_features(
 
     # 13) Combination detection helpers
     def _combo_feats():
-        def _known_generic_tokens(text_norm: str) -> List[str]:
-            s = _segment_norm(text_norm)
-            toks = _tokenize_unknowns(s)
-            seen: Set[str] = set()
-            out: List[str] = []
-            for t in toks:
-                if t in therapeutic_tokens and t not in seen:
-                    seen.add(t)
-                    out.append(t)
-            return out
-        known_counts = df["match_basis"].map(lambda s: len(_known_generic_tokens(s)))
-        df["combo_known_generics_count"] = known_counts
-        df["looks_combo_final"] = df["combo_known_generics_count"].ge(2)
-        df["combo_reason"] = np.where(df["looks_combo_final"], "combo/known-generics>=2", "single/heuristic")
+        pnf_count_series = pd.to_numeric(
+            df.get("pnf_hits_count", pd.Series([0] * len(df))),
+            errors="coerce",
+        ).fillna(0).astype(int)
+
+        def _len_from_list(value: object) -> int:
+            if isinstance(value, list):
+                return len(value)
+            return 0
+
+        who_len_series = df.get("who_molecules_list", pd.Series([[] for _ in range(len(df))])).map(_len_from_list)
+
+        known_counts_list: List[int] = []
+        looks_combo_flags: List[bool] = []
+        reasons: List[str] = []
+
+        use_fuzzy = "fuzzy_matches" in df.columns
+
+        for row_idx, pnf_hits, who_hits in zip(df.index, pnf_count_series.tolist(), who_len_series.tolist()):
+            generics_keys: Set[str] = set()
+
+            pnf_tokens_norm: Set[str] = set()
+            pnf_tokens_val = df.at[row_idx, "pnf_hits_tokens"] if "pnf_hits_tokens" in df.columns else []
+            if isinstance(pnf_tokens_val, list):
+                for token in pnf_tokens_val:
+                    norm_tok = _normalize_text_basic(str(token))
+                    if norm_tok:
+                        pnf_tokens_norm.add(norm_tok)
+
+            pnf_gid_val = df.at[row_idx, "pnf_hits_gids"] if "pnf_hits_gids" in df.columns else []
+            if isinstance(pnf_gid_val, list):
+                for gid in pnf_gid_val:
+                    if gid is None:
+                        continue
+                    generics_keys.add(f"pnf:{gid}")
+
+            who_names_val = df.at[row_idx, "who_molecules_list"] if "who_molecules_list" in df.columns else []
+            if isinstance(who_names_val, list):
+                for name in who_names_val:
+                    norm_name = _normalize_text_basic(str(name))
+                    if norm_name and norm_name not in pnf_tokens_norm:
+                        generics_keys.add(f"who:{norm_name}")
+
+            drugbank_names_val = df.at[row_idx, "drugbank_generics_list"] if "drugbank_generics_list" in df.columns else []
+            if isinstance(drugbank_names_val, list):
+                for name in drugbank_names_val:
+                    norm_name = _normalize_text_basic(str(name))
+                    if norm_name and norm_name not in pnf_tokens_norm:
+                        generics_keys.add(f"drugbank:{norm_name}")
+
+            if use_fuzzy:
+                fuzzy_val = df.at[row_idx, "fuzzy_matches"]
+                if isinstance(fuzzy_val, list):
+                    for match in fuzzy_val:
+                        if not isinstance(match, dict):
+                            continue
+                        gid = match.get("gid")
+                        if gid:
+                            generics_keys.add(f"pnf:{gid}")
+                            continue
+                        display = match.get("display")
+                        norm_name = _normalize_text_basic(str(display))
+                        if norm_name and norm_name not in pnf_tokens_norm:
+                            source = str(match.get("source", "fuzzy")).lower()
+                            generics_keys.add(f"{source}:{norm_name}")
+
+            if not generics_keys:
+                generic_final_val = df.at[row_idx, "generic_final"] if "generic_final" in df.columns else ""
+                if isinstance(generic_final_val, str):
+                    parts = [part.strip() for part in generic_final_val.split("|") if part and part.strip()]
+                    for part in parts:
+                        norm_name = _normalize_text_basic(part)
+                        if norm_name and not norm_name.isdigit():
+                            generics_keys.add(f"final:{norm_name}")
+
+            known_count = len(generics_keys)
+            known_counts_list.append(known_count)
+
+            basis_norm = df.at[row_idx, "match_basis_norm_basic"] if "match_basis_norm_basic" in df.columns else df.at[row_idx, "match_basis"]
+            basis_norm_str = _normalize_text_basic(str(basis_norm))
+            heuristic_flag = looks_like_combination(basis_norm_str, pnf_hits, who_hits)
+
+            if known_count >= 2:
+                looks_combo_flags.append(True)
+                reasons.append("combo/known-generics>=2")
+            elif heuristic_flag:
+                looks_combo_flags.append(True)
+                reasons.append("combo/text-heuristic")
+            else:
+                looks_combo_flags.append(False)
+                reasons.append("single/heuristic")
+
+        df["combo_known_generics_count"] = known_counts_list
+        df["looks_combo_final"] = looks_combo_flags
+        df["combo_reason"] = reasons
     _timed("Compute combo features", _combo_feats)
 
     # 14) Unknown tokens extraction
