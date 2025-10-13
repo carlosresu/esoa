@@ -60,7 +60,7 @@ OUTPUT_COLUMNS = [
     "selected_form","selected_route_allowed","selected_variant",
     "selected_dose_kind","selected_strength","selected_unit","selected_strength_mg",
     "selected_per_val","selected_per_unit","selected_ratio_mg_per_ml","selected_pct",
-    "dose_sim","looks_combo_final","combo_reason","combo_known_generics_count",
+    "dose_sim",
     "non_therapeutic_summary","non_therapeutic_detail","non_therapeutic_tokens","non_therapeutic_hits","non_therapeutic_best",
     "unknown_kind","unknown_words_list","unknown_words",
     "qty_pnf","qty_who","qty_fda_drug","qty_drugbank","qty_fda_food","qty_unknown",

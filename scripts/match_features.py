@@ -11,7 +11,7 @@ import numpy as np, pandas as pd
 import ahocorasick  # type: ignore
 from .aho import build_molecule_automata, scan_pnf_all
 from .concurrency import maybe_parallel_map, resolve_worker_count
-from .combos import SALT_TOKENS, looks_like_combination, split_combo_segments
+from .combos import SALT_TOKENS
 from .routes_forms import extract_route_and_form
 from .text_utils import (
     _base_name,
@@ -1803,106 +1803,7 @@ def build_features(
 
     _timed("Fuzzy reference fallback", _fuzzy_reference)
 
-    # 13) Combination detection helpers
-    def _combo_feats():
-        pnf_count_series = pd.to_numeric(
-            df.get("pnf_hits_count", pd.Series([0] * len(df))),
-            errors="coerce",
-        ).fillna(0).astype(int)
-
-        def _len_from_list(value: object) -> int:
-            if isinstance(value, list):
-                return len(value)
-            return 0
-
-        who_len_series = df.get("who_molecules_list", pd.Series([[] for _ in range(len(df))])).map(_len_from_list)
-
-        known_counts_list: List[int] = []
-        looks_combo_flags: List[bool] = []
-        reasons: List[str] = []
-
-        use_fuzzy = "fuzzy_matches" in df.columns
-
-        for row_idx, pnf_hits, who_hits in zip(df.index, pnf_count_series.tolist(), who_len_series.tolist()):
-            generics_keys: Set[str] = set()
-
-            pnf_tokens_norm: Set[str] = set()
-            pnf_tokens_val = df.at[row_idx, "pnf_hits_tokens"] if "pnf_hits_tokens" in df.columns else []
-            if isinstance(pnf_tokens_val, list):
-                for token in pnf_tokens_val:
-                    norm_tok = _normalize_text_basic(str(token))
-                    if norm_tok:
-                        pnf_tokens_norm.add(norm_tok)
-
-            pnf_gid_val = df.at[row_idx, "pnf_hits_gids"] if "pnf_hits_gids" in df.columns else []
-            if isinstance(pnf_gid_val, list):
-                for gid in pnf_gid_val:
-                    if gid is None:
-                        continue
-                    generics_keys.add(f"pnf:{gid}")
-
-            who_names_val = df.at[row_idx, "who_molecules_list"] if "who_molecules_list" in df.columns else []
-            if isinstance(who_names_val, list):
-                for name in who_names_val:
-                    norm_name = _normalize_text_basic(str(name))
-                    if norm_name and norm_name not in pnf_tokens_norm:
-                        generics_keys.add(f"who:{norm_name}")
-
-            drugbank_names_val = df.at[row_idx, "drugbank_generics_list"] if "drugbank_generics_list" in df.columns else []
-            if isinstance(drugbank_names_val, list):
-                for name in drugbank_names_val:
-                    norm_name = _normalize_text_basic(str(name))
-                    if norm_name and norm_name not in pnf_tokens_norm:
-                        generics_keys.add(f"drugbank:{norm_name}")
-
-            if use_fuzzy:
-                fuzzy_val = df.at[row_idx, "fuzzy_matches"]
-                if isinstance(fuzzy_val, list):
-                    for match in fuzzy_val:
-                        if not isinstance(match, dict):
-                            continue
-                        gid = match.get("gid")
-                        if gid:
-                            generics_keys.add(f"pnf:{gid}")
-                            continue
-                        display = match.get("display")
-                        norm_name = _normalize_text_basic(str(display))
-                        if norm_name and norm_name not in pnf_tokens_norm:
-                            source = str(match.get("source", "fuzzy")).lower()
-                            generics_keys.add(f"{source}:{norm_name}")
-
-            if not generics_keys:
-                generic_final_val = df.at[row_idx, "generic_final"] if "generic_final" in df.columns else ""
-                if isinstance(generic_final_val, str):
-                    parts = [part.strip() for part in generic_final_val.split("|") if part and part.strip()]
-                    for part in parts:
-                        norm_name = _normalize_text_basic(part)
-                        if norm_name and not norm_name.isdigit():
-                            generics_keys.add(f"final:{norm_name}")
-
-            known_count = len(generics_keys)
-            known_counts_list.append(known_count)
-
-            basis_norm = df.at[row_idx, "match_basis_norm_basic"] if "match_basis_norm_basic" in df.columns else df.at[row_idx, "match_basis"]
-            basis_norm_str = _normalize_text_basic(str(basis_norm))
-            heuristic_flag = looks_like_combination(basis_norm_str, pnf_hits, who_hits)
-
-            if known_count >= 2:
-                looks_combo_flags.append(True)
-                reasons.append("combo/known-generics>=2")
-            elif heuristic_flag:
-                looks_combo_flags.append(True)
-                reasons.append("combo/text-heuristic")
-            else:
-                looks_combo_flags.append(False)
-                reasons.append("single/heuristic")
-
-        df["combo_known_generics_count"] = known_counts_list
-        df["looks_combo_final"] = looks_combo_flags
-        df["combo_reason"] = reasons
-    _timed("Compute combo features", _combo_feats)
-
-    # 14) Unknown tokens extraction
+    # 13) Unknown tokens extraction
     def _unknowns():
         def _token_set_from_phrase_list(values: object) -> set[str]:
             tokens: set[str] = set()
