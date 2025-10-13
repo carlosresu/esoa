@@ -90,9 +90,11 @@ FRIENDLY_MOLECULE_LABELS = {
 
 FRIENDLY_MATCH_QUALITY_LABELS = {
     "auto_exact_dose_route_form": "Exact dose / route / form",
-    "dose_mismatch_same_atc": "Dose mismatch (same ATC)",
-    "dose_mismatch_varied_atc": "Dose mismatch (different ATCs)",
+    "dose_mismatch_same_atc": "Dose mismatch (same drug code)",
+    "dose_mismatch_varied_atc": "Dose mismatch (different drug codes)",
     "dose_mismatch": "Dose mismatch",
+    "dose_conflicts_annex_drug_code": "Dose conflicts Annex drug code",
+    "annex_drug_code_missing": "Annex drug code missing",
     "no_dose_available": "Dose missing",
     "no_dose_form_and_route_available": "Dose, form & route missing",
     "no_dose_and_form_available": "Dose & form missing",
@@ -436,7 +438,17 @@ def write_outputs(
         out_small["match_basis"] = out_small.get("normalized", "")
     out_small = out_small[[c for c in OUTPUT_COLUMNS if c in out_small.columns]].copy()
 
-    _timed("Write matched CSV", lambda: out_small.to_csv(out_csv, index=False, encoding="utf-8"))
+    friendly_out = out_small.copy()
+    friendly_column_mappings = {
+        "match_molecule(s)": FRIENDLY_MOLECULE_LABELS,
+        "match_quality": FRIENDLY_MATCH_QUALITY_LABELS,
+        "reason_final": FRIENDLY_MATCH_QUALITY_LABELS,
+    }
+    for col, mapping in friendly_column_mappings.items():
+        if col in friendly_out.columns:
+            friendly_out[col] = friendly_out[col].map(lambda val: _friendly_label(val, mapping))
+
+    _timed("Write matched CSV", lambda: friendly_out.to_csv(out_csv, index=False, encoding="utf-8"))
 
     if not skip_excel:
         xlsx_out = os.path.splitext(out_csv)[0] + ".xlsx"
@@ -444,15 +456,15 @@ def write_outputs(
         def _to_excel():
             try:
                 with pd.ExcelWriter(xlsx_out, engine="xlsxwriter") as writer:
-                    out_small.to_excel(writer, index=False, sheet_name="matched")
+                    friendly_out.to_excel(writer, index=False, sheet_name="matched")
                     ws = writer.sheets["matched"]
                     # Freeze the top row to keep headers visible during review.
                     ws.freeze_panes(1, 0)
-                    nrows, ncols = out_small.shape
+                    nrows, ncols = friendly_out.shape
                     ws.autofilter(0, 0, nrows, ncols - 1)
             except Exception:
                 with pd.ExcelWriter(xlsx_out, engine="openpyxl") as writer:
-                    out_small.to_excel(writer, index=False, sheet_name="matched")
+                    friendly_out.to_excel(writer, index=False, sheet_name="matched")
                     ws = writer.sheets["matched"]
                     try:
                         ws.freeze_panes = "A2"
