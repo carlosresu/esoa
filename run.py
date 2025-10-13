@@ -316,6 +316,7 @@ GROUP_DEFINITIONS: list[tuple[str, tuple[str, ...]]] = [
             "Scan PNF hits",
             "Partial PNF fallback",
             "Detect WHO molecules",
+            "Fuzzy reference fallback",
         ),
     ),
     (
