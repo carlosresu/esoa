@@ -664,7 +664,9 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
         "drug_code_final",
         pd.Series([""] * len(out), index=out.index),
     ).fillna("").astype(str)
-    code_present = primary_code_series.str.strip().ne("") | drug_code_series.str.strip().ne("")
+    has_primary_code = primary_code_series.str.strip().ne("")
+    has_drug_code = drug_code_series.str.strip().ne("")
+    code_present = has_primary_code | has_drug_code
     dose_sim_clipped = out["dose_sim"].fillna(0.0).astype(float).clip(0.0, 1.0)
 
     score_series = (
@@ -897,6 +899,18 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     gid_single_atc = {gid: bool(val) for gid, val in single_atc_lookup.items()}
     is_single_atc = gid_series.map(lambda gid: bool(gid) and gid_single_atc.get(gid, False)).astype(bool)
 
+    if {"generic_id", "drug_code"}.issubset(pnf_df.columns):
+        drug_code_counts = (
+            pnf_df.dropna(subset=["generic_id", "drug_code"])
+            .groupby("generic_id")["drug_code"]
+            .nunique()
+        )
+        single_drug_lookup = drug_code_counts.eq(1)
+    else:
+        single_drug_lookup = pd.Series(dtype=bool)
+    gid_single_drug = {gid: bool(val) for gid, val in single_drug_lookup.items()}
+    is_single_drug_code = gid_series.map(lambda gid: bool(gid) and gid_single_drug.get(gid, False)).astype(bool)
+
     if "selected_variant" in out.columns:
         selected_variant_series = out["selected_variant"]
     else:
@@ -906,27 +920,30 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     )
 
     is_candidate_like = out["generic_id"].notna()
-    has_drug_code = drug_code_series.str.strip().ne("")
-    base_auto_mask = (
-        is_candidate_like
-        & present_in_pnf
-        & has_reference_code_in_catalogue
-        & out["form_ok"]
-        & out["route_ok"]
-    )
-    is_annex_match = present_in_annex & is_candidate_like
 
     dose_values = out["dose_sim"].astype(float)
     dose_mismatch_mask = selected_variant_present & (dose_values < 1.0)
-    dose_issue_mask = dose_mismatch_mask | (~dose_present) | (~selected_variant_present)
+    dose_info_complete = dose_present & selected_variant_present
+    dose_conflicts_drug_code = has_drug_code & dose_mismatch_mask & (~is_single_drug_code)
 
-    auto_mask = base_auto_mask & ((~dose_issue_mask) | is_single_atc | is_annex_match | has_drug_code) & (~has_unknowns)
+    recognized_without_drug = (~has_drug_code) & (generic_present | has_any_primary_code)
+
+    auto_mask = (
+        has_drug_code
+        & is_candidate_like
+        & out["form_ok"]
+        & out["route_ok"]
+        & dose_info_complete
+        & (~has_unknowns)
+        & (~dose_conflicts_drug_code)
+    )
     out.loc[auto_mask, "bucket_final"] = "Auto-Accept"
     out.loc[auto_mask, "why_final"] = "Auto-Accept"
 
-    review_mask = has_any_primary_code & (~auto_mask)
-    candidate_mask = review_mask & (~has_unknowns)
-    needs_review_mask = review_mask & has_unknowns
+    candidate_mask = has_drug_code & (~auto_mask) & (~dose_conflicts_drug_code)
+    needs_review_no_drug = recognized_without_drug
+    needs_review_mask = dose_conflicts_drug_code | needs_review_no_drug
+    review_mask = candidate_mask | needs_review_mask
 
     out.loc[candidate_mask, "bucket_final"] = "Candidates"
     out.loc[candidate_mask, "why_final"] = "Candidates"
@@ -1010,6 +1027,10 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     route_related = out["match_quality"].astype(str).str.contains("route", case=False, na=False)
     out.loc[review_mask & who_without_route_info & route_related, "match_quality"] = "who_does_not_provide_route_info"
 
+    out.loc[dose_conflicts_drug_code, "match_quality"] = "dose_conflicts_annex_drug_code"
+    missing_drug_quality_mask = needs_review_no_drug & out["match_quality"].astype(str).str.strip().eq("")
+    out.loc[missing_drug_quality_mask, "match_quality"] = "annex_drug_code_missing"
+
     out.loc[needs_review_mask, "reason_final"] = out.loc[needs_review_mask, "match_quality"]
     out.loc[candidate_mask, "reason_final"] = out.loc[candidate_mask, "match_quality"]
     out.loc[candidate_mask & out["reason_final"].astype(str).str.strip().eq(""), "reason_final"] = "candidate_ready_for_atc_assignment"
@@ -1046,21 +1067,21 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     )
     out.loc[exact_auto, "match_quality"] = "auto_exact_dose_route_form"
 
-    dose_mismatch_single_atc = (
+    dose_mismatch_single_code = (
         auto_rows
         & quality_blank
         & (dose_values < 1.0)
-        & is_single_atc
+        & is_single_drug_code
     )
-    out.loc[dose_mismatch_single_atc, "match_quality"] = "dose_mismatch_same_atc"
+    out.loc[dose_mismatch_single_code, "match_quality"] = "dose_mismatch_same_atc"
 
-    dose_mismatch_multi_atc = (
+    dose_mismatch_multi_code = (
         auto_rows
         & quality_blank
         & (dose_values < 1.0)
-        & (~is_single_atc)
+        & (~is_single_drug_code)
     )
-    out.loc[dose_mismatch_multi_atc, "match_quality"] = "dose_mismatch_varied_atc"
+    out.loc[dose_mismatch_multi_code, "match_quality"] = "dose_mismatch_varied_atc"
 
     remaining_auto = auto_rows & out["match_quality"].astype(str).str.strip().eq("")
     out.loc[remaining_auto, "match_quality"] = "auto_exact_dose_route_form"
