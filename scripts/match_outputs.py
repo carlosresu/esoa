@@ -46,7 +46,7 @@ def _run_with_spinner(label: str, func: Callable[[], None]) -> float:
     return elapsed
 
 OUTPUT_COLUMNS = [
-    "esoa_idx","raw_text","parentheticals",
+    "ITEM_NUMBER","esoa_idx","raw_text","parentheticals",
     "normalized","norm_compact","match_basis","match_basis_norm_basic",
     "probable_brands","did_brand_swap","brand_swap_added_generic","fda_dose_corroborated","fda_generics_list","drugbank_generics_list",
     "molecules_recognized","molecules_recognized_list","molecules_recognized_count",

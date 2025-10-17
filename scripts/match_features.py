@@ -1151,7 +1151,10 @@ def build_features(
     # 6) Base ESOA frame and text normalization
     df = [None]
     def _mk_base():
-        tmp = esoa_df[["raw_text"]].copy()
+        base_cols = ["raw_text"]
+        if "ITEM_NUMBER" in esoa_df.columns:
+            base_cols = ["ITEM_NUMBER"] + base_cols
+        tmp = esoa_df[base_cols].copy()
         raw_values = tmp["raw_text"].tolist()
         tmp["parentheticals"] = maybe_parallel_map(raw_values, extract_parenthetical_phrases)
         tmp["esoa_idx"] = tmp.index
