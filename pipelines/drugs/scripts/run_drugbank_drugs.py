@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
+import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+from ..constants import PIPELINE_DRUGBANK_GENERICS_PATH
 
 
 def stream_r_script(executable: str, script_path: Path) -> int:
@@ -53,6 +56,16 @@ def main() -> None:
             f"R script exited with status {return_code}. See output above for details.\n"
         )
         sys.exit(return_code)
+
+    output_dir = project_root / "dependencies" / "drugbank_generics" / "output"
+    source = output_dir / "generics.csv"
+    target = PIPELINE_DRUGBANK_GENERICS_PATH
+    if source.is_file():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+        print(f"Copied {source.name} to {target}")
+    else:
+        sys.stderr.write(f"Warning: expected {source} not found; nothing copied.\n")
 
 
 if __name__ == "__main__":

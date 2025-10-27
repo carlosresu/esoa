@@ -9,7 +9,7 @@ from typing import Tuple, Optional, List, Dict, Set, Callable, Any
 import difflib
 import numpy as np, pandas as pd
 import ahocorasick  # type: ignore
-from ..constants import PIPELINE_INPUTS_DIR
+from ..constants import PIPELINE_INPUTS_DIR, PIPELINE_WHO_ATC_DIR
 from .aho_drugs import build_molecule_automata, scan_pnf_all
 from .concurrency_drugs import maybe_parallel_map, resolve_worker_count
 from .combos_drugs import SALT_TOKENS
@@ -730,10 +730,16 @@ def _segment_norm(seg: str) -> str:
     return s
 
 def load_latest_who_dir(root_dir: str) -> str | None:
-    """Locate the newest WHO ATC export living under the project dependencies folder."""
-    who_dir = os.path.join(root_dir, "dependencies", "atcd", "output")
+    """Locate the newest WHO ATC export, preferring the pipeline-specific inputs directory."""
+    who_dir = str(PIPELINE_WHO_ATC_DIR)
     candidates = glob.glob(os.path.join(who_dir, "who_atc_*_molecules.csv"))
-    return max(candidates, key=os.path.getmtime) if candidates else None
+    if candidates:
+        return who_dir
+    legacy_dir = os.path.join(root_dir, "dependencies", "atcd", "output")
+    legacy_candidates = glob.glob(os.path.join(legacy_dir, "who_atc_*_molecules.csv"))
+    if legacy_candidates:
+        return legacy_dir
+    return None
 
 def _tokenize_unknowns(s_norm: str) -> List[str]:
     """Break normalized candidate strings into tokens for unknown-word diagnostics."""

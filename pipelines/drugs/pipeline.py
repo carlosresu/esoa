@@ -55,7 +55,7 @@ class DrugsAndMedicinePipeline(BasePipeline):
             elapsed = self._run_stage(
                 spinner,
                 "ATC R preprocessing",
-                lambda: self._run_r_scripts(context.project_root),
+                lambda: self._run_r_scripts(context.project_root, context.inputs_dir),
             )
             if timing_hook:
                 timing_hook("ATC R preprocessing", elapsed)
@@ -186,7 +186,7 @@ class DrugsAndMedicinePipeline(BasePipeline):
         return elapsed, result.get("value")
 
     @staticmethod
-    def _run_r_scripts(project_root: Path) -> None:
+    def _run_r_scripts(project_root: Path, dest_inputs_dir: Path) -> None:
         atcd_dir = project_root / ATCD_SUBDIR
         if not atcd_dir.is_dir():
             return
@@ -207,6 +207,10 @@ class DrugsAndMedicinePipeline(BasePipeline):
                     stdout=devnull,
                     stderr=devnull,
                 )
+        # Sync generated WHO ATC exports into the pipeline inputs directory.
+        dest_inputs_dir.mkdir(parents=True, exist_ok=True)
+        for csv_path in out_dir.glob("*.csv"):
+            shutil.copy2(csv_path, dest_inputs_dir / csv_path.name)
 
     @staticmethod
     def _build_brand_map(inputs_dir: Path) -> Path:
