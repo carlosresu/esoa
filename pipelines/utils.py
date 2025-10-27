@@ -8,7 +8,7 @@ import re
 
 
 def slugify_item_ref_code(item_ref_code: str) -> str:
-    """Convert an ITEM_REF_CODE like 'DrugsAndMedicine' into 'drugs_and_medicine'."""
+    """Convert an ITEM_REF_CODE like 'DrugsAndMedicine' into a slug ('drugs_and_medicine')."""
     if not item_ref_code:
         raise ValueError("item_ref_code must be a non-empty string.")
     slug = re.sub(r"(?<!^)(?=[A-Z])", "_", item_ref_code).lower()

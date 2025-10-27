@@ -38,7 +38,7 @@ def list_pipelines() -> Iterable[BasePipeline]:
 
 # Import pipeline implementations so they register with the module-level mapping.
 from .drugs.pipeline import DrugsAndMedicinePipeline  # noqa: E402,F401
-from .lab_and_dx.pipeline import LaboratoryAndDiagnosticPipeline  # noqa: E402,F401
+from .labs.pipeline import LaboratoryAndDiagnosticPipeline  # noqa: E402,F401
 
 
 __all__ = ["PIPELINE_REGISTRY", "register_pipeline", "get_pipeline", "list_pipelines"]

@@ -18,18 +18,18 @@ from ..base import (
 )
 from ..registry import register_pipeline
 from .constants import PIPELINE_RAW_DIR
-from .scripts import match_labdx_records, prepare_labdx_inputs
+from .scripts import match_labs_records, prepare_labs_inputs
 
 
 @register_pipeline
 class LaboratoryAndDiagnosticPipeline(BasePipeline):
-    """Normalize and match Laboratory & Diagnostic eSOA entries."""
+    """Normalize and match LaboratoryAndDiagnostic eSOA entries."""
 
     item_ref_code = "LaboratoryAndDiagnostic"
     display_name = "Laboratory & Diagnostic"
     description = (
-        "Standardizes Laboratory & Diagnostic eSOA descriptions by matching against the "
-        "official LabAndDx catalog first, then falling back to Diagnostics.xlsx descriptions."
+        "Standardizes LaboratoryAndDiagnostic eSOA descriptions by matching against the "
+        "official Labs catalog first, then falling back to Diagnostics.xlsx descriptions."
     )
 
     def prepare_inputs(
@@ -43,8 +43,8 @@ class LaboratoryAndDiagnosticPipeline(BasePipeline):
         raw_dir = PIPELINE_RAW_DIR
         csv_source = raw_dir / "03 ESOA_ITEM_LIB.csv"
         tsv_source = raw_dir / "03 ESOA_ITEM_LIB.tsv"
-        dest_csv = context.inputs_dir / "esoa_prepared_labdx.csv"
-        prepared_path = prepare_labdx_inputs(csv_source, tsv_source, None, dest_csv)
+        dest_csv = context.inputs_dir / "esoa_prepared_labs.csv"
+        prepared_path = prepare_labs_inputs(csv_source, tsv_source, None, dest_csv)
         return PipelinePreparedInputs(esoa_csv=prepared_path)
 
     def match(
@@ -61,14 +61,14 @@ class LaboratoryAndDiagnosticPipeline(BasePipeline):
         out_csv = options.extra.get("out_csv") if options.extra else None
         output_path = Path(out_csv) if out_csv else context.outputs_dir / "esoa_matched_labs.csv"
 
-        master_csv = context.inputs_dir / "LabAndDx.csv"
+        master_csv = context.inputs_dir / "Labs.csv"
         if not master_csv.is_file():
             raise FileNotFoundError(
                 f"Master Laboratory & Diagnostic catalog not found at {master_csv}."
             )
         diagnostics_xlsx = PIPELINE_RAW_DIR / "Diagnostics.xlsx"
 
-        matched_path = match_labdx_records(
+        matched_path = match_labs_records(
             Path(prepared.esoa_csv),
             master_csv,
             diagnostics_xlsx,

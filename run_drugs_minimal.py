@@ -7,7 +7,7 @@ import argparse
 from pathlib import Path
 import sys
 
-import run_drugs_and_medicine as run_dm
+import run_drugs as run_dm
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -17,11 +17,11 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("--pnf", default=str(run_dm.PIPELINE_INPUTS_SUBDIR / "pnf.csv"), help="Path to PNF CSV")
     parser.add_argument("--esoa", default=None, help="Path to eSOA CSV (defaults to concatenated esoa_pt_*.csv)")
-    parser.add_argument("--out", default="esoa_matched_drugs.csv", help="Output CSV filename (stored under ./outputs/drugs_and_medicine_drugs)")
+    parser.add_argument("--out", default="esoa_matched_drugs.csv", help="Output CSV filename (stored under ./outputs/drugs)")
     args = parser.parse_args(argv)
 
     minimal_args = [
-        "run_drugs_and_medicine.py",
+        "run_drugs.py",
         "--pnf", args.pnf,
         "--out", args.out,
         "--skip-r",

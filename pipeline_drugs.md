@@ -1,13 +1,13 @@
 # Pipeline Execution Walkthrough
 
-Detailed end-to-end view of the matching pipeline, from CLI invocation in [run_drugs_and_medicine.py](https://github.com/carlosresu/esoa/blob/main/run_drugs_and_medicine.py) (now a thin orchestrator that resolves the appropriate `ITEM_REF_CODE` pipeline from `pipelines/registry.py`) through feature building in [pipelines/drugs/scripts/match_features_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_features_drugs.py), scoring in [pipelines/drugs/scripts/match_scoring_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_scoring_drugs.py), and export logic in [pipelines/drugs/scripts/match_outputs_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_outputs_drugs.py).
+Detailed end-to-end view of the matching pipeline, from CLI invocation in [run_drugs.py](https://github.com/carlosresu/esoa/blob/main/run_drugs.py) (now a thin orchestrator that resolves the appropriate `ITEM_REF_CODE` pipeline from `pipelines/registry.py`) through feature building in [pipelines/drugs/scripts/match_features_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_features_drugs.py), scoring in [pipelines/drugs/scripts/match_scoring_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_scoring_drugs.py), and export logic in [pipelines/drugs/scripts/match_outputs_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_outputs_drugs.py).
 
 🆕 **Inline documentation refresh** – the Python modules referenced below now
 include descriptive docstrings and comments that mirror this walkthrough.  When
 deep-diving into a particular step, the code comments explain the exact
 transformations performed and why policy constants are set the way they are.
 
-Before the numbered stages below, the `DrugsAndMedicinePipeline` (invoked via `run_drugs_and_medicine.py`) now handles shared orchestration:
+Before the numbered stages below, the `DrugsAndMedicinePipeline` (invoked via `run_drugs.py`) now handles shared orchestration:
 
 - Bootstraps `requirements.txt` with pip when needed, so a separate `--skip-install` flag is no longer required.
 - Ensures `inputs/` and `outputs/` exist, then prunes dated WHO ATC exports and brand-map snapshots after the run.
@@ -18,7 +18,7 @@ Before the numbered stages below, the `DrugsAndMedicinePipeline` (invoked via `r
 - Chooses a safe worker pool size (auto-tuned via `resolve_worker_count`, overridable with `ESOA_MAX_WORKERS`) so CPU-heavy phases can execute concurrently without starving smaller laptops.
 
 1. **Prepare and Load Inputs**  
-   Resolve CLI paths (defaults under `inputs/`), concatenate partitioned eSOA files when present, and run the preparation layer: [pipelines/drugs/scripts/prepare_annex_f_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/prepare_annex_f_drugs.py) produces `annex_f_prepared.csv` while [pipelines/drugs/scripts/prepare_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/prepare_drugs.py) emits `pnf_prepared.csv` and `esoa_prepared.csv`. The matching core then reads these normalized CSVs (see [run_drugs_and_medicine.py](https://github.com/carlosresu/esoa/blob/main/run_drugs_and_medicine.py) and [pipelines/drugs/scripts/match_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_drugs.py)).
+   Resolve CLI paths (defaults under `inputs/`), concatenate partitioned eSOA files when present, and run the preparation layer: [pipelines/drugs/scripts/prepare_annex_f_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/prepare_annex_f_drugs.py) produces `annex_f_prepared.csv` while [pipelines/drugs/scripts/prepare_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/prepare_drugs.py) emits `pnf_prepared.csv` and `esoa_prepared.csv`. The matching core then reads these normalized CSVs (see [run_drugs.py](https://github.com/carlosresu/esoa/blob/main/run_drugs.py) and [pipelines/drugs/scripts/match_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_drugs.py)).
 
 2. **Validate Structural Expectations**  
    Ensure the unified reference catalogue exposes Annex/PNF molecule, dose, route, priority, and identifier fields, and that the eSOA frame includes `raw_text` (see [pipelines/drugs/scripts/match_features_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_features_drugs.py)).
@@ -73,7 +73,7 @@ Before the numbered stages below, the `DrugsAndMedicinePipeline` (invoked via `r
     Persist the curated data set to CSV/XLSX, generate distribution summaries, and freeze workbook panes for review convenience. Outputs now include Annex metadata columns so reviewers can pivot on Drug Code and source priority (see [pipelines/drugs/scripts/match_outputs_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_outputs_drugs.py)).
 
 18. **Post-processing & Timing Summary**
-    Automatically run `pipelines/drugs/scripts/resolve_unknowns_drugs.py` to analyse `unknown_words.csv`, then emit the grouped timing roll-up captured during each spinner stage. Finished runs also prune dated ATC/brand-map exports to keep disk usage in check (see [run_drugs_and_medicine.py](https://github.com/carlosresu/esoa/blob/main/run_drugs_and_medicine.py)).
+    Automatically run `pipelines/drugs/scripts/resolve_unknowns_drugs.py` to analyse `unknown_words.csv`, then emit the grouped timing roll-up captured during each spinner stage. Finished runs also prune dated ATC/brand-map exports to keep disk usage in check (see [run_drugs.py](https://github.com/carlosresu/esoa/blob/main/run_drugs.py)).
 
 ## Auto-Accept Reference (Annex/PNF-backed exacts)
 
