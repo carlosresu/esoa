@@ -392,7 +392,7 @@ The profiler mirrors `run_drugs_and_medicine.py` but wraps execution with [pyins
 ### Laboratory & Diagnostic pipeline
 
 ```bash
-python run_laboratory_and_diagnostic.py --out laboratory_and_diagnostic_matched.csv
+python run_laboratory_and_diagnostic.py --out esoa_matched_labs.csv
 ```
 
 This command builds `inputs/laboratory_and_diagnostic/esoa_prepared_labdx.csv` from
@@ -400,7 +400,7 @@ This command builds `inputs/laboratory_and_diagnostic/esoa_prepared_labdx.csv` f
 standardized descriptions against the hospital master list in
 `inputs/laboratory_and_diagnostic/LabAndDx.csv`, and falls back to
 `raw/Diagnostics.xlsx` when required. The resulting matches are written to
-`outputs/laboratory_and_diagnostic/esoa_matched_labdx.csv` together with any relevant
+`outputs/laboratory_and_diagnostic/esoa_matched_labs.csv` together with any relevant
 codes (`code`, `cat`, `spec`, `etc`, `misc`) pulled from Diagnostics when a secondary
 match occurs.
 
@@ -427,7 +427,7 @@ Use `python run_all_ref_codes.py` to execute every registered ITEM_REF_CODE sequ
   - `laboratory_and_diagnostic/` — Laboratory & Diagnostic catalog inputs
 - `outputs/`
   - `drugs_and_medicine_drugs/` — Matched CSV/XLSX, summaries, unknown token exports
-  - `laboratory_and_diagnostic/` — Laboratory & Diagnostic match results (`esoa_matched_labdx.csv`)
+  - `laboratory_and_diagnostic/` — Laboratory & Diagnostic match results (`esoa_matched_labs.csv`)
 - Top-level entrypoints
   - `main.py` — Programmatic API (prepare/match/run_all)
   - `run_drugs_and_medicine.py` / `run_drugs_and_medicine_minimal.py`

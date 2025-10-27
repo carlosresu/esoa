@@ -37,6 +37,8 @@ def match_labdx_records(
     master_csv: Path,
     diagnostics_xlsx: Path,
     out_csv: Path,
+    *,
+    skip_excel: bool = False,
 ) -> Path:
     esoa_df = pd.read_csv(esoa_csv, dtype=str)
     if esoa_df.empty:
@@ -106,4 +108,14 @@ def match_labdx_records(
     matched_df.sort_values(by=["ITEM_NUMBER"], inplace=True, ignore_index=True)
     out_csv.parent.mkdir(parents=True, exist_ok=True)
     matched_df.to_csv(out_csv, index=False, encoding="utf-8")
+
+    if not skip_excel:
+        xlsx_path = out_csv.with_suffix(".xlsx")
+        with pd.ExcelWriter(xlsx_path, engine="xlsxwriter") as writer:
+            matched_df.to_excel(writer, index=False, sheet_name="matched")
+            ws = writer.sheets["matched"]
+            ws.freeze_panes(1, 0)
+            nrows, ncols = matched_df.shape
+            ws.autofilter(0, 0, nrows, ncols - 1)
+
     return out_csv

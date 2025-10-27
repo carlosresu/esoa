@@ -59,7 +59,7 @@ class LaboratoryAndDiagnosticPipeline(BasePipeline):
             raise ValueError("LaboratoryAndDiagnostic pipeline requires a prepared eSOA CSV.")
 
         out_csv = options.extra.get("out_csv") if options.extra else None
-        output_path = Path(out_csv) if out_csv else context.outputs_dir / "esoa_matched_labdx.csv"
+        output_path = Path(out_csv) if out_csv else context.outputs_dir / "esoa_matched_labs.csv"
 
         master_csv = context.inputs_dir / "LabAndDx.csv"
         if not master_csv.is_file():
@@ -68,5 +68,11 @@ class LaboratoryAndDiagnosticPipeline(BasePipeline):
             )
         diagnostics_xlsx = PIPELINE_RAW_DIR / "Diagnostics.xlsx"
 
-        matched_path = match_labdx_records(Path(prepared.esoa_csv), master_csv, diagnostics_xlsx, output_path)
+        matched_path = match_labdx_records(
+            Path(prepared.esoa_csv),
+            master_csv,
+            diagnostics_xlsx,
+            output_path,
+            skip_excel=options.skip_excel,
+        )
         return PipelineResult(matched_csv=matched_path, prepared=prepared)

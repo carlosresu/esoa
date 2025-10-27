@@ -39,7 +39,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("--esoa", default=None, help="Optional additional Laboratory & Diagnostic CSV to merge with the raw eSOA sources")
     parser.add_argument("--outdir", default=None, help="Destination directory for outputs (defaults to ./outputs/laboratory_and_diagnostic)")
-    parser.add_argument("--out", default="laboratory_and_diagnostic_matched.csv", help="Matched CSV filename")
+    parser.add_argument("--out", default="esoa_matched_labs.csv", help="Matched CSV filename")
     parser.add_argument("--skip-excel", action="store_true", help="Skip XLSX export when the pipeline adds support")
     args = parser.parse_args(argv)
 

@@ -16,7 +16,7 @@ def main(argv: list[str] | None = None) -> None:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--esoa", default=None, help="Optional Laboratory & Diagnostic CSV to merge with the raw eSOA sources")
-    parser.add_argument("--out", default="laboratory_and_diagnostic_matched.csv", help="Matched CSV filename")
+    parser.add_argument("--out", default="esoa_matched_labs.csv", help="Matched CSV filename")
     args = parser.parse_args(argv)
 
     cli_args: list[str] = ["--out", args.out, "--skip-excel"]
