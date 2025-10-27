@@ -43,9 +43,9 @@ It prepares raw CSVs, parses text into structured features, detects candidate ge
 ## Documentation maintenance
 
 Recent housekeeping added explicit module docstrings and refreshed inline
-comments across the preparation (`scripts/prepare.py`), feature engineering
-(`scripts/match_features.py`), scoring (`scripts/match_scoring.py`), output
-(`scripts/match_outputs.py`), and shared text utility (`scripts/text_utils.py`)
+comments across the preparation (`pipelines/drugs/scripts/prepare_drugs.py`), feature engineering
+(`pipelines/drugs/scripts/match_features_drugs.py`), scoring (`pipelines/drugs/scripts/match_scoring_drugs.py`), output
+(`pipelines/drugs/scripts/match_outputs_drugs.py`), and shared text utility (`pipelines/drugs/scripts/text_utils_drugs.py`)
 layers.  Refer to those modules directly when you need an authoritative
 explanation of a transformation or policy constant; the comments call out why a
 field exists and how it is consumed downstream.
@@ -62,7 +62,7 @@ field exists and how it is consumed downstream.
 - To add a new category, create a sub-package under `pipelines/`, implement the
   `pre_run`, `prepare_inputs`, `match`, and `post_run` hooks, and decorate the
   class with `@register_pipeline`. The registry makes the pipeline immediately
-  available to `main.py`, `run.py`, and any custom callers.
+  available to `main.py`, `run_drugs_and_medicine.py`, and any custom callers.
 - Shared orchestration primitives—`PipelineContext`, `PipelineRunParams`,
   `PipelineOptions`, and `PipelineResult`—are defined in
   `pipelines/base.py` so category-specific code stays focused on data handling.
@@ -115,7 +115,7 @@ flowchart TD
 
 ## 🧠 Core Algorithmic Logic
 
-1. Dose Parsing ([scripts/dose.py](https://github.com/carlosresu/esoa/blob/main/scripts/dose.py))
+1. Dose Parsing ([pipelines/drugs/scripts/dose_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/dose_drugs.py))
 
 Understands expressions like:
 
@@ -145,7 +145,7 @@ Supervisor input needed
 
 ---
 
-2. Route & Form Detection ([scripts/routes_forms.py](https://github.com/carlosresu/esoa/blob/main/scripts/routes_forms.py), [scripts/prepare_annex_f.py](https://github.com/carlosresu/esoa/blob/main/scripts/prepare_annex_f.py), and [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py))
+2. Route & Form Detection ([pipelines/drugs/scripts/routes_forms_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/routes_forms_drugs.py), [pipelines/drugs/scripts/prepare_annex_f_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/prepare_annex_f_drugs.py), and [pipelines/drugs/scripts/match_scoring_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_scoring_drugs.py))
 
 - Recognizes forms (tablet, cap, MDI, DPI, susp, soln, spray, supp, etc.) and maps them to canonical routes (oral, inhalation, nasal, rectal, etc.), expanding common aliases (PO, per os, SL, IM, IV, etc.). Annex F gets additional heuristics for drops, ovules, shampoos, and packaging-driven inference (ampule/vial → injectable, large-volume bottles/bags → intravenous, nebules → inhalation).
 - When an eSOA entry is missing the route but the form is present, the Annex/PNF route is imputed and logged in `route_evidence`. If only WHO metadata is available, we map WHO Adm.R/UOM codes to the same canonical routes/forms so alignment with Annex/PNF logic remains consistent.
@@ -163,7 +163,7 @@ Supervisor input needed
 
 ---
 
-3. Brand → Generic Swap ([scripts/brand_map.py](https://github.com/carlosresu/esoa/blob/main/scripts/brand_map.py), used in [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py))
+3. Brand → Generic Swap ([pipelines/drugs/scripts/brand_map_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/brand_map_drugs.py), used in [pipelines/drugs/scripts/match_features_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_features_drugs.py))
 
 - Builds Aho–Corasick automata of FDA brand names; maps each to one or more FDA-listed generics with optional dose/form metadata.
 - For each eSOA line, we detect brands in the main text and replace with the FDA generic, recording did_brand_swap = True.
@@ -182,7 +182,7 @@ Supervisor input needed
 
 ---
 
-4. DrugBank Generic Overlay ([scripts/reference_data.py](https://github.com/carlosresu/esoa/blob/main/scripts/reference_data.py), used in [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) & [scripts/match_outputs.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_outputs.py))
+4. DrugBank Generic Overlay ([pipelines/drugs/scripts/reference_data_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/reference_data_drugs.py), used in [pipelines/drugs/scripts/match_features_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_features_drugs.py) & [pipelines/drugs/scripts/match_outputs_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_outputs_drugs.py))
 
 - Loads the curated DrugBank generics export generated by `dependencies/drugbank/drugbank.R` (fallback: `inputs/generics.csv`), normalizes to lowercase ASCII, and indexes by token.
 - After brand swaps run, scans the updated text for contiguous DrugBank token sequences and records matches in `drugbank_generics_list`; the boolean `present_in_drugbank` bubbles into scoring and summaries.
@@ -199,9 +199,9 @@ Supervisor input needed
 
 ---
 
-5. FDA Food / Non-therapeutic Catalog Detection ([scripts/fda_ph_food_scraper.py](https://github.com/carlosresu/esoa/blob/main/scripts/fda_ph_food_scraper.py), [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py), [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py))
+5. FDA Food / Non-therapeutic Catalog Detection ([pipelines/drugs/scripts/fda_ph_food_scraper_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/fda_ph_food_scraper_drugs.py), [pipelines/drugs/scripts/match_features_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_features_drugs.py), [pipelines/drugs/scripts/match_scoring_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_scoring_drugs.py))
 
-- Optionally loads `inputs/fda_food_products.csv` (scraped via `scripts/fda_ph_food_scraper.py`) and builds an automaton of brand and product strings.
+- Optionally loads `inputs/fda_food_products.csv` (scraped via `pipelines/drugs/scripts/fda_ph_food_scraper_drugs.py`) and builds an automaton of brand and product strings.
 - Captures every hit in `non_therapeutic_hits`, distills canonical tokens in `non_therapeutic_tokens`, and highlights the highest scoring entry in `non_therapeutic_best`/`non_therapeutic_detail` so reviewers can see which registration number or company triggered the flag.
 - `non_therapeutic_summary` emits `non_therapeutic_detected` to make the Unknown-bucket routing obvious in pivots without expanding the nested JSON columns.
 - When a line resolves to an FDA food/non-therapeutic item and no PNF/WHO/FDA-drug molecule exists, scoring routes the row to the `Unknown` bucket with `why_final = "Unknown"` and `reason_final = "non_therapeutic_detected"`.
@@ -218,7 +218,7 @@ Supervisor input needed
 
 ---
 
-6. Lexical Normalization & Phonetic Matching ([scripts/pnf_aliases.py](https://github.com/carlosresu/esoa/blob/main/scripts/pnf_aliases.py), [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py))
+6. Lexical Normalization & Phonetic Matching ([scripts/pnf_aliases.py](https://github.com/carlosresu/esoa/blob/main/scripts/pnf_aliases.py), [pipelines/drugs/scripts/match_features_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_features_drugs.py))
 
 - Performs “hard” normalization on every PNF name and detected text fragment: ASCII fold, strip punctuation/whitespace, collapse separators, drop trailing salt/form suffixes (HCl, SR, tab, inj, etc.), and sort tokens for combination products.
 - Applies a focused set of pharma spelling transforms to cover UK↔US and historical spellings (ceph→cef, sulph→sulf, oes→es, haem→hem, amoxycill→amoxicill, etc.), emitting both the raw-normalized and rule-adjusted variants as lookup keys.
@@ -251,7 +251,7 @@ Supervisor input needed
 
 ---
 
-8. Best-Variant Selection & Scoring ([scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py))
+8. Best-Variant Selection & Scoring ([pipelines/drugs/scripts/match_scoring_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_scoring_drugs.py))
 
 For each eSOA entry with at least one PNF candidate:
 
@@ -276,7 +276,7 @@ Supervisor input needed
 
 ---
 
-9. Unknown Handling ([scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) → unknown_words.csv)
+9. Unknown Handling ([pipelines/drugs/scripts/match_features_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_features_drugs.py) → unknown_words.csv)
 
 - Extracts tokens not recognized in the combined PNF, WHO, FDA, or DrugBank vocabularies and prunes anything on the shared English/stopword whitelist.
 - Categorizes:
@@ -334,32 +334,31 @@ Additional lines list the top molecules or match-quality drivers per bucket when
 
 ## 🛠️ Running the Pipeline
 
-`run.py` now self-bootstraps `requirements.txt`, ensures `inputs/` and `outputs/` exist, concatenates partitioned `inputs/esoa_pt_*.csv` files into a temporary `esoa_combined.csv`, and shows live spinners plus grouped timing totals for every major stage. R remains optional and is only required when you want to refresh the WHO ATC exports.
+`run_drugs_and_medicine.py` self-bootstraps `requirements.txt`, ensures `inputs/drugs_and_medicine/` and `outputs/drugs_and_medicine/` exist, concatenates partitioned `inputs/drugs_and_medicine/esoa_pt_*.csv` files into a temporary `esoa_combined.csv`, and shows live spinners plus grouped timing totals for every major stage. R remains optional and is only required when you want to refresh the WHO ATC exports.
 
 ```bash
 # Python 3.10+ (optional virtualenv setup shown for reproducibility)
-pip install -r requirements.txt  # run.py will do this automatically if you skip it
+pip install -r requirements.txt  # the runner will bootstrap dependencies if you skip this
 
-# Run full pipeline (writes fresh artifacts to ./outputs)
-python run.py --item-ref-code DrugsAndMedicine \
-  --annex inputs/annex_f.csv \
-  --pnf inputs/pnf.csv \
-  --esoa inputs/esoa.csv \
+# Run full DrugsAndMedicine pipeline (writes fresh artifacts to ./outputs/drugs_and_medicine)
+python run_drugs_and_medicine.py \
+  --annex inputs/drugs_and_medicine/annex_f.csv \
+  --pnf inputs/drugs_and_medicine/pnf.csv \
+  --esoa inputs/drugs_and_medicine/esoa_combined.csv \
   --out esoa_matched.csv
 ```
 
 **DrugBank prerequisite**  
-Refresh `dependencies/drugbank/output/generics.csv` (or drop a curated copy in `inputs/generics.csv`) by running `python run_drugbank.py` whenever the upstream DrugBank dataset changes. The pipeline will automatically consume the freshest export.
+Refresh `dependencies/drugbank/output/generics.csv` (or drop a curated copy in `inputs/drugs_and_medicine/generics.csv`) by running `python -m pipelines.drugs.scripts.run_drugbank_drugs` whenever the upstream DrugBank dataset changes. The pipeline will automatically consume the freshest export.
 
 Optional flags
 
 - `--skip-r` — Skip the WHO ATC R preprocessing stage
 - `--skip-brandmap` — Reuse the most recent FDA brand map instead of rebuilding
 - `--skip-excel` — Skip writing the XLSX workbook (CSV and summaries only)
-- `--skip-unknowns` — Skip the post-match enrichment step that runs `resolve_unknowns.py`
-- `--annex` / `--pnf` / `--esoa` — Override default input paths (relative paths fall back to `inputs/`)
-- `--out` — Override the matched CSV filename (always placed under `./outputs`)
-- `--item-ref-code` — Select which registered pipeline to run (defaults to `DrugsAndMedicine`; scaffolds for `LaboratoryAndDiagnostic` are in place for future development)
+- `--skip-unknowns` — Skip the post-match enrichment step that runs `pipelines.drugs.scripts.resolve_unknowns_drugs`
+- `--annex` / `--pnf` / `--esoa` — Override default input paths (relative paths fall back to `inputs/drugs_and_medicine/`)
+- `--out` — Override the matched CSV filename (always placed under `./outputs/drugs_and_medicine`)
 
 ⚙️ **Parallelism controls**  
 CPU-heavy stages (brand swaps, WHO detection, scoring passes) now fan out across a process pool when large datasets are detected. Set `ESOA_MAX_WORKERS=<N>` to pin the worker count (use `1` to force serial execution, or leave unset to auto-detect cores). In restricted sandboxes the helpers fall back to single-process execution automatically.
@@ -369,49 +368,51 @@ CPU-heavy stages (brand swaps, WHO detection, scoring passes) now fan out across
 For incremental testing without touching external data sources or emitting Excel, use:
 
 ```bash
-python run_minimal.py --pnf inputs/pnf.csv --esoa inputs/esoa.csv --out esoa_matched.csv
+python run_drugs_and_medicine_minimal.py \
+  --pnf inputs/drugs_and_medicine/pnf.csv \
+  --esoa inputs/drugs_and_medicine/esoa_combined.csv \
+  --out esoa_matched.csv
 ```
 
-This helper invokes `run.py` with `--skip-r --skip-brandmap --skip-excel`, keeping dependency bootstrapping and path resolution identical to the full runner while limiting the workload to CSV and summary generation.
+This helper invokes `run_drugs_and_medicine.py` with `--skip-r --skip-brandmap --skip-excel`, keeping dependency bootstrapping and path resolution identical to the full runner while limiting the workload to CSV and summary generation.
 
 ### Profiling the pipeline
 
 To inspect runtime hotspots, execute the profiled wrapper:
 
 ```bash
-python debug.py --pnf inputs/pnf.csv --esoa inputs/esoa.csv --out esoa_matched.csv
+python -m pipelines.drugs.scripts.debug_drugs_and_medicine --pnf inputs/drugs_and_medicine/pnf.csv --esoa inputs/drugs_and_medicine/esoa_combined.csv --out esoa_matched.csv
 ```
 
-`debug.py` mirrors `run.py` but wraps execution with [pyinstrument](https://github.com/joerick/pyinstrument). Profiling reports are saved to `./outputs/pyinstrument_profile_<timestamp>.html` and `.txt`, allowing you to review the call tree in a browser or terminal.
+The profiler mirrors `run_drugs_and_medicine.py` but wraps execution with [pyinstrument](https://github.com/joerick/pyinstrument). Profiling reports are saved to `./outputs/drugs_and_medicine/pyinstrument_profile_<timestamp>.html` and `.txt`, allowing you to review the call tree in a browser or terminal.
+
+### Running multiple pipelines
+
+Use `python run_all_ref_codes.py` to execute every registered ITEM_REF_CODE sequentially. Pass `--pipelines` to run a subset (e.g., `python run_all_ref_codes.py --pipelines DrugsAndMedicine`) and `--include-stubs` to attempt pipelines that are still under active development.
 
 ---
 
 ## 📂 Repository Structure
 
-- scripts/
-- pipelines/ — Registry-driven ITEM_REF_CODE pipelines and shared orchestration contracts
-- [pipelines/drugs/pipeline.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/pipeline.py) — Current DrugsAndMedicine implementation (Annex/PNF matching)
-- [pipelines/lab_and_dx/pipeline.py](https://github.com/carlosresu/esoa/blob/main/pipelines/lab_and_dx/pipeline.py) — Scaffold for Laboratory & Diagnostic matching
-- [aho.py](https://github.com/carlosresu/esoa/blob/main/scripts/aho.py) — Aho–Corasick automata for PNF names
-- [combos.py](https://github.com/carlosresu/esoa/blob/main/scripts/combos.py) — Combination vs. salt logic
-- [dose.py](https://github.com/carlosresu/esoa/blob/main/scripts/dose.py) — Dose parsing & similarity
-- [match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py) — Feature engineering (normalization, brand swap, detectors)
-- [match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) — Variant selection, scoring, classification
-- [match_outputs.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_outputs.py) — CSV/Excel writers and summary
-- [match.py](https://github.com/carlosresu/esoa/blob/main/scripts/match.py) — Orchestrates matching
-- [prepare.py](https://github.com/carlosresu/esoa/blob/main/scripts/prepare.py) — Prepares PNF/eSOA inputs
-- [prepare_annex_f.py](https://github.com/carlosresu/esoa/blob/main/scripts/prepare_annex_f.py) — Prepares Annex F authoritative catalogue (names, dose, route/form, packaging metadata)
-- [reference_data.py](https://github.com/carlosresu/esoa/blob/main/scripts/reference_data.py) — Shared loaders for DrugBank generics and ignore-word lists reused across pipeline stages
-- [routes_forms.py](https://github.com/carlosresu/esoa/blob/main/scripts/routes_forms.py) — Form→route maps and parsing
-- [text_utils.py](https://github.com/carlosresu/esoa/blob/main/scripts/text_utils.py) — Normalization helpers
-- [who_molecules.py](https://github.com/carlosresu/esoa/blob/main/scripts/who_molecules.py) — WHO ATC loader/detector
-- [fda_ph_drug_scraper.py](https://github.com/carlosresu/esoa/blob/main/scripts/fda_ph_drug_scraper.py) — FDA PH brand map scraper
-- [brand_map.py](https://github.com/carlosresu/esoa/blob/main/scripts/brand_map.py) — Brand automata builder
-- [main.py](https://github.com/carlosresu/esoa/blob/main/main.py) — API wrapper (prepare, match, run_all)
-- [run.py](https://github.com/carlosresu/esoa/blob/main/run.py) — Full pipeline runner with spinner & timing
-- [run_minimal.py](https://github.com/carlosresu/esoa/blob/main/run_minimal.py) — Skip installs/R/brand-map rebuild and Excel export for quick reruns
-- [debug/master.py](https://github.com/carlosresu/esoa/blob/main/debug/master.py) — All-in-one concatenated script for debugging
-- outputs/ — Generated files
+- `pipelines/` — Registry-driven ITEM_REF_CODE pipelines and shared orchestration contracts
+  - `base.py`, `utils.py`, `registry.py` — Shared dataclasses, helpers, and registry wiring
+  - `drugs/`
+    - `constants.py` — Common paths for the DrugsAndMedicine pipeline
+    - `pipeline.py` — Full Annex/PNF matching implementation
+    - `scripts/` — Feature engineering, scoring, output, and helper modules (e.g., `match_drugs.py`, `prepare_drugs.py`, `match_outputs_drugs.py`)
+  - `lab_and_dx/` — Scaffold ready for Laboratory & Diagnostic matching algorithms
+- `inputs/`
+  - `drugs_and_medicine/` — Annex F, PNF, FDA brand map, eSOA partitions, etc.
+  - `laboratory_and_diagnostic/` — Laboratory & Diagnostic catalog inputs
+- `outputs/`
+  - `drugs_and_medicine/` — Matched CSV/XLSX, summaries, unknown token exports
+  - `laboratory_and_diagnostic/` — Placeholder for future outputs
+- Top-level entrypoints
+  - `main.py` — Programmatic API (prepare/match/run_all)
+  - `run_drugs_and_medicine.py` / `run_drugs_and_medicine_minimal.py`
+  - `run_laboratory_and_diagnostic.py` / `run_laboratory_and_diagnostic_minimal.py`
+  - `run_all_ref_codes.py` — Sequential runner scaffold for multiple pipelines
+- Supporting files: `requirements.txt`, `install_requirements.py`, `dependencies/`, `raw/`, `prompt.txt`, `data_dictionary.md`, `pipeline.md`
 
 ---
 

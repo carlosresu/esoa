@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-run.py — Full ESOA pipeline with on-demand spinner and timing.
+run_drugs_and_medicine.py — Full DrugsAndMedicine pipeline with on-demand spinner and timing.
 
 Console behavior:
   • Only the spinner/timer lines and the final timing summary are printed.
   • The heavy “Match & write outputs” step uses a tqdm progress bar that starts immediately.
 
 File outputs:
-  • scripts/match_outputs.py writes ./outputs/summary.txt (overwritten each run).
-  • Finally runs resolve_unknowns.py to analyze unmatched terms and write its outputs under ./outputs.
+  • pipelines/drugs/scripts/match_outputs_drugs.py writes ./outputs/drugs_and_medicine/summary.txt (overwritten each run).
+  • Finally runs pipelines/drugs/scripts/resolve_unknowns_drugs.py to analyze unmatched terms and write its outputs under ./outputs/drugs_and_medicine.
 """
 from __future__ import annotations
 
@@ -87,10 +87,20 @@ import threading
 from datetime import datetime
 from typing import Callable, Iterable
 
-from pipelines import PipelineContext, PipelineOptions, PipelineRunParams, get_pipeline
+from pipelines import (
+    PipelineContext,
+    PipelineOptions,
+    PipelineRunParams,
+    get_pipeline,
+    slugify_item_ref_code,
+)
 
 DEFAULT_INPUTS_DIR = "inputs"
 OUTPUTS_DIR = "outputs"
+ITEM_REF_CODE = "DrugsAndMedicine"
+PIPELINE_SLUG = slugify_item_ref_code(ITEM_REF_CODE)
+PIPELINE_INPUTS_SUBDIR = Path(DEFAULT_INPUTS_DIR) / PIPELINE_SLUG
+PIPELINE_OUTPUTS_SUBDIR = Path(OUTPUTS_DIR) / PIPELINE_SLUG
 
 # Ensure local imports when called from other CWDs
 if str(THIS_DIR) not in sys.path:
@@ -99,23 +109,35 @@ if str(THIS_DIR) not in sys.path:
 # ----------------------------
 # Utilities
 # ----------------------------
-def _resolve_input_path(p: str | os.PathLike[str], default_subdir: str = DEFAULT_INPUTS_DIR) -> Path:
-    """Resolve user-provided paths, falling back to ./inputs/{filename} when relative."""
-    # Fail fast when no argument is supplied.
+def _resolve_input_path(p: str | os.PathLike[str]) -> Path:
+    """Resolve user-provided paths, prioritizing the pipeline-specific inputs directory."""
     if not p:
         raise FileNotFoundError("No input path provided.")
     pth = Path(p)
-    # Accept absolute or pre-resolved file references as-is.
-    if pth.is_file():
-        return pth
-    candidate = THIS_DIR / default_subdir / pth.name
-    # Look in the project-relative inputs directory for convenience.
-    if candidate.is_file():
-        return candidate
+    search_paths: list[Path] = []
+
+    if pth.is_absolute():
+        search_paths.append(pth)
+    else:
+        search_paths.append((THIS_DIR / pth).resolve())
+        search_paths.append((THIS_DIR / PIPELINE_INPUTS_SUBDIR / pth).resolve())
+        search_paths.append((THIS_DIR / DEFAULT_INPUTS_DIR / pth).resolve())
+        search_paths.append((Path.cwd() / pth).resolve())
+        search_paths.append((THIS_DIR / PIPELINE_INPUTS_SUBDIR / pth.name).resolve())
+        search_paths.append((THIS_DIR / DEFAULT_INPUTS_DIR / pth.name).resolve())
+
+    seen = set()
+    for candidate in search_paths:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if candidate.is_file():
+            return candidate
+
     raise FileNotFoundError(
         f"Input file not found: {pth!s}. "
-        f"Tried: {pth.resolve()!s} and {candidate!s}. "
-        f"Place the file under ./{default_subdir}/ or pass --pnf/--esoa with a correct path."
+        f"Checked: {[str(c) for c in search_paths]!r}. "
+        f"Ensure the file exists under ./inputs/{PIPELINE_SLUG}/ or provide an absolute path."
     )
 
 def _natural_esoa_part_order(path: Path) -> tuple[int, str]:
@@ -149,14 +171,21 @@ def _concatenate_csv(parts: list[Path], dest: Path) -> None:
                 for row in reader:
                     writer.writerow(row)
 
-def _resolve_esoa_path(esoa_arg: str) -> Path:
-    """Resolve the eSOA input, concatenating esoa_pt_*.csv files when present."""
-    raw_arg = Path(esoa_arg)
-    search_dir = raw_arg.parent if raw_arg.parent else Path(DEFAULT_INPUTS_DIR)
-    if not search_dir.is_absolute():
-        search_dir = (THIS_DIR / search_dir).resolve()
+def _resolve_esoa_path(esoa_arg: str | None) -> Path:
+    """Resolve the eSOA input, concatenating esoa_pt_*.csv files from the pipeline inputs when present."""
+    inputs_dir = _ensure_inputs_dir()
+    search_dir = inputs_dir
+
+    if esoa_arg:
+        raw_arg = Path(esoa_arg)
+        if raw_arg.is_dir():
+            search_dir = raw_arg.resolve()
+        elif raw_arg.parent and str(raw_arg.parent) not in ("", "."):
+            parent = raw_arg.parent
+            search_dir = parent if parent.is_absolute() else (THIS_DIR / parent).resolve()
+
     if not search_dir.exists():
-        search_dir = (_ensure_inputs_dir()).resolve()
+        search_dir = inputs_dir
 
     part_files = sorted(search_dir.glob("esoa_pt_*.csv"), key=_natural_esoa_part_order)
     if part_files:
@@ -164,19 +193,22 @@ def _resolve_esoa_path(esoa_arg: str) -> Path:
         _concatenate_csv(part_files, combined)
         return combined
 
-    return _resolve_input_path(esoa_arg)
+    if esoa_arg:
+        return _resolve_input_path(esoa_arg)
+
+    raise FileNotFoundError(
+        "No eSOA input provided and no esoa_pt_*.csv files were found under the pipeline inputs directory."
+    )
 
 def _ensure_outputs_dir() -> Path:
-    """Make sure the outputs directory exists and return its filesystem path."""
-    outdir = THIS_DIR / OUTPUTS_DIR
-    # Create the directory tree so downstream writes succeed.
+    """Make sure the pipeline outputs directory exists and return its filesystem path."""
+    outdir = (THIS_DIR / PIPELINE_OUTPUTS_SUBDIR).resolve()
     outdir.mkdir(parents=True, exist_ok=True)
     return outdir
 
 def _ensure_inputs_dir() -> Path:
-    """Create the inputs directory when missing so upstream steps can drop files."""
-    inp = THIS_DIR / DEFAULT_INPUTS_DIR
-    # Mirror the outputs helper to ensure inputs/ exists during bootstrapping.
+    """Create the pipeline inputs directory when missing so upstream steps can drop files."""
+    inp = (THIS_DIR / PIPELINE_INPUTS_SUBDIR).resolve()
     inp.mkdir(parents=True, exist_ok=True)
     return inp
 
@@ -411,24 +443,19 @@ def _print_grouped_summary(timings: TimingCollector) -> None:
 # Main entry
 # ----------------------------
 def main_entry() -> None:
-    """CLI front-end that mirrors README flow with pluggable ITEM_REF_CODE pipelines."""
+    """CLI front-end for the DrugsAndMedicine pipeline with spinner+timing."""
     parser = argparse.ArgumentParser(
-        description="Run eSOA pipeline with spinner+timing using the registered ITEM_REF_CODE pipelines.",
+        description="Run the DrugsAndMedicine eSOA pipeline with spinner+timing.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     # Flags align with README guidance: allow skipping R preprocessing or FDA brand rebuilds when rerunning.
-    parser.add_argument("--annex", default=f"{DEFAULT_INPUTS_DIR}/annex_f.csv", help="Path to Annex F CSV")
-    parser.add_argument("--pnf", default=f"{DEFAULT_INPUTS_DIR}/pnf.csv", help="Path to PNF CSV")
-    parser.add_argument("--esoa", default=f"{DEFAULT_INPUTS_DIR}/esoa.csv", help="Path to eSOA CSV")
-    parser.add_argument("--out", default="esoa_matched.csv", help="Output CSV filename (saved under ./outputs)")
+    parser.add_argument("--annex", default=str(PIPELINE_INPUTS_SUBDIR / "annex_f.csv"), help="Path to Annex F CSV")
+    parser.add_argument("--pnf", default=str(PIPELINE_INPUTS_SUBDIR / "pnf.csv"), help="Path to PNF CSV")
+    parser.add_argument("--esoa", default=None, help="Path to eSOA CSV (defaults to concatenated inputs/drugs_and_medicine/esoa_pt_*.csv)")
+    parser.add_argument("--out", default="esoa_matched.csv", help="Output CSV filename (saved under ./outputs/drugs_and_medicine)")
     parser.add_argument("--skip-r", action="store_true", help="Skip running ATC R preprocessing scripts")
     parser.add_argument("--skip-brandmap", action="store_true", help="Skip building FDA brand map CSV")
     parser.add_argument("--skip-excel", action="store_true", help="Skip writing XLSX output (CSV and summaries still produced)")
-    parser.add_argument(
-        "--item-ref-code",
-        default="DrugsAndMedicine",
-        help="ITEM_REF_CODE category to process (must have a registered pipeline)",
-    )
     parser.add_argument(
         "--skip-unknowns",
         action="store_true",
@@ -436,17 +463,19 @@ def main_entry() -> None:
     )
     args = parser.parse_args()
 
-    pipeline = get_pipeline(args.item_ref_code)
+    pipeline = get_pipeline(ITEM_REF_CODE)
 
     outdir = _ensure_outputs_dir()
     inputs_dir = _ensure_inputs_dir()
     # Resolve the requested raw inputs, enforcing the fallback search behavior.
-    def _optional(path: str | os.PathLike[str]) -> Path | None:
+    def _optional(path: str | os.PathLike[str] | None) -> Path | None:
+        if path is None:
+            return None
         try:
             return _resolve_input_path(path)
         except FileNotFoundError:
             print(
-                f"! Optional input {path!s} not found; passing None to pipeline {pipeline.item_ref_code}.",
+                f"! Optional input {path!s} not found; passing None to pipeline {ITEM_REF_CODE}.",
                 file=sys.stderr,
             )
             return None
@@ -485,7 +514,7 @@ def main_entry() -> None:
     _print_grouped_summary(timings)
 
     _prune_dated_exports(THIS_DIR / "dependencies" / "atcd" / "output")
-    _prune_dated_exports(THIS_DIR / DEFAULT_INPUTS_DIR)
+    _prune_dated_exports(_ensure_inputs_dir())
 
 if __name__ == "__main__":
     try:

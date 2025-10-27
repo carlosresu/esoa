@@ -15,15 +15,15 @@ Rules:
              (e.g., "tranexamic" matches "tranexamic acid", "tranexamic_acid", "tranexamic-acid").
 
 Input:
-  ./outputs/unknown_words.csv  (columns: word,count)
+  ./outputs/drugs_and_medicine/unknown_words.csv  (columns: word,count)
 
 Search lists:
-  • PNF: ./inputs/pnf_prepared.csv (generic_name)
-  • FDA brand map: newest of ./inputs/fda_brand_map_*.csv OR ./inputs/brand_map_*.csv (generic_name)
+  • PNF: ./inputs/drugs_and_medicine/pnf_prepared.csv (generic_name)
+  • FDA brand map: newest of ./inputs/drugs_and_medicine/fda_brand_map_*.csv OR ./inputs/drugs_and_medicine/brand_map_*.csv (generic_name)
   • WHO ATC: newest of ./dependencies/atcd/output/who_atc_*_molecules.csv (atc_name)
 
 Output:
-  ./outputs/missed_generics.csv with columns:
+  ./outputs/drugs_and_medicine/missed_generics.csv with columns:
     unknown_word, unknown_count, source, reference_name, match_kind, reference_path
 
 Priority:
@@ -37,11 +37,12 @@ import sys
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict, Iterable
 
-from scripts.reference_data import load_drugbank_generics, load_ignore_words
+from ..constants import PIPELINE_INPUTS_DIR, PIPELINE_OUTPUTS_DIR, PROJECT_ROOT
+from .reference_data_drugs import load_drugbank_generics, load_ignore_words
 
-ROOT = Path(__file__).resolve().parent
-INPUTS = ROOT / "inputs"
-OUTPUTS = ROOT / "outputs"
+ROOT = PROJECT_ROOT
+INPUTS = PIPELINE_INPUTS_DIR
+OUTPUTS = PIPELINE_OUTPUTS_DIR
 WHO_DIR = ROOT / "dependencies" / "atcd" / "output"
 
 # Common nouns that should be ignored (already handled in match_outputs but kept for safety)

@@ -1,13 +1,13 @@
 # Pipeline Execution Walkthrough
 
-Detailed end-to-end view of the matching pipeline, from CLI invocation in [run.py](https://github.com/carlosresu/esoa/blob/main/run.py) (now a thin orchestrator that resolves the appropriate `ITEM_REF_CODE` pipeline from `pipelines/registry.py`) through feature building in [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py), scoring in [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py), and export logic in [scripts/match_outputs.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_outputs.py).
+Detailed end-to-end view of the matching pipeline, from CLI invocation in [run_drugs_and_medicine.py](https://github.com/carlosresu/esoa/blob/main/run_drugs_and_medicine.py) (now a thin orchestrator that resolves the appropriate `ITEM_REF_CODE` pipeline from `pipelines/registry.py`) through feature building in [pipelines/drugs/scripts/match_features_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_features_drugs.py), scoring in [pipelines/drugs/scripts/match_scoring_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_scoring_drugs.py), and export logic in [pipelines/drugs/scripts/match_outputs_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_outputs_drugs.py).
 
 🆕 **Inline documentation refresh** – the Python modules referenced below now
 include descriptive docstrings and comments that mirror this walkthrough.  When
 deep-diving into a particular step, the code comments explain the exact
 transformations performed and why policy constants are set the way they are.
 
-Before the numbered stages below, the `DrugsAndMedicinePipeline` (invoked via `run.py`) now handles shared orchestration:
+Before the numbered stages below, the `DrugsAndMedicinePipeline` (invoked via `run_drugs_and_medicine.py`) now handles shared orchestration:
 
 - Bootstraps `requirements.txt` with pip when needed, so a separate `--skip-install` flag is no longer required.
 - Ensures `inputs/` and `outputs/` exist, then prunes dated WHO ATC exports and brand-map snapshots after the run.
@@ -18,62 +18,62 @@ Before the numbered stages below, the `DrugsAndMedicinePipeline` (invoked via `r
 - Chooses a safe worker pool size (auto-tuned via `resolve_worker_count`, overridable with `ESOA_MAX_WORKERS`) so CPU-heavy phases can execute concurrently without starving smaller laptops.
 
 1. **Prepare and Load Inputs**  
-   Resolve CLI paths (defaults under `inputs/`), concatenate partitioned eSOA files when present, and run the preparation layer: [scripts/prepare_annex_f.py](https://github.com/carlosresu/esoa/blob/main/scripts/prepare_annex_f.py) produces `annex_f_prepared.csv` while [scripts/prepare.py](https://github.com/carlosresu/esoa/blob/main/scripts/prepare.py) emits `pnf_prepared.csv` and `esoa_prepared.csv`. The matching core then reads these normalized CSVs (see [run.py](https://github.com/carlosresu/esoa/blob/main/run.py) and [scripts/match.py](https://github.com/carlosresu/esoa/blob/main/scripts/match.py)).
+   Resolve CLI paths (defaults under `inputs/`), concatenate partitioned eSOA files when present, and run the preparation layer: [pipelines/drugs/scripts/prepare_annex_f_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/prepare_annex_f_drugs.py) produces `annex_f_prepared.csv` while [pipelines/drugs/scripts/prepare_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/prepare_drugs.py) emits `pnf_prepared.csv` and `esoa_prepared.csv`. The matching core then reads these normalized CSVs (see [run_drugs_and_medicine.py](https://github.com/carlosresu/esoa/blob/main/run_drugs_and_medicine.py) and [pipelines/drugs/scripts/match_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_drugs.py)).
 
 2. **Validate Structural Expectations**  
-   Ensure the unified reference catalogue exposes Annex/PNF molecule, dose, route, priority, and identifier fields, and that the eSOA frame includes `raw_text` (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)).
+   Ensure the unified reference catalogue exposes Annex/PNF molecule, dose, route, priority, and identifier fields, and that the eSOA frame includes `raw_text` (see [pipelines/drugs/scripts/match_features_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_features_drugs.py)).
 
 3. **Index Reference Vocabularies**  
-   Build normalized Annex F + PNF name lookups (Annex priority), load WHO ATC exports (including regex caches, DDD metadata, and WHO route/form mappings), and prepare the FDA brand map automata plus generic token set (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)).
+   Build normalized Annex F + PNF name lookups (Annex priority), load WHO ATC exports (including regex caches, DDD metadata, and WHO route/form mappings), and prepare the FDA brand map automata plus generic token set (see [pipelines/drugs/scripts/match_features_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_features_drugs.py)).
 
 4. **Construct Search Automata**  
-   Create normalized/compact Aho–Corasick automatons for the combined reference set and train the partial token index used for fallback matches (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)).
+   Create normalized/compact Aho–Corasick automatons for the combined reference set and train the partial token index used for fallback matches (see [pipelines/drugs/scripts/match_features_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_features_drugs.py)).
 
 5. **Normalize eSOA Text**  
-   Produce the working frame with `raw_text`, parenthetical captures, `esoa_idx`, and normalized text variants (`normalized`, `norm_compact`) (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)).
+   Produce the working frame with `raw_text`, parenthetical captures, `esoa_idx`, and normalized text variants (`normalized`, `norm_compact`) (see [pipelines/drugs/scripts/match_features_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_features_drugs.py)).
 
 6. **Initial Dose / Route / Form Parsing**  
-   Parse dosage structures via [scripts/dose.py](https://github.com/carlosresu/esoa/blob/main/scripts/dose.py), compute `dose_recognized`, and collect `route_raw`, `form_raw`, and `route_evidence_raw` (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)).
+   Parse dosage structures via [pipelines/drugs/scripts/dose_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/dose_drugs.py), compute `dose_recognized`, and collect `route_raw`, `form_raw`, and `route_evidence_raw` (see [pipelines/drugs/scripts/match_features_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_features_drugs.py)).
 
 7. **Apply FDA Brand → Generic Substitutions**  
-   Scan normalized text for brand hits, score candidate generics, swap into `match_basis`, and populate `probable_brands`, `did_brand_swap`, `brand_swap_added_generic`, `fda_generics_list`, and `fda_dose_corroborated`; recompute `match_basis_norm_basic` (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)). Large batches spill across a worker pool so each process builds the Aho–Corasick automata once and applies swaps concurrently.
+   Scan normalized text for brand hits, score candidate generics, swap into `match_basis`, and populate `probable_brands`, `did_brand_swap`, `brand_swap_added_generic`, `fda_generics_list`, and `fda_dose_corroborated`; recompute `match_basis_norm_basic` (see [pipelines/drugs/scripts/match_features_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_features_drugs.py)). Large batches spill across a worker pool so each process builds the Aho–Corasick automata once and applies swaps concurrently.
 
 8. **Re-parse Dose / Route / Form on `match_basis`**  
-   Re-run dose parsing and route/form detection against the swapped text to produce `dosage_parsed`, `route`, `form`, and refreshed evidence fields (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)).
+   Re-run dose parsing and route/form detection against the swapped text to produce `dosage_parsed`, `route`, `form`, and refreshed evidence fields (see [pipelines/drugs/scripts/match_features_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_features_drugs.py)).
 
 9. **Detect Molecules Across References**  
-   Execute Annex/PNF automaton scans (`pnf_hits_gids`, `pnf_hits_tokens`) using expanded alias sets (parenthetical trade names, slash/plus splits, curated abbreviations), fall back to partial and fuzzy matches for near-miss spellings, and detect WHO molecules with ATC/DDD metadata. Annex hits are prioritized via `source_priority` before scoring (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)). WHO regex passes now run in parallel when millions of tokens are involved, keeping the wall-clock impact in check.
+   Execute Annex/PNF automaton scans (`pnf_hits_gids`, `pnf_hits_tokens`) using expanded alias sets (parenthetical trade names, slash/plus splits, curated abbreviations), fall back to partial and fuzzy matches for near-miss spellings, and detect WHO molecules with ATC/DDD metadata. Annex hits are prioritized via `source_priority` before scoring (see [pipelines/drugs/scripts/match_features_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_features_drugs.py)). WHO regex passes now run in parallel when millions of tokens are involved, keeping the wall-clock impact in check.
 
 10. **Overlay DrugBank Generics**  
-    Load the DrugBank generics export via [scripts/reference_data.py](https://github.com/carlosresu/esoa/blob/main/scripts/reference_data.py), scan `match_basis` for contiguous token matches, populate `drugbank_generics_list`, and set `present_in_drugbank`. These tokens are also merged into the shared ignore-word pool so valid DrugBank synonyms never appear as unknowns, and [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py) labels rows as `ValidMoleculeInDrugBank` when no other catalogue explains the text.
+    Load the DrugBank generics export via [pipelines/drugs/scripts/reference_data_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/reference_data_drugs.py), scan `match_basis` for contiguous token matches, populate `drugbank_generics_list`, and set `present_in_drugbank`. These tokens are also merged into the shared ignore-word pool so valid DrugBank synonyms never appear as unknowns, and [pipelines/drugs/scripts/match_scoring_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_scoring_drugs.py) labels rows as `ValidMoleculeInDrugBank` when no other catalogue explains the text.
 
 11. **Detect FDA Food / Non-therapeutic Catalog Matches**  
-    Optionally load `fda_food_products.csv`, capture every matching entry in `non_therapeutic_hits`, summarize the highest scoring registration in `non_therapeutic_detail`, record the structured winner in `non_therapeutic_best`, emit `non_therapeutic_summary`, and retain canonical tokens in `non_therapeutic_tokens` for downstream unknown filtering and review context (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)). When no therapeutic molecule is recognized, scoring promotes these rows to the Unknown bucket with `reason_final = "non_therapeutic_detected"` (see [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py)).
+    Optionally load `fda_food_products.csv`, capture every matching entry in `non_therapeutic_hits`, summarize the highest scoring registration in `non_therapeutic_detail`, record the structured winner in `non_therapeutic_best`, emit `non_therapeutic_summary`, and retain canonical tokens in `non_therapeutic_tokens` for downstream unknown filtering and review context (see [pipelines/drugs/scripts/match_features_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_features_drugs.py)). When no therapeutic molecule is recognized, scoring promotes these rows to the Unknown bucket with `reason_final = "non_therapeutic_detected"` (see [pipelines/drugs/scripts/match_scoring_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_scoring_drugs.py)).
 
 12. **Extract Unknown Tokens and Presence Flags**  
-   Gather `unknown_words_list`, classify `unknown_kind`, and derive presence counts for Annex F, PNF, WHO, FDA, DrugBank, and FDA food catalog hits (see [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py)). DrugBank tokens contribute to `qty_drugbank` and are stripped from the unknown pool before scoring.
+   Gather `unknown_words_list`, classify `unknown_kind`, and derive presence counts for Annex F, PNF, WHO, FDA, DrugBank, and FDA food catalog hits (see [pipelines/drugs/scripts/match_features_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_features_drugs.py)). DrugBank tokens contribute to `qty_drugbank` and are stripped from the unknown pool before scoring.
 
 13. **Score Candidates and Select Best PNF Variant**
-   Join eSOA rows to matching Annex F/PNF variants, enforce route compatibility, compute preliminary scores, and select the best variant per `esoa_idx` along with dose/form metadata. Annex rows carry `source_priority = 1`, ensuring Drug Codes outrank ATC-only matches (see [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py)).
+   Join eSOA rows to matching Annex F/PNF variants, enforce route compatibility, compute preliminary scores, and select the best variant per `esoa_idx` along with dose/form metadata. Annex rows carry `source_priority = 1`, ensuring Drug Codes outrank ATC-only matches (see [pipelines/drugs/scripts/match_scoring_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_scoring_drugs.py)).
 
 14. **Refine Dose, Form, and Route Alignment**
-   Recalculate `dose_sim`, infer missing form/route when safe, use WHO route/form tokens when local data is absent, upgrade selections when ratio logic prefers liquid formulations, and track route/form validations plus `route_form_imputations`. Annex route evidence is injected via `reference_route_details` when the raw text lacked explicit clues (see [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py)).
+   Recalculate `dose_sim`, infer missing form/route when safe, use WHO route/form tokens when local data is absent, upgrade selections when ratio logic prefers liquid formulations, and track route/form validations plus `route_form_imputations`. Annex route evidence is injected via `reference_route_details` when the raw text lacked explicit clues (see [pipelines/drugs/scripts/match_scoring_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_scoring_drugs.py)).
 
 15. **Aggregate Scoring Attributes**
-   Compute confidence components (including the +10 bonus when `brand_swap_added_generic` is true and dose/form/route align), aggregate recognized molecule lists, set `probable_atc`, expose `form_ok`/`route_ok`, and derive `generic_final` plus Annex-specific metadata: `reference_source`, `reference_priority`, `drug_code_final`, `primary_code_final`, and `reference_route_details` (see [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py)).
+   Compute confidence components (including the +10 bonus when `brand_swap_added_generic` is true and dose/form/route align), aggregate recognized molecule lists, set `probable_atc`, expose `form_ok`/`route_ok`, and derive `generic_final` plus Annex-specific metadata: `reference_source`, `reference_priority`, `drug_code_final`, `primary_code_final`, and `reference_route_details` (see [pipelines/drugs/scripts/match_scoring_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_scoring_drugs.py)).
 
 16. **Bucketize and Annotate Outcomes**
-    Populate `bucket_final`, `match_molecule(s)`, `match_quality`, `why_final`, and `reason_final`, ensuring Auto-Accept logic and review annotations remain consistent (see [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py)).
+    Populate `bucket_final`, `match_molecule(s)`, `match_quality`, `why_final`, and `reason_final`, ensuring Auto-Accept logic and review annotations remain consistent (see [pipelines/drugs/scripts/match_scoring_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_scoring_drugs.py)).
     - **Auto-Accept** — Annex F or PNF match with a reference code (`drug_code_final` or `primary_code_final`), `form_ok`/`route_ok`, and no unresolved tokens.
     - **Candidates** — Reference code assigned via Annex, PNF, WHO, or FDA brand swap but Auto-Accept criteria not met; no unknown tokens remain.
     - **Needs review** — Reference code assigned yet one or more tokens stay unresolved; `match_quality` pinpoints the outstanding issues.
     - **Unknown** — No therapeutic reference matched, including FDA food/non-therapeutic detections.
 
 17. **Write Outputs and Summaries**
-    Persist the curated data set to CSV/XLSX, generate distribution summaries, and freeze workbook panes for review convenience. Outputs now include Annex metadata columns so reviewers can pivot on Drug Code and source priority (see [scripts/match_outputs.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_outputs.py)).
+    Persist the curated data set to CSV/XLSX, generate distribution summaries, and freeze workbook panes for review convenience. Outputs now include Annex metadata columns so reviewers can pivot on Drug Code and source priority (see [pipelines/drugs/scripts/match_outputs_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_outputs_drugs.py)).
 
 18. **Post-processing & Timing Summary**
-    Automatically run whichever `resolve_unknowns.py` is available (project root or `scripts/`) to analyse `unknown_words.csv`, then emit the grouped timing roll-up captured during each spinner stage. Finished runs also prune dated ATC/brand-map exports to keep disk usage in check (see [run.py](https://github.com/carlosresu/esoa/blob/main/run.py)).
+    Automatically run `pipelines/drugs/scripts/resolve_unknowns_drugs.py` to analyse `unknown_words.csv`, then emit the grouped timing roll-up captured during each spinner stage. Finished runs also prune dated ATC/brand-map exports to keep disk usage in check (see [run_drugs_and_medicine.py](https://github.com/carlosresu/esoa/blob/main/run_drugs_and_medicine.py)).
 
 ## Auto-Accept Reference (Annex/PNF-backed exacts)
 
@@ -81,7 +81,7 @@ Rows land in the **Auto-Accept** bucket when scoring finds an Annex F or PNF
 variant with a trusted identifier (`drug_code_final` or `primary_code_final`),
 `form_ok` and `route_ok` are `True`, and no unresolved tokens remain. These
 cases keep `match_quality`/`reason_final` blank because no review flags were
-raised. The summary generated by `scripts/match_outputs.py` also breaks out the
+raised. The summary generated by `pipelines/drugs/scripts/match_outputs_drugs.py` also breaks out the
 high-confidence exacts:
 
 - `ValidMoleculeWithDrugCodeInAnnex: exact dose/route/form match` – Auto-accepts

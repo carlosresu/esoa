@@ -9,7 +9,7 @@ from typing import Dict, List, Tuple
 
 import pandas as pd
 
-from .text_utils import _base_name, _normalize_text_basic
+from .text_utils_drugs import _base_name, _normalize_text_basic
 
 
 def load_who_molecules(who_csv: str) -> Tuple[Dict[str, set], List[str], Dict[str, List[dict]]]:

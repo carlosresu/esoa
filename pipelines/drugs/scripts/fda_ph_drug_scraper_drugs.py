@@ -12,8 +12,9 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 import requests
 
-from scripts.text_utils import normalize_text
-from scripts.routes_forms import FORM_TO_ROUTE, parse_form_from_text
+from ..constants import PIPELINE_INPUTS_DIR, PIPELINE_RAW_DIR
+from .text_utils_drugs import normalize_text
+from .routes_forms_drugs import FORM_TO_ROUTE, parse_form_from_text
 
 BASE_URL = "https://verification.fda.gov.ph"
 HUMAN_DRUGS_URL = f"{BASE_URL}/drug_productslist.php"
@@ -23,7 +24,7 @@ HEADERS = {
 }
 
 
-RAW_DIR = Path(__file__).resolve().parent.parent / "raw"
+RAW_DIR = PIPELINE_RAW_DIR
 
 AS_OF_PATTERNS: Tuple[re.Pattern[str], ...] = (
     re.compile(r"as of\s+([A-Za-z]+\s+\d{1,2}(?:st|nd|rd|th)?,\s+\d{4})", re.IGNORECASE),

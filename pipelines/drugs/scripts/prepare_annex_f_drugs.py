@@ -20,10 +20,11 @@ from typing import Iterable, Optional, Tuple
 
 import pandas as pd
 
-from .dose import parse_dose_struct_from_text, safe_ratio_mg_per_ml, to_mg
-from .routes_forms import FORM_TO_ROUTE, extract_route_and_form, parse_form_from_text
-from .text_utils import normalize_text, slug_id
-from .combos import SALT_TOKENS
+from ..constants import PIPELINE_INPUTS_DIR
+from .dose_drugs import parse_dose_struct_from_text, safe_ratio_mg_per_ml, to_mg
+from .routes_forms_drugs import FORM_TO_ROUTE, extract_route_and_form, parse_form_from_text
+from .text_utils_drugs import normalize_text, slug_id
+from .combos_drugs import SALT_TOKENS
 
 # Containers observed in Annex F (canonical form -> token variants)
 # Recognized containers observed in Annex F (canonical form -> token variants).
@@ -407,8 +408,8 @@ def prepare_annex_f(input_csv: str, output_csv: str) -> str:
 
 
 def main() -> None:
-    """CLI wrapper to allow `python -m scripts.prepare_annex_f` execution."""
-    inputs_dir = Path(__file__).resolve().parent.parent / "inputs"
+    """CLI wrapper to allow `python -m pipelines.drugs.scripts.prepare_annex_f_drugs` execution."""
+    inputs_dir = PIPELINE_INPUTS_DIR
     input_csv = inputs_dir / "annex_f.csv"
     output_csv = inputs_dir / "annex_f_prepared.csv"
     path = prepare_annex_f(str(input_csv), str(output_csv))

@@ -12,9 +12,9 @@ reverse engineer the data frame mutations.
 import os
 import pandas as pd
 
-from .routes_forms import map_route_token, parse_form_from_text
-from .dose import parse_dose_struct_from_text, to_mg, safe_ratio_mg_per_ml
-from .text_utils import clean_atc, normalize_text, slug_id
+from .routes_forms_drugs import map_route_token, parse_form_from_text
+from .dose_drugs import parse_dose_struct_from_text, to_mg, safe_ratio_mg_per_ml
+from .text_utils_drugs import clean_atc, normalize_text, slug_id
 
 
 def prepare(pnf_csv: str, esoa_csv: str, outdir: str = ".") -> tuple[str, str]:

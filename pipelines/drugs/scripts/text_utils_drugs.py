@@ -85,8 +85,8 @@ def extract_parenthetical_phrases(raw_text: str) -> List[str]:
         uniq.append(c)
     return uniq
 
-from .combos import SALT_TOKENS
-from .routes_forms import FORM_TO_ROUTE, ROUTE_ALIASES
+from .combos_drugs import SALT_TOKENS
+from .routes_forms_drugs import FORM_TO_ROUTE, ROUTE_ALIASES
 
 STOPWORD_TOKENS = (
     set(SALT_TOKENS)

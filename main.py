@@ -22,10 +22,11 @@ from pipelines import (
     PipelineOptions,
     PipelineRunParams,
     get_pipeline,
+    slugify_item_ref_code,
 )
-from scripts.prepare import prepare  # re-exported for backward compatibility
-from scripts.match import match  # re-exported for backward compatibility
-from scripts.prepare_annex_f import prepare_annex_f  # re-exported for backward compatibility
+from pipelines.drugs.scripts.prepare_drugs import prepare  # re-exported for backward compatibility
+from pipelines.drugs.scripts.match_drugs import match  # re-exported for backward compatibility
+from pipelines.drugs.scripts.prepare_annex_f_drugs import prepare_annex_f  # re-exported for backward compatibility
 
 
 def _resolve_path(
@@ -33,30 +34,41 @@ def _resolve_path(
     *,
     base_dir: Path,
     fallback_dir: Optional[Path] = None,
+    default_name: Optional[str] = None,
 ) -> Optional[Path]:
     if path is None:
-        return None
+        if default_name is None:
+            return None
+        candidate = base_dir / default_name
+        if candidate.exists():
+            return candidate.resolve()
+        return candidate
+
     candidate = Path(path)
-    if not candidate.is_absolute():
-        base_candidate = (base_dir / candidate)
-        if base_candidate.exists():
-            candidate = base_candidate.resolve()
-        elif fallback_dir is not None:
-            fb_candidate = (fallback_dir / candidate)
-            if fb_candidate.exists():
-                candidate = fb_candidate.resolve()
-            else:
-                candidate = base_candidate.resolve()
-        else:
-            candidate = base_candidate.resolve()
-    return candidate
+    search_paths: list[Path] = []
+
+    if candidate.is_absolute():
+        search_paths.append(candidate)
+    else:
+        search_paths.append(base_dir / candidate)
+        if fallback_dir is not None:
+            search_paths.append(fallback_dir / candidate)
+        search_paths.append(Path.cwd() / candidate)
+        search_paths.append(candidate)
+
+    for option in search_paths:
+        if option.exists():
+            return option.resolve()
+
+    # Fall back to the first search path even if it does not yet exist; callers can handle creation.
+    return search_paths[0].resolve()
 
 
 def run_all(
     annex_csv: str | os.PathLike[str] | None,
     pnf_csv: str | os.PathLike[str] | None,
     esoa_csv: str | os.PathLike[str],
-    outdir: str | os.PathLike[str] = ".",
+    outdir: str | os.PathLike[str] | None = None,
     out_csv: str | os.PathLike[str] = "esoa_matched.csv",
     *,
     item_ref_code: str = "DrugsAndMedicine",
@@ -64,19 +76,33 @@ def run_all(
 ) -> str:
     """Execute the registered pipeline for the requested ITEM_REF_CODE."""
     project_root = Path(__file__).resolve().parent
-    output_dir = Path(outdir).resolve()
+    slug = slugify_item_ref_code(item_ref_code)
+
+    inputs_dir = (project_root / "inputs" / slug).resolve()
+    inputs_dir.mkdir(parents=True, exist_ok=True)
+
+    if outdir is None:
+        output_dir = (project_root / "outputs" / slug).resolve()
+    else:
+        output_dir = Path(outdir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
     pipeline = get_pipeline(item_ref_code)
+    fallback_inputs = project_root / "inputs"
+
+    annex_default = "annex_f.csv" if item_ref_code == "DrugsAndMedicine" else None
+    pnf_default = "pnf.csv" if item_ref_code == "DrugsAndMedicine" else None
+    esoa_default = "esoa_combined.csv" if item_ref_code == "DrugsAndMedicine" else None
+
     params = PipelineRunParams(
-        annex_csv=_resolve_path(annex_csv, base_dir=Path.cwd(), fallback_dir=output_dir),
-        pnf_csv=_resolve_path(pnf_csv, base_dir=Path.cwd(), fallback_dir=output_dir),
-        esoa_csv=_resolve_path(esoa_csv, base_dir=Path.cwd(), fallback_dir=output_dir),
+        annex_csv=_resolve_path(annex_csv, base_dir=inputs_dir, fallback_dir=fallback_inputs, default_name=annex_default),
+        pnf_csv=_resolve_path(pnf_csv, base_dir=inputs_dir, fallback_dir=fallback_inputs, default_name=pnf_default),
+        esoa_csv=_resolve_path(esoa_csv, base_dir=inputs_dir, fallback_dir=fallback_inputs, default_name=esoa_default),
         out_csv=(output_dir / Path(out_csv).name),
     )
     context = PipelineContext(
         project_root=project_root,
-        inputs_dir=output_dir,
+        inputs_dir=inputs_dir,
         outputs_dir=output_dir,
     )
     options = PipelineOptions(
@@ -90,10 +116,10 @@ def run_all(
 def _cli() -> None:
     """Parse CLI arguments and run the requested pipeline."""
     parser = argparse.ArgumentParser(description="Modular eSOA matching pipeline runner")
-    parser.add_argument("--annex", required=False, default="annex_f.csv")
-    parser.add_argument("--pnf", required=False, default="pnf.csv")
-    parser.add_argument("--esoa", required=False, default="esoa.csv")
-    parser.add_argument("--outdir", required=False, default=".")
+    parser.add_argument("--annex", required=False)
+    parser.add_argument("--pnf", required=False)
+    parser.add_argument("--esoa", required=False)
+    parser.add_argument("--outdir", required=False)
     parser.add_argument("--out", required=False, default="esoa_matched.csv")
     parser.add_argument(
         "--item-ref-code",
@@ -104,11 +130,8 @@ def _cli() -> None:
     parser.add_argument("--skip-excel", action="store_true", help="Skip XLSX export when supported by the pipeline")
     args = parser.parse_args()
 
-    annex_path = Path(args.annex)
-    if not annex_path.is_absolute():
-        annex_path = Path(args.outdir) / annex_path
     run_all(
-        annex_path,
+        args.annex,
         args.pnf,
         args.esoa,
         args.outdir,

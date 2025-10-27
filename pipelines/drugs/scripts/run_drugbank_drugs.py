@@ -30,7 +30,7 @@ def stream_r_script(executable: str, script_path: Path) -> int:
 
 
 def main() -> None:
-    project_root = Path(__file__).resolve().parent
+    project_root = Path(__file__).resolve().parents[3]
     r_script = project_root / "dependencies" / "drugbank_generics" / "drugbank.R"
 
     if not r_script.exists():

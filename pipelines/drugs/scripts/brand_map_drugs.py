@@ -11,7 +11,7 @@ from typing import Dict, List, Optional, Tuple, Set
 import ahocorasick  # type: ignore
 import pandas as pd
 
-from .text_utils import _base_name, _normalize_text_basic, normalize_compact
+from .text_utils_drugs import _base_name, _normalize_text_basic, normalize_compact
 
 
 @dataclass

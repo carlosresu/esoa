@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """Convenience wrapper to scrape the FDA PH food catalog manually."""
 
-from scripts.fda_ph_food_scraper import main
+from .fda_ph_food_scraper_drugs import main
 
 
 if __name__ == "__main__":

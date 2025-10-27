@@ -8,7 +8,7 @@ from typing import Set
 
 import unicodedata
 
-from .text_utils import _base_name
+from .text_utils_drugs import _base_name
 
 _CONNECTOR_PATTERN = re.compile(r"\s*(?:\+|/|&|,| and | plus )\s*", re.IGNORECASE)
 _PAREN_RX = re.compile(r"\(([^)]+)\)")
