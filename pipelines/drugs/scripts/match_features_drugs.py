@@ -729,16 +729,15 @@ def _segment_norm(seg: str) -> str:
     s = re.sub(r"\s+", " ", s).strip()
     return s
 
-def load_latest_who_dir(root_dir: str) -> str | None:
-    """Locate the newest WHO ATC export, preferring the pipeline-specific inputs directory."""
-    who_dir = str(PIPELINE_WHO_ATC_DIR)
-    candidates = glob.glob(os.path.join(who_dir, "who_atc_*_molecules.csv"))
-    if candidates:
-        return who_dir
+def load_latest_who_file(root_dir: str) -> str | None:
+    """Return the freshest WHO ATC CSV path, preferring the pipeline-specific inputs directory."""
+    who_candidates = glob.glob(os.path.join(str(PIPELINE_WHO_ATC_DIR), "who_atc_*_molecules.csv"))
+    if who_candidates:
+        return max(who_candidates, key=os.path.getmtime)
     legacy_dir = os.path.join(root_dir, "dependencies", "atcd", "output")
     legacy_candidates = glob.glob(os.path.join(legacy_dir, "who_atc_*_molecules.csv"))
     if legacy_candidates:
-        return legacy_dir
+        return max(legacy_candidates, key=os.path.getmtime)
     return None
 
 def _tokenize_unknowns(s_norm: str) -> List[str]:
@@ -916,7 +915,7 @@ def build_features(
     who_regex_box = [None]
     def _load_who():
         root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
-        who_file = load_latest_who_dir(root_dir)
+        who_file = load_latest_who_file(root_dir)
         if who_file and os.path.exists(who_file):
             cbn, cand, details = load_who_molecules(who_file)
             codes_by_name.update(cbn)
