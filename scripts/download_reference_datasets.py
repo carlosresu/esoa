@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 
-DEFAULT_ROOT = Path("outputs/reference_datasets")
+DEFAULT_ROOT = Path("raw/reference_datasets")
 
 
 @dataclass(frozen=True)
