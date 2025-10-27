@@ -6,8 +6,8 @@ from typing import Dict, List, Tuple
 
 import ahocorasick  # type: ignore
 
-from .text_utils import normalize_compact, normalize_text
-from .pnf_aliases import expand_generic_aliases, SPECIAL_GENERIC_ALIASES
+from .text_utils_drugs import normalize_compact, normalize_text
+from .pnf_aliases_drugs import expand_generic_aliases, SPECIAL_GENERIC_ALIASES
 
 
 def build_molecule_automata(pnf_df) -> Tuple[ahocorasick.Automaton, ahocorasick.Automaton]:

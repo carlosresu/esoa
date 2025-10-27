@@ -23,9 +23,9 @@ from ..base import (
     TimingHook,
 )
 from ..registry import register_pipeline
-from scripts.prepare import prepare
-from scripts.prepare_annex_f import prepare_annex_f
-from scripts.match import match
+from .scripts.prepare_drugs import prepare
+from .scripts.prepare_annex_f_drugs import prepare_annex_f
+from .scripts.match_drugs import match
 
 THIS_DIR = Path(__file__).resolve().parents[2]
 ATCD_SUBDIR = Path("dependencies") / "atcd"
@@ -221,7 +221,7 @@ class DrugsAndMedicinePipeline(BasePipeline):
                     [
                         sys.executable,
                         "-m",
-                        "scripts.fda_ph_drug_scraper",
+                        "pipelines.drugs.scripts.fda_ph_drug_scraper_drugs",
                         "--outdir",
                         str(inputs_dir),
                         "--outfile",
@@ -243,11 +243,11 @@ class DrugsAndMedicinePipeline(BasePipeline):
 
     @staticmethod
     def _run_resolve_unknowns(project_root: Path) -> None:
-        scripts_path = project_root / "scripts" / "resolve_unknowns.py"
-        root_path = project_root / "resolve_unknowns.py"
-        if scripts_path.is_file():
-            mod_name = "scripts.resolve_unknowns"
-        elif root_path.is_file():
+        pipeline_path = project_root / "pipelines" / "drugs" / "scripts" / "resolve_unknowns_drugs.py"
+        legacy_path = project_root / "resolve_unknowns.py"
+        if pipeline_path.is_file():
+            mod_name = "pipelines.drugs.scripts.resolve_unknowns_drugs"
+        elif legacy_path.is_file():
             mod_name = "resolve_unknowns"
         else:
             return

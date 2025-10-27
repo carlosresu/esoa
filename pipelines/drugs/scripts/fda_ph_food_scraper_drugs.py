@@ -17,6 +17,8 @@ from urllib.parse import parse_qs, urljoin, urlparse
 
 import requests
 
+from ..constants import PIPELINE_INPUTS_DIR, PIPELINE_RAW_DIR
+
 BASE_URL = "https://verification.fda.gov.ph"
 FOOD_PRODUCTS_URL = f"{BASE_URL}/All_FoodProductslist.php"
 
@@ -42,7 +44,7 @@ ACCEPT_LANGUAGES = [
     "en-SG,en;q=0.9",
 ]
 
-RAW_DIR = Path(__file__).resolve().parent.parent / "raw"
+RAW_DIR = PIPELINE_RAW_DIR
 
 PAGE_SIZES = ("100",)
 DEFAULT_TIMEOUT = None
@@ -452,7 +454,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description="Scrape the FDA Philippines food product catalog via paginated 100-row views."
     )
-    parser.add_argument("--outdir", default="inputs", help="Directory for the processed CSV")
+    parser.add_argument("--outdir", default=str(PIPELINE_INPUTS_DIR), help="Directory for the processed CSV")
     parser.add_argument("--outfile", default="fda_food_products.csv", help="Processed output filename")
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT, help="Optional per-request timeout (seconds)")
     parser.add_argument("--force", action="store_true", help="Force re-scraping even if output exists")

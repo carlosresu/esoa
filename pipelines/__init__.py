@@ -11,6 +11,7 @@ from .base import (
     PipelineRunParams,
 )
 from .registry import PIPELINE_REGISTRY, get_pipeline, list_pipelines
+from .utils import slugify_item_ref_code
 
 __all__ = [
     "BasePipeline",
@@ -22,4 +23,5 @@ __all__ = [
     "PIPELINE_REGISTRY",
     "get_pipeline",
     "list_pipelines",
+    "slugify_item_ref_code",
 ]

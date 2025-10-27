@@ -11,7 +11,8 @@ import re
 from pathlib import Path
 from typing import Callable, List, Optional, Set
 
-from .reference_data import load_drugbank_generics, load_ignore_words
+from ..constants import PIPELINE_INPUTS_DIR, PIPELINE_OUTPUTS_DIR, PROJECT_ROOT
+from .reference_data_drugs import load_drugbank_generics, load_ignore_words
 
 # Local lightweight spinner so this module is self-contained
 def _run_with_spinner(label: str, func: Callable[[], None]) -> float:
@@ -183,8 +184,8 @@ def _known_tokens() -> Set[str]:
         return _KNOWN_TOKENS_CACHE
 
     tokens: Set[str] = set()
-    project_root = Path(__file__).resolve().parent.parent
-    inputs_dir = project_root / "inputs"
+    project_root = PROJECT_ROOT
+    inputs_dir = PIPELINE_INPUTS_DIR
 
     # PNF prepared
     pnf_prepared = inputs_dir / "pnf_prepared.csv"

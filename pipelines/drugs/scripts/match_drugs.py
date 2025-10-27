@@ -39,9 +39,9 @@ def _run_with_spinner(label: str, func: Callable[[], None]) -> float:
         raise err[0]
     return elapsed
 
-from .match_features import build_features
-from .match_scoring import score_and_classify
-from .match_outputs import write_outputs
+from .match_features_drugs import build_features
+from .match_scoring_drugs import score_and_classify
+from .match_outputs_drugs import write_outputs
 
 
 def _assemble_reference_catalogue(annex_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.DataFrame:

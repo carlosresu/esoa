@@ -73,8 +73,8 @@ WHO_ADM_ROUTE_MAP: dict[str, set[str]] = {
     "urethral": {"urethral"},
 }
 
-from .dose import dose_similarity
-from .text_utils import _base_name, _normalize_text_basic
+from .dose_drugs import dose_similarity
+from .text_utils_drugs import _base_name, _normalize_text_basic
 
 
 def _mk_reason(series: pd.Series, default_ok: str) -> pd.Series:

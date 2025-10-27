@@ -9,27 +9,28 @@ from typing import Tuple, Optional, List, Dict, Set, Callable, Any
 import difflib
 import numpy as np, pandas as pd
 import ahocorasick  # type: ignore
-from .aho import build_molecule_automata, scan_pnf_all
-from .concurrency import maybe_parallel_map, resolve_worker_count
-from .combos import SALT_TOKENS
-from .routes_forms import extract_route_and_form
-from .text_utils import (
+from ..constants import PIPELINE_INPUTS_DIR
+from .aho_drugs import build_molecule_automata, scan_pnf_all
+from .concurrency_drugs import maybe_parallel_map, resolve_worker_count
+from .combos_drugs import SALT_TOKENS
+from .routes_forms_drugs import extract_route_and_form
+from .text_utils_drugs import (
     _base_name,
     _normalize_text_basic,
     normalize_text,
     extract_parenthetical_phrases,
     STOPWORD_TOKENS,
 )
-from .reference_data import load_drugbank_generics, load_ignore_words
-from .who_molecules import detect_all_who_molecules, load_who_molecules
-from .brand_map import load_latest_brandmap, build_brand_automata, fda_generics_set
-from .pnf_aliases import (
+from .reference_data_drugs import load_drugbank_generics, load_ignore_words
+from .who_molecules_drugs import detect_all_who_molecules, load_who_molecules
+from .brand_map_drugs import load_latest_brandmap, build_brand_automata, fda_generics_set
+from .pnf_aliases_drugs import (
     expand_generic_aliases,
     SPECIAL_GENERIC_ALIASES,
     apply_spelling_rules,
     SALT_FORM_SUFFIXES,
 )
-from .pnf_partial import PnfTokenIndex
+from .pnf_partial_drugs import PnfTokenIndex
 
 # Reference dictionaries describing canonical route/form mappings leveraged
 # throughout the feature builder.  Keeping them in one place simplifies policy
@@ -929,7 +930,7 @@ def build_features(
     brand_df = [None]
     def _load_brand():
         project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
-        inputs_dir = os.path.join(project_root, "inputs")
+        inputs_dir = str(PIPELINE_INPUTS_DIR)
         # Attempt to load the newest brand map for downstream substitutions.
         brand_df[0] = load_latest_brandmap(inputs_dir)
     _timed("Load FDA brand map", _load_brand)
@@ -1078,8 +1079,8 @@ def build_features(
 
     def _load_nontherapeutic_catalog():
         project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
-        inputs_dir = os.path.join(project_root, "inputs")
-        catalog_path = os.path.join(inputs_dir, "fda_food_products.csv")
+        inputs_dir = str(PIPELINE_INPUTS_DIR)
+        catalog_path = str(PIPELINE_INPUTS_DIR / "fda_food_products.csv")
         if not os.path.exists(catalog_path):
             return
         try:
@@ -1337,7 +1338,7 @@ def build_features(
 
     # 7) Dose/route/form on original normalized text
     def _dose_route_form_raw():
-        from .dose import extract_dosage as _extract_dosage
+        from .dose_drugs import extract_dosage as _extract_dosage
         norm_values = df["normalized"].tolist()
         dosage_parsed = maybe_parallel_map(norm_values, _extract_dosage)
         df["dosage_parsed_raw"] = dosage_parsed
@@ -1485,7 +1486,7 @@ def build_features(
 
     # 9) Dose/route/form on match_basis
     def _dose_route_form_basis():
-        from .dose import extract_dosage as _extract_dosage
+        from .dose_drugs import extract_dosage as _extract_dosage
         basis_values = df["match_basis"].tolist()
         dosage_parsed = maybe_parallel_map(basis_values, _extract_dosage)
         df["dosage_parsed"] = dosage_parsed

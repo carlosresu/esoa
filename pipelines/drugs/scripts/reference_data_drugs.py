@@ -12,7 +12,8 @@ from typing import Dict, Iterable, List, Set, Tuple
 
 import pandas as pd
 
-from .text_utils import _normalize_text_basic
+from ..constants import PIPELINE_INPUTS_DIR, PIPELINE_SLUG, PROJECT_ROOT
+from .text_utils_drugs import _normalize_text_basic
 
 _TOKEN_RX = re.compile(r"[a-z]+")
 
@@ -20,7 +21,7 @@ _TOKEN_RX = re.compile(r"[a-z]+")
 def _project_root(project_root: str | Path | None = None) -> Path:
     """Resolve the repository root so loaders work regardless of caller cwd."""
     if project_root is None:
-        return Path(__file__).resolve().parent.parent
+        return PROJECT_ROOT
     return Path(project_root).resolve()
 
 
@@ -53,10 +54,11 @@ def load_drugbank_generics(
         - display_lookup: normalized generic -> representative display string.
     """
     root = _project_root(project_root)
+    inputs_dir = root / "inputs" / PIPELINE_SLUG
     candidates = [
         root / "dependencies" / "drugbank" / "output" / "generics.csv",
-        root / "inputs" / "generics.csv",
-        root / "inputs" / "drugbank_generics.csv",
+        inputs_dir / "generics.csv",
+        inputs_dir / "drugbank_generics.csv",
     ]
 
     normalized_map: Dict[str, str] = {}
@@ -131,7 +133,7 @@ def load_ignore_words(project_root: str | Path | None = None) -> Set[str]:
     Returns a set of lowercase alphanumeric tokens.
     """
     root = _project_root(project_root)
-    inputs_dir = root / "inputs"
+    inputs_dir = root / "inputs" / PIPELINE_SLUG
 
     tokens: Set[str] = set(DEFAULT_IGNORE_TOKENS)
 
