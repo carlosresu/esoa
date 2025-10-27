@@ -10,7 +10,7 @@ and output stages in `pipelines/labs/scripts`.
    - Normalizes description text, deduplicates overlaps between CSV/TSV, and writes
      `inputs/labs/esoa_prepared_labs.csv`.
 2. **Master catalogue loading**
-   - Loads the hospital Labs catalogue from `inputs/labs/Labs.csv` and optional Diagnostics
+   - Loads the hospital Labs catalogue from `inputs/labs/labs.csv` and optional Diagnostics
      reference data from `raw/Diagnostics.xlsx` (columns A–F).
 3. **Matching** (`pipelines/labs/scripts/match_labs.py`)
    - Normalizes each eSOA description, tries an exact match against the Labs master list,
