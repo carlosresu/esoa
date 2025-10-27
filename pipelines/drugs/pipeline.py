@@ -207,10 +207,30 @@ class DrugsAndMedicinePipeline(BasePipeline):
                     stdout=devnull,
                     stderr=devnull,
                 )
-        # Sync generated WHO ATC exports into the pipeline inputs directory.
+        # Sync generated WHO ATC exports into the pipeline inputs directory and
+        # remove legacy copies left at the repository root.
         dest_inputs_dir.mkdir(parents=True, exist_ok=True)
-        for csv_path in out_dir.glob("*.csv"):
-            shutil.copy2(csv_path, dest_inputs_dir / csv_path.name)
+        root_inputs_dir = project_root / "inputs"
+
+        def _hydrate(dest: Path, source: Path) -> None:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            # Overwrite in-place so the freshest export is used for this run.
+            if dest.exists():
+                dest.unlink()
+            shutil.copy2(source, dest)
+
+        patterns = ("who_atc_*.csv", "WHO ATC-DDD *.csv")
+        for pattern in patterns:
+            for csv_path in out_dir.glob(pattern):
+                _hydrate(dest_inputs_dir / csv_path.name, csv_path)
+
+            # Move any remnants from the legacy ./inputs/ directory into the
+            # pipeline-scoped inputs folder so future runs only see the new layout.
+            for legacy_path in root_inputs_dir.glob(pattern):
+                target = dest_inputs_dir / legacy_path.name
+                if target.exists():
+                    target.unlink()
+                shutil.move(str(legacy_path), str(target))
 
     @staticmethod
     def _build_brand_map(inputs_dir: Path) -> Path:
