@@ -17,7 +17,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("--pnf", default=str(run_dm.PIPELINE_INPUTS_SUBDIR / "pnf.csv"), help="Path to PNF CSV")
     parser.add_argument("--esoa", default=None, help="Path to eSOA CSV (defaults to concatenated esoa_pt_*.csv)")
-    parser.add_argument("--out", default="esoa_matched.csv", help="Output CSV filename (stored under ./outputs/drugs_and_medicine_drugs)")
+    parser.add_argument("--out", default="esoa_matched_drugs.csv", help="Output CSV filename (stored under ./outputs/drugs_and_medicine_drugs)")
     args = parser.parse_args(argv)
 
     minimal_args = [

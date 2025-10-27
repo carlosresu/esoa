@@ -452,7 +452,7 @@ def main_entry() -> None:
     parser.add_argument("--annex", default=str(PIPELINE_INPUTS_SUBDIR / "annex_f.csv"), help="Path to Annex F CSV")
     parser.add_argument("--pnf", default=str(PIPELINE_INPUTS_SUBDIR / "pnf.csv"), help="Path to PNF CSV")
     parser.add_argument("--esoa", default=None, help="Path to eSOA CSV (defaults to concatenated inputs/drugs_and_medicine_drugs/esoa_pt_*.csv)")
-    parser.add_argument("--out", default="esoa_matched.csv", help="Output CSV filename (saved under ./outputs/drugs_and_medicine_drugs)")
+    parser.add_argument("--out", default="esoa_matched_drugs.csv", help="Output CSV filename (saved under ./outputs/drugs_and_medicine_drugs)")
     parser.add_argument("--skip-r", action="store_true", help="Skip running ATC R preprocessing scripts")
     parser.add_argument("--skip-brandmap", action="store_true", help="Skip building FDA brand map CSV")
     parser.add_argument("--skip-excel", action="store_true", help="Skip writing XLSX output (CSV and summaries still produced)")

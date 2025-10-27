@@ -1,6 +1,6 @@
-# Data Dictionary: `outputs/esoa_matched.csv`
+# Data Dictionary: `outputs/drugs_and_medicine_drugs/esoa_matched_drugs.csv`
 
-Each record in `esoa_matched.csv` represents one normalized eSOA free-text row, enriched with features, reference lookups, and classification signals produced by [pipelines/drugs/scripts/match_features_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_features_drugs.py), [pipelines/drugs/scripts/match_scoring_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_scoring_drugs.py), and [pipelines/drugs/scripts/match_outputs_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_outputs_drugs.py).
+Each record in `esoa_matched_drugs.csv` represents one normalized eSOA free-text row, enriched with features, reference lookups, and classification signals produced by [pipelines/drugs/scripts/match_features_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_features_drugs.py), [pipelines/drugs/scripts/match_scoring_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_scoring_drugs.py), and [pipelines/drugs/scripts/match_outputs_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_outputs_drugs.py).
 
 📘 **Where to find implementation notes:** the modules listed above now start
 with docstrings summarizing their responsibilities and contain refreshed inline
