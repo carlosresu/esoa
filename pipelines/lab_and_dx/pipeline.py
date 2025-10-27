@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Placeholder pipeline for ITEM_REF_CODE == 'LaboratoryAndDiagnostic'."""
+"""Pipeline implementation for ITEM_REF_CODE == 'LaboratoryAndDiagnostic'."""
 
 from __future__ import annotations
 
@@ -17,17 +17,19 @@ from ..base import (
     TimingHook,
 )
 from ..registry import register_pipeline
+from .constants import PIPELINE_RAW_DIR
+from .scripts import match_labdx_records, prepare_labdx_inputs
 
 
 @register_pipeline
 class LaboratoryAndDiagnosticPipeline(BasePipeline):
-    """Scaffolding that future lab/diagnostic matching logic can build upon."""
+    """Normalize and match Laboratory & Diagnostic eSOA entries."""
 
     item_ref_code = "LaboratoryAndDiagnostic"
     display_name = "Laboratory & Diagnostic"
     description = (
-        "Stub pipeline that keeps the registry aware of laboratory and diagnostic items. "
-        "Implement category-specific normalization and matching logic here."
+        "Standardizes Laboratory & Diagnostic eSOA descriptions by matching against the "
+        "official LabAndDx catalog first, then falling back to Diagnostics.xlsx descriptions."
     )
 
     def prepare_inputs(
@@ -38,7 +40,12 @@ class LaboratoryAndDiagnosticPipeline(BasePipeline):
         *,
         timing_hook: Optional[TimingHook] = None,
     ) -> PipelinePreparedInputs:
-        return PipelinePreparedInputs(esoa_csv=params.esoa_csv)
+        raw_dir = PIPELINE_RAW_DIR
+        csv_source = raw_dir / "03 ESOA_ITEM_LIB.csv"
+        tsv_source = raw_dir / "03 ESOA_ITEM_LIB.tsv"
+        dest_csv = context.inputs_dir / "esoa_prepared_labdx.csv"
+        prepared_path = prepare_labdx_inputs(csv_source, tsv_source, None, dest_csv)
+        return PipelinePreparedInputs(esoa_csv=prepared_path)
 
     def match(
         self,
@@ -48,7 +55,18 @@ class LaboratoryAndDiagnosticPipeline(BasePipeline):
         *,
         timing_hook: Optional[TimingHook] = None,
     ) -> PipelineResult:
-        raise NotImplementedError(
-            "LaboratoryAndDiagnostic pipeline does not yet implement matching. "
-            "Add algorithm-specific logic under pipelines/lab_and_dx/."
-        )
+        if prepared.esoa_csv is None:
+            raise ValueError("LaboratoryAndDiagnostic pipeline requires a prepared eSOA CSV.")
+
+        out_csv = options.extra.get("out_csv") if options.extra else None
+        output_path = Path(out_csv) if out_csv else context.outputs_dir / "esoa_matched_labdx.csv"
+
+        master_csv = context.inputs_dir / "LabAndDx.csv"
+        if not master_csv.is_file():
+            raise FileNotFoundError(
+                f"Master Laboratory & Diagnostic catalog not found at {master_csv}."
+            )
+        diagnostics_xlsx = PIPELINE_RAW_DIR / "Diagnostics.xlsx"
+
+        matched_path = match_labdx_records(Path(prepared.esoa_csv), master_csv, diagnostics_xlsx, output_path)
+        return PipelineResult(matched_csv=matched_path, prepared=prepared)
