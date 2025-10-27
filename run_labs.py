@@ -8,10 +8,8 @@ import argparse
 import sys
 from pathlib import Path
 
-from pipelines import PipelineContext, PipelineOptions, PipelineRunParams, get_pipeline, slugify_item_ref_code
-
-ITEM_REF_CODE = "LaboratoryAndDiagnostic"
-PIPELINE_SLUG = slugify_item_ref_code(ITEM_REF_CODE)
+from pipelines import PipelineContext, PipelineOptions, PipelineRunParams, get_pipeline
+from pipelines.labs import PIPELINE_INPUTS_DIR, PIPELINE_OUTPUTS_DIR, ITEM_REF_CODE
 
 
 def _resolve_esoa_path(esoa_arg: str, inputs_dir: Path) -> Path:
@@ -44,11 +42,11 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     project_root = Path(__file__).resolve().parent
-    inputs_dir = (project_root / "inputs" / PIPELINE_SLUG).resolve()
+    inputs_dir = PIPELINE_INPUTS_DIR.resolve()
     outputs_dir = (
         Path(args.outdir).resolve()
         if args.outdir
-        else (project_root / "outputs" / PIPELINE_SLUG).resolve()
+        else PIPELINE_OUTPUTS_DIR.resolve()
     )
     inputs_dir.mkdir(parents=True, exist_ok=True)
     outputs_dir.mkdir(parents=True, exist_ok=True)
