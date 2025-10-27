@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Minimal launcher for the LaboratoryAndDiagnostic pipeline (stub)."""
+"""Minimal launcher for the LaboratoryAndDiagnostic pipeline (Lab & DX matching scaffold)."""
 
 from __future__ import annotations
 
@@ -12,10 +12,10 @@ import run_laboratory_and_diagnostic as lab_runner
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
-        description="Run the LaboratoryAndDiagnostic pipeline without optional extras (stub).",
+        description="Run the LaboratoryAndDiagnostic pipeline without optional extras (Lab & DX matching scaffold).",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--esoa", default=None, help="Path to Laboratory & Diagnostic CSV (defaults to inputs/laboratory_and_diagnostic/LabAndDx.csv)")
+    parser.add_argument("--esoa", default=None, help="Optional Laboratory & Diagnostic CSV to merge with the raw eSOA sources")
     parser.add_argument("--out", default="laboratory_and_diagnostic_matched.csv", help="Matched CSV filename")
     args = parser.parse_args(argv)
 

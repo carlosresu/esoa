@@ -46,7 +46,7 @@ def main(argv: Iterable[str] | None = None) -> None:
     parser.add_argument(
         "--include-stubs",
         action="store_true",
-        help="Attempt to run pipelines even when they are currently stubs (will exit with NotImplementedError).",
+        help="(Reserved) Attempt to run any pipelines still marked as stubs.",
     )
     args = parser.parse_args(list(argv) if argv is not None else None)
 
@@ -57,10 +57,7 @@ def main(argv: Iterable[str] | None = None) -> None:
             _run_drugs_and_medicine()
             continue
         if code == "LaboratoryAndDiagnostic":
-            if args.include_stubs:
-                _run_laboratory_and_diagnostic()
-            else:
-                print("Skipping LaboratoryAndDiagnostic (stub not yet implemented). Use --include-stubs to attempt running it.")
+            _run_laboratory_and_diagnostic()
             continue
         print(f"Unknown ITEM_REF_CODE '{code}'. Skipping.")
 

@@ -8,8 +8,8 @@ Console behavior:
   • The heavy “Match & write outputs” step uses a tqdm progress bar that starts immediately.
 
 File outputs:
-  • pipelines/drugs/scripts/match_outputs_drugs.py writes ./outputs/drugs_and_medicine/summary.txt (overwritten each run).
-  • Finally runs pipelines/drugs/scripts/resolve_unknowns_drugs.py to analyze unmatched terms and write its outputs under ./outputs/drugs_and_medicine.
+  • pipelines/drugs/scripts/match_outputs_drugs.py writes ./outputs/drugs_and_medicine_drugs/summary.txt (overwritten each run).
+  • Finally runs pipelines/drugs/scripts/resolve_unknowns_drugs.py to analyze unmatched terms and write its outputs under ./outputs/drugs_and_medicine_drugs.
 """
 from __future__ import annotations
 
@@ -99,8 +99,8 @@ DEFAULT_INPUTS_DIR = "inputs"
 OUTPUTS_DIR = "outputs"
 ITEM_REF_CODE = "DrugsAndMedicine"
 PIPELINE_SLUG = slugify_item_ref_code(ITEM_REF_CODE)
-PIPELINE_INPUTS_SUBDIR = Path(DEFAULT_INPUTS_DIR) / PIPELINE_SLUG
-PIPELINE_OUTPUTS_SUBDIR = Path(OUTPUTS_DIR) / PIPELINE_SLUG
+PIPELINE_INPUTS_SUBDIR = Path(DEFAULT_INPUTS_DIR) / f"{PIPELINE_SLUG}_drugs"
+PIPELINE_OUTPUTS_SUBDIR = Path(OUTPUTS_DIR) / f"{PIPELINE_SLUG}_drugs"
 
 # Ensure local imports when called from other CWDs
 if str(THIS_DIR) not in sys.path:
@@ -451,8 +451,8 @@ def main_entry() -> None:
     # Flags align with README guidance: allow skipping R preprocessing or FDA brand rebuilds when rerunning.
     parser.add_argument("--annex", default=str(PIPELINE_INPUTS_SUBDIR / "annex_f.csv"), help="Path to Annex F CSV")
     parser.add_argument("--pnf", default=str(PIPELINE_INPUTS_SUBDIR / "pnf.csv"), help="Path to PNF CSV")
-    parser.add_argument("--esoa", default=None, help="Path to eSOA CSV (defaults to concatenated inputs/drugs_and_medicine/esoa_pt_*.csv)")
-    parser.add_argument("--out", default="esoa_matched.csv", help="Output CSV filename (saved under ./outputs/drugs_and_medicine)")
+    parser.add_argument("--esoa", default=None, help="Path to eSOA CSV (defaults to concatenated inputs/drugs_and_medicine_drugs/esoa_pt_*.csv)")
+    parser.add_argument("--out", default="esoa_matched.csv", help="Output CSV filename (saved under ./outputs/drugs_and_medicine_drugs)")
     parser.add_argument("--skip-r", action="store_true", help="Skip running ATC R preprocessing scripts")
     parser.add_argument("--skip-brandmap", action="store_true", help="Skip building FDA brand map CSV")
     parser.add_argument("--skip-excel", action="store_true", help="Skip writing XLSX output (CSV and summaries still produced)")

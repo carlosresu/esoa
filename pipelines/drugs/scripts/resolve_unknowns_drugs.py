@@ -15,15 +15,15 @@ Rules:
              (e.g., "tranexamic" matches "tranexamic acid", "tranexamic_acid", "tranexamic-acid").
 
 Input:
-  ./outputs/drugs_and_medicine/unknown_words.csv  (columns: word,count)
+  ./outputs/drugs_and_medicine_drugs/unknown_words.csv  (columns: word,count)
 
 Search lists:
-  • PNF: ./inputs/drugs_and_medicine/pnf_prepared.csv (generic_name)
-  • FDA brand map: newest of ./inputs/drugs_and_medicine/fda_brand_map_*.csv OR ./inputs/drugs_and_medicine/brand_map_*.csv (generic_name)
-  • WHO ATC: newest of ./inputs/drugs_and_medicine/who_atc_*_molecules.csv (atc_name)
+  • PNF: ./inputs/drugs_and_medicine_drugs/pnf_prepared.csv (generic_name)
+  • FDA brand map: newest of ./inputs/drugs_and_medicine_drugs/fda_brand_map_*.csv OR ./inputs/drugs_and_medicine_drugs/brand_map_*.csv (generic_name)
+  • WHO ATC: newest of ./inputs/drugs_and_medicine_drugs/who_atc_*_molecules.csv (atc_name)
 
 Output:
-  ./outputs/drugs_and_medicine/missed_generics.csv with columns:
+  ./outputs/drugs_and_medicine_drugs/missed_generics.csv with columns:
     unknown_word, unknown_count, source, reference_name, match_kind, reference_path
 
 Priority:
