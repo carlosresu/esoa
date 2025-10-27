@@ -9,7 +9,7 @@ from pathlib import Path
 from ..utils import slugify_item_ref_code
 
 ITEM_REF_CODE: str = "LaboratoryAndDiagnostic"
-PIPELINE_SLUG: str = slugify_item_ref_code(ITEM_REF_CODE)
+PIPELINE_SLUG: str = "labs"
 PROJECT_ROOT: Path = Path(__file__).resolve().parents[2]
 PIPELINE_INPUTS_DIR: Path = PROJECT_ROOT / "inputs" / PIPELINE_SLUG
 PIPELINE_OUTPUTS_DIR: Path = PROJECT_ROOT / "outputs" / PIPELINE_SLUG

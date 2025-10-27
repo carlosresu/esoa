@@ -1,4 +1,4 @@
-# Data Dictionary: `outputs/drugs_and_medicine_drugs/esoa_matched_drugs.csv`
+# Data Dictionary: `outputs/drugs/esoa_matched_drugs.csv`
 
 Each record in `esoa_matched_drugs.csv` represents one normalized eSOA free-text row, enriched with features, reference lookups, and classification signals produced by [pipelines/drugs/scripts/match_features_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_features_drugs.py), [pipelines/drugs/scripts/match_scoring_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_scoring_drugs.py), and [pipelines/drugs/scripts/match_outputs_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_outputs_drugs.py).
 
@@ -7,7 +7,7 @@ with docstrings summarizing their responsibilities and contain refreshed inline
 comments that describe how each column is derived.  Use them alongside this
 table when validating new data or onboarding reviewers.
 
-`run_drugs_and_medicine.py` now orchestrates dependency bootstrapping, input preparation, and the post-run execution of `pipelines/drugs/scripts/resolve_unknowns_drugs.py`, so the companion outputs mentioned below (e.g., `outputs/drugs_and_medicine_drugs/unknown_words.csv`) are regenerated automatically each time the pipeline completes.
+`run_drugs.py` now orchestrates dependency bootstrapping, input preparation, and the post-run execution of `pipelines/drugs/scripts/resolve_unknowns_drugs.py`, so the companion outputs mentioned below (e.g., `outputs/drugs/unknown_words.csv`) are regenerated automatically each time the pipeline completes.
 
 ⚙️ **Performance note:** Brand swaps, WHO detection, and other CPU-heavy transforms now fan out across a worker pool when large batches are processed. The helpers keep row order stable, so the column definitions below remain unchanged even when the pipeline runs in parallel.
 

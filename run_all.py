@@ -16,21 +16,21 @@ def _default_pipeline_order() -> List[str]:
     return [pipeline.item_ref_code for pipeline in list_pipelines()]
 
 
-def _run_drugs_and_medicine() -> None:
-    import run_drugs_and_medicine
+def _run_drugs() -> None:
+    import run_drugs
 
     original = sys.argv
     try:
-        sys.argv = ["run_drugs_and_medicine.py"]
-        run_drugs_and_medicine.main_entry()
+        sys.argv = ["run_drugs.py"]
+        run_drugs.main_entry()
     finally:
         sys.argv = original
 
 
-def _run_laboratory_and_diagnostic() -> None:
-    import run_laboratory_and_diagnostic as lab_runner
+def _run_labs() -> None:
+    import run_labs as labs_runner
 
-    lab_runner.main([])
+    labs_runner.main([])
 
 
 def main(argv: Iterable[str] | None = None) -> None:
@@ -54,10 +54,10 @@ def main(argv: Iterable[str] | None = None) -> None:
     for code in selected:
         print(f"=== Running pipeline: {code} ===")
         if code == "DrugsAndMedicine":
-            _run_drugs_and_medicine()
+            _run_drugs()
             continue
         if code == "LaboratoryAndDiagnostic":
-            _run_laboratory_and_diagnostic()
+            _run_labs()
             continue
         print(f"Unknown ITEM_REF_CODE '{code}'. Skipping.")
 

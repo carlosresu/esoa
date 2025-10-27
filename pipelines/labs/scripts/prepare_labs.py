@@ -9,7 +9,7 @@ from typing import Iterable
 
 import pandas as pd
 
-LAB_DX_CODE = "LaboratoryAndDiagnostic"
+LABS_CODE = "LaboratoryAndDiagnostic"
 ITEM_EXCLUDE_START = 1540
 ITEM_EXCLUDE_END = 1896
 
@@ -31,7 +31,7 @@ def _load_esoa_file(path: Path, *, sep: str = ",") -> pd.DataFrame:
 def _filter_category(frame: pd.DataFrame) -> pd.DataFrame:
     if frame.empty:
         return frame
-    filtered = frame[frame["ITEM_REF_CODE"].astype(str) == LAB_DX_CODE].copy()
+    filtered = frame[frame["ITEM_REF_CODE"].astype(str) == LABS_CODE].copy()
     if filtered.empty:
         return filtered
     # Exclude ITEM_NUMBER 1540–1896 inclusive
@@ -44,7 +44,7 @@ def _filter_category(frame: pd.DataFrame) -> pd.DataFrame:
     return filtered
 
 
-def prepare_labdx_inputs(
+def prepare_labs_inputs(
     csv_source: Path,
     tsv_source: Path,
     extra_sources: Iterable[Path] | None,

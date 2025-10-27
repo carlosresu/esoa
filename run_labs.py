@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Entry point for the LaboratoryAndDiagnostic pipeline (Laboratory & Diagnostic normalization)."""
+"""Entry point for the LaboratoryAndDiagnostic pipeline."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ PIPELINE_SLUG = slugify_item_ref_code(ITEM_REF_CODE)
 
 
 def _resolve_esoa_path(esoa_arg: str, inputs_dir: Path) -> Path:
-    """Resolve a user-provided Laboratory & Diagnostic CSV path."""
+    """Resolve a user-provided LaboratoryAndDiagnostic CSV path."""
     candidate = Path(esoa_arg)
     if not candidate.is_absolute():
         candidate_cwd = (Path.cwd() / candidate).resolve()
@@ -26,7 +26,7 @@ def _resolve_esoa_path(esoa_arg: str, inputs_dir: Path) -> Path:
 
     if not candidate.is_file():
         raise FileNotFoundError(
-            f"Laboratory & Diagnostic eSOA source not found at {candidate}. "
+            f"LaboratoryAndDiagnostic eSOA source not found at {candidate}. "
             f"Place the CSV under {inputs_dir} or pass --esoa with a valid path."
         )
     return candidate
@@ -34,11 +34,11 @@ def _resolve_esoa_path(esoa_arg: str, inputs_dir: Path) -> Path:
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
-        description="Run the LaboratoryAndDiagnostic pipeline (Lab & DX matching scaffold).",
+        description="Run the LaboratoryAndDiagnostic pipeline (Labs matching scaffold).",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--esoa", default=None, help="Optional additional Laboratory & Diagnostic CSV to merge with the raw eSOA sources")
-    parser.add_argument("--outdir", default=None, help="Destination directory for outputs (defaults to ./outputs/laboratory_and_diagnostic)")
+    parser.add_argument("--outdir", default=None, help="Destination directory for outputs (defaults to ./outputs/labs)")
     parser.add_argument("--out", default="esoa_matched_labs.csv", help="Matched CSV filename")
     parser.add_argument("--skip-excel", action="store_true", help="Skip XLSX export when the pipeline adds support")
     args = parser.parse_args(argv)
