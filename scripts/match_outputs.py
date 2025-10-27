@@ -46,31 +46,122 @@ def _run_with_spinner(label: str, func: Callable[[], None]) -> float:
     return elapsed
 
 OUTPUT_COLUMNS = [
-    "esoa_idx","raw_text","parentheticals",
+    "ITEM_NUMBER","esoa_idx","raw_text","parentheticals",
     "normalized","norm_compact","match_basis","match_basis_norm_basic",
     "probable_brands","did_brand_swap","brand_swap_added_generic","fda_dose_corroborated","fda_generics_list","drugbank_generics_list",
     "molecules_recognized","molecules_recognized_list","molecules_recognized_count",
     "dose_recognized","dosage_parsed_raw","dosage_parsed",
     "route_raw","form_raw","route_evidence_raw",
     "route","route_source","route_text","form","form_source","form_text",
-    "form_ok","route_ok","route_form_imputations","route_evidence",
-    "present_in_pnf","present_in_who","present_in_fda_generic","present_in_drugbank","probable_atc",
-    "generic_id","generic_final","molecule_token","pnf_hits_gids","pnf_hits_count","pnf_hits_tokens",
+    "form_ok","route_ok","route_form_imputations","route_evidence","reference_route_details",
+    "present_in_pnf","present_in_annex","present_in_who","present_in_fda_generic","present_in_drugbank","probable_atc",
+    "generic_id","generic_final","reference_source","reference_priority","molecule_token","pnf_hits_gids","pnf_hits_count","pnf_hits_tokens",
     "who_molecules_list","who_molecules","who_atc_codes_list","who_atc_codes","who_atc_count","who_atc_has_ddd","who_atc_adm_r","who_route_tokens","who_form_tokens",
     "selected_form","selected_route_allowed","selected_variant",
     "selected_dose_kind","selected_strength","selected_unit","selected_strength_mg",
     "selected_per_val","selected_per_unit","selected_ratio_mg_per_ml","selected_pct",
-    "dose_sim","looks_combo_final","combo_reason","combo_known_generics_count",
+    "dose_sim",
     "non_therapeutic_summary","non_therapeutic_detail","non_therapeutic_tokens","non_therapeutic_hits","non_therapeutic_best",
     "unknown_kind","unknown_words_list","unknown_words",
     "qty_pnf","qty_who","qty_fda_drug","qty_drugbank","qty_fda_food","qty_unknown",
-    "atc_code_final","confidence",
+    "atc_code_final","drug_code_final","primary_code_final","confidence",
     "match_molecule(s)","match_quality","detail_final",
     "bucket_final","why_final","reason_final",
 ]
 
 # Reserved for pipeline-specific tokens we know are safe to ignore.
 COMMON_UNKNOWN_STOPWORDS: Set[str] = set(load_ignore_words())
+
+FRIENDLY_MOLECULE_LABELS = {
+    "ValidMoleculeWithDrugCodeInAnnex": "Annex generic (Drug Code)",
+    "ValidBrandSwappedForGenericInAnnex": "Annex brand swap",
+    "ValidMoleculeWithATCinPNF": "PNF generic (ATC)",
+    "ValidBrandSwappedForGenericInPNF": "PNF brand swap",
+    "ValidMoleculeWithATCinWHO/NotInPNF": "WHO-only generic (ATC)",
+    "ValidBrandSwappedForMoleculeWithATCinWHO": "WHO brand swap",
+    "ValidMoleculeNoATCinFDA/NotInPNF": "FDA generic (no ATC)",
+    "ValidMoleculeInDrugBank": "DrugBank generic",
+    "ValidMoleculeNoCodeInReference": "Reference generic w/o code",
+    "NonTherapeuticCatalogOnly": "Non-therapeutic catalogue hit",
+    "NonTherapeuticFoodWithUnknownTokens": "Non-therapeutic food + unknown tokens",
+    "AllTokensUnknownTo_PNF_WHO_FDA": "All tokens unknown (PNF/WHO/FDA)",
+    "RowFailedAllMatchingSteps": "No catalogue match",
+}
+
+FRIENDLY_MATCH_QUALITY_LABELS = {
+    "auto_exact_dose_route_form": "Exact dose / route / form",
+    "dose_mismatch_same_atc": "Dose mismatch (same drug code)",
+    "dose_mismatch_varied_atc": "Dose mismatch (different drug codes)",
+    "dose_mismatch": "Dose mismatch",
+    "dose_conflicts_annex_drug_code": "Dose conflicts Annex drug code",
+    "annex_drug_code_missing": "Annex drug code missing",
+    "no_dose_available": "Dose missing",
+    "no_dose_form_and_route_available": "Dose, form & route missing",
+    "no_dose_and_form_available": "Dose & form missing",
+    "no_form_and_route_available": "Form & route missing",
+    "no_form_available": "Form missing",
+    "form_mismatch": "Form mismatch",
+    "route_mismatch": "Route mismatch",
+    "route_form_mismatch": "Route & form mismatch",
+    "contains_unknown_tokens": "Contains unknown tokens",
+    "nontherapeutic_catalog_match": "Non-therapeutic catalogue hit",
+    "nontherapeutic_and_unknown_tokens": "Non-therapeutic + unknown tokens",
+    "no_reference_catalog_match": "No reference match",
+    "review_required_metadata_insufficient": "Metadata insufficient",
+    "who_does_not_provide_dose_info": "WHO missing dose info",
+    "who_does_not_provide_route_info": "WHO missing route info",
+    "candidate_ready": "Candidate ready",
+    "candidate_ready_for_atc_assignment": "Candidate ready for ATC",
+    "who_atc_assigned": "WHO ATC assigned",
+    "fda_brand_linked": "FDA brand linked",
+}
+
+_ABBREVIATION_LOOKUP = {
+    "pnf": "PNF",
+    "who": "WHO",
+    "fda": "FDA",
+    "atc": "ATC",
+    "ddd": "DDD",
+}
+
+
+def _prettify_label_fallback(raw: str) -> str:
+    raw = raw.replace("(", " (").replace(")", ") ")
+    parts = [part for part in raw.replace("/", " / ").split("_") if part]
+    words: List[str] = []
+    for part in parts:
+        token = part.strip()
+        if not token:
+            continue
+        key = token.lower()
+        if key in _ABBREVIATION_LOOKUP:
+            words.append(_ABBREVIATION_LOOKUP[key])
+        elif token.isupper():
+            words.append(token)
+        elif len(token) <= 3:
+            words.append(token.upper())
+        else:
+            words.append(token.capitalize())
+    label = " ".join(words).replace(" / ", "/").strip()
+    return label or raw
+
+
+def _friendly_label(value: str, mapping: dict[str, str]) -> str:
+    if not isinstance(value, str):
+        return value
+    trimmed = value.strip()
+    if not trimmed:
+        return trimmed
+    if trimmed.upper() == "N/A":
+        return "N/A"
+    if trimmed.startswith("PartiallyKnownTokensFrom_"):
+        sources = [src for src in trimmed.split("_")[1:] if src]
+        sources_display = "/".join(
+            _ABBREVIATION_LOOKUP.get(src.lower(), src.upper() if len(src) <= 3 else src)
+            for src in sources
+        ) or "catalogues"
+        return f"Partial tokens from {sources_display}"
+    return mapping.get(trimmed, _prettify_label_fallback(trimmed))
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 _KNOWN_TOKENS_CACHE: Optional[Set[str]] = None
@@ -141,7 +232,7 @@ def _known_tokens() -> Set[str]:
             pass
 
     tokens.update(load_ignore_words(project_root))
-    _, drugbank_tokens, _ = load_drugbank_generics(project_root)
+    _, drugbank_tokens, _, _ = load_drugbank_generics(project_root)
     tokens.update(drugbank_tokens)
 
     _KNOWN_TOKENS_CACHE = tokens
@@ -179,6 +270,8 @@ def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
                 bucket_rows.get("match_quality", pd.Series(["N/A"] * len(bucket_rows), index=bucket_rows.index)),
                 "N/A",
             )
+            match_molecule = match_molecule.map(lambda val: _friendly_label(val, FRIENDLY_MOLECULE_LABELS))
+            match_quality = match_quality.map(lambda val: _friendly_label(val, FRIENDLY_MATCH_QUALITY_LABELS))
             grouped = (
                 pd.DataFrame(
                     {
@@ -195,7 +288,7 @@ def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
                 pct_total = round(row["n"] / float(total) * 100, 2) if total else 0.0
                 lines.append(
                     f"  {row['match_molecule']}: {row['match_quality']}: {int(row['n']):,} "
-                    f"({pct_total}% of global total)"
+                    f"({pct_total}%)"
                 )
 
         for bucket in bucket_order:
@@ -227,12 +320,16 @@ def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
             .str.strip()
             .replace({"": "N/A"})
         )
+        if column == "match_molecule(s)":
+            series = series.map(lambda val: _friendly_label(val, FRIENDLY_MOLECULE_LABELS))
+        elif column == "match_quality":
+            series = series.map(lambda val: _friendly_label(val, FRIENDLY_MATCH_QUALITY_LABELS))
         counts = series.value_counts()
         for value, count in counts.items():
             pct_total = round(count / float(total) * 100, 2) if total else 0.0
             lines.append(
                 f"    {label}: {value}: {int(count):,} "
-                f"({pct_total}% of global total)"
+                f"({pct_total}%)"
             )
 
     for bucket in bucket_order:
@@ -266,7 +363,8 @@ def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
                 )
                 for _, row in grouped.head(5).iterrows():
                     pct_local = round(row["n"] / float(count) * 100, 2) if count else 0.0
-                    lines.append(f"    {row['why_final']}: {row['reason_final']}: {int(row['n']):,} ({pct_local}%)")
+                    reason = _friendly_label(str(row["reason_final"]), FRIENDLY_MATCH_QUALITY_LABELS)
+                    lines.append(f"    {row['why_final']}: {reason}: {int(row['n']):,} ({pct_local}%)")
 
     return lines
 
@@ -340,7 +438,17 @@ def write_outputs(
         out_small["match_basis"] = out_small.get("normalized", "")
     out_small = out_small[[c for c in OUTPUT_COLUMNS if c in out_small.columns]].copy()
 
-    _timed("Write matched CSV", lambda: out_small.to_csv(out_csv, index=False, encoding="utf-8"))
+    friendly_out = out_small.copy()
+    friendly_column_mappings = {
+        "match_molecule(s)": FRIENDLY_MOLECULE_LABELS,
+        "match_quality": FRIENDLY_MATCH_QUALITY_LABELS,
+        "reason_final": FRIENDLY_MATCH_QUALITY_LABELS,
+    }
+    for col, mapping in friendly_column_mappings.items():
+        if col in friendly_out.columns:
+            friendly_out[col] = friendly_out[col].map(lambda val: _friendly_label(val, mapping))
+
+    _timed("Write matched CSV", lambda: friendly_out.to_csv(out_csv, index=False, encoding="utf-8"))
 
     if not skip_excel:
         xlsx_out = os.path.splitext(out_csv)[0] + ".xlsx"
@@ -348,15 +456,15 @@ def write_outputs(
         def _to_excel():
             try:
                 with pd.ExcelWriter(xlsx_out, engine="xlsxwriter") as writer:
-                    out_small.to_excel(writer, index=False, sheet_name="matched")
+                    friendly_out.to_excel(writer, index=False, sheet_name="matched")
                     ws = writer.sheets["matched"]
                     # Freeze the top row to keep headers visible during review.
                     ws.freeze_panes(1, 0)
-                    nrows, ncols = out_small.shape
+                    nrows, ncols = friendly_out.shape
                     ws.autofilter(0, 0, nrows, ncols - 1)
             except Exception:
                 with pd.ExcelWriter(xlsx_out, engine="openpyxl") as writer:
-                    out_small.to_excel(writer, index=False, sheet_name="matched")
+                    friendly_out.to_excel(writer, index=False, sheet_name="matched")
                     ws = writer.sheets["matched"]
                     try:
                         ws.freeze_panes = "A2"
