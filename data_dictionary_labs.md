@@ -12,7 +12,7 @@ Diagnostics secondary catalog.
 | `match_source` | `Labs`, `Diagnostics`, or `Unmatched` depending on which catalogue provided the standardized text. |
 | `standard_description` | Preferred description chosen from either Labs or Diagnostics. |
 | `source_file` | Source filename (`03 ESOA_ITEM_LIB.csv` or `.tsv`) where the row originated. |
-| `lab_item_number` | ITEM_NUMBER from `inputs/labs/Labs.csv` when a match is found. |
+| `lab_item_number` | ITEM_NUMBER from `inputs/labs/labs.csv` when a match is found. |
 | `lab_is_official` | `IS_OFFICIAL` flag from the Labs master list. |
 | `lab_description` | Exact description stored in the Labs master list. |
 | `diagnostics_code` | Column **A** (`code`) from `raw/Diagnostics.xlsx` when a Diagnostics match occurs. |

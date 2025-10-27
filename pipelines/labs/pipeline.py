@@ -61,7 +61,7 @@ class LaboratoryAndDiagnosticPipeline(BasePipeline):
         out_csv = options.extra.get("out_csv") if options.extra else None
         output_path = Path(out_csv) if out_csv else context.outputs_dir / "esoa_matched_labs.csv"
 
-        master_csv = context.inputs_dir / "Labs.csv"
+        master_csv = context.inputs_dir / "labs.csv"
         if not master_csv.is_file():
             raise FileNotFoundError(
                 f"Master Laboratory & Diagnostic catalog not found at {master_csv}."

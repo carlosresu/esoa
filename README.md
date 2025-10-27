@@ -60,7 +60,7 @@ field exists and how it is consumed downstream.
   `pipelines/labs/pipeline.py`) show where category-specific logic should
   land as you build algorithms for other references.
 - The LaboratoryAndDiagnostic flow now prepares eSOA rows from `03 ESOA_ITEM_LIB.*`,
-  matches against `inputs/labs/Labs.csv`, and falls back to
+  matches against `inputs/labs/labs.csv`, and falls back to
   `raw/Diagnostics.xlsx` when the hospital master list lacks an equivalent description.
 - To add a new category, create a sub-package under `pipelines/`, implement the
   `pre_run`, `prepare_inputs`, `match`, and `post_run` hooks, and decorate the
@@ -398,7 +398,7 @@ python run_labs.py --out esoa_matched_labs.csv
 This command builds `inputs/labs/esoa_prepared_labs.csv` from
 `raw/03 ESOA_ITEM_LIB.csv` and `.tsv` (excluding ITEM_NUMBER 1540–1896), matches the
 standardized descriptions against the hospital master list in
-`inputs/labs/Labs.csv`, and falls back to
+`inputs/labs/labs.csv`, and falls back to
 `raw/Diagnostics.xlsx` when required. The resulting matches are written to
 `outputs/labs/esoa_matched_labs.csv` together with any relevant
 codes (`code`, `cat`, `spec`, `etc`, `misc`) pulled from Diagnostics when a secondary
