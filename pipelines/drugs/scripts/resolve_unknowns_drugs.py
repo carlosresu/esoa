@@ -20,7 +20,7 @@ Input:
 Search lists:
   • PNF: ./inputs/drugs_and_medicine/pnf_prepared.csv (generic_name)
   • FDA brand map: newest of ./inputs/drugs_and_medicine/fda_brand_map_*.csv OR ./inputs/drugs_and_medicine/brand_map_*.csv (generic_name)
-  • WHO ATC: newest of ./dependencies/atcd/output/who_atc_*_molecules.csv (atc_name)
+  • WHO ATC: newest of ./inputs/drugs_and_medicine/who_atc_*_molecules.csv (atc_name)
 
 Output:
   ./outputs/drugs_and_medicine/missed_generics.csv with columns:
@@ -37,13 +37,14 @@ import sys
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict, Iterable
 
-from ..constants import PIPELINE_INPUTS_DIR, PIPELINE_OUTPUTS_DIR, PROJECT_ROOT
+from ..constants import PIPELINE_INPUTS_DIR, PIPELINE_OUTPUTS_DIR, PIPELINE_WHO_ATC_DIR, PROJECT_ROOT
 from .reference_data_drugs import load_drugbank_generics, load_ignore_words
 
 ROOT = PROJECT_ROOT
 INPUTS = PIPELINE_INPUTS_DIR
 OUTPUTS = PIPELINE_OUTPUTS_DIR
-WHO_DIR = ROOT / "dependencies" / "atcd" / "output"
+WHO_DIR = PIPELINE_WHO_ATC_DIR
+LEGACY_WHO_DIR = ROOT / "dependencies" / "atcd" / "output"
 
 # Common nouns that should be ignored (already handled in match_outputs but kept for safety)
 COMMON_UNKNOWN_STOPWORDS = {

@@ -11,7 +11,7 @@ import re
 from pathlib import Path
 from typing import Callable, List, Optional, Set
 
-from ..constants import PIPELINE_INPUTS_DIR, PIPELINE_OUTPUTS_DIR, PROJECT_ROOT
+from ..constants import PIPELINE_INPUTS_DIR, PIPELINE_OUTPUTS_DIR, PIPELINE_WHO_ATC_DIR, PROJECT_ROOT
 from .reference_data_drugs import load_drugbank_generics, load_ignore_words
 
 # Local lightweight spinner so this module is self-contained
@@ -223,7 +223,7 @@ def _known_tokens() -> Set[str]:
             pass
 
     # WHO molecules (latest)
-    who_dir = project_root / "dependencies" / "atcd" / "output"
+    who_dir = PIPELINE_WHO_ATC_DIR
     who_files = sorted(glob.glob(str(who_dir / "who_atc_*_molecules.csv")))
     if who_files:
         try:
