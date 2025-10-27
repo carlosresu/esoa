@@ -1,13 +1,13 @@
 # Pipeline Execution Walkthrough
 
-Detailed end-to-end view of the matching pipeline, from CLI invocation in [run.py](https://github.com/carlosresu/esoa/blob/main/run.py) through feature building in [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py), scoring in [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py), and export logic in [scripts/match_outputs.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_outputs.py).
+Detailed end-to-end view of the matching pipeline, from CLI invocation in [run.py](https://github.com/carlosresu/esoa/blob/main/run.py) (now a thin orchestrator that resolves the appropriate `ITEM_REF_CODE` pipeline from `pipelines/registry.py`) through feature building in [scripts/match_features.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_features.py), scoring in [scripts/match_scoring.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_scoring.py), and export logic in [scripts/match_outputs.py](https://github.com/carlosresu/esoa/blob/main/scripts/match_outputs.py).
 
 🆕 **Inline documentation refresh** – the Python modules referenced below now
 include descriptive docstrings and comments that mirror this walkthrough.  When
 deep-diving into a particular step, the code comments explain the exact
 transformations performed and why policy constants are set the way they are.
 
-Before the numbered stages below, `run.py` now handles shared orchestration:
+Before the numbered stages below, the `DrugsAndMedicinePipeline` (invoked via `run.py`) now handles shared orchestration:
 
 - Bootstraps `requirements.txt` with pip when needed, so a separate `--skip-install` flag is no longer required.
 - Ensures `inputs/` and `outputs/` exist, then prunes dated WHO ATC exports and brand-map snapshots after the run.

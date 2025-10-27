@@ -50,6 +50,23 @@ layers.  Refer to those modules directly when you need an authoritative
 explanation of a transformation or policy constant; the comments call out why a
 field exists and how it is consumed downstream.
 
+## Modular pipelines
+
+- The new `pipelines/` package exposes a registry that maps each `ITEM_REF_CODE`
+  to a dedicated `BasePipeline` implementation.
+- The existing drug workflow lives in `pipelines/drugs/pipeline.py` as
+  `DrugsAndMedicinePipeline`.
+- Scaffolded stubs for future work (for example,
+  `pipelines/lab_and_dx/pipeline.py`) show where category-specific logic should
+  land as you build algorithms for other references.
+- To add a new category, create a sub-package under `pipelines/`, implement the
+  `pre_run`, `prepare_inputs`, `match`, and `post_run` hooks, and decorate the
+  class with `@register_pipeline`. The registry makes the pipeline immediately
+  available to `main.py`, `run.py`, and any custom callers.
+- Shared orchestration primitives—`PipelineContext`, `PipelineRunParams`,
+  `PipelineOptions`, and `PipelineResult`—are defined in
+  `pipelines/base.py` so category-specific code stays focused on data handling.
+
 ---
 
 ## 🚀 Pipeline Overview
@@ -324,7 +341,11 @@ Additional lines list the top molecules or match-quality drivers per bucket when
 pip install -r requirements.txt  # run.py will do this automatically if you skip it
 
 # Run full pipeline (writes fresh artifacts to ./outputs)
-python run.py --annex inputs/annex_f.csv --pnf inputs/pnf.csv --esoa inputs/esoa.csv --out esoa_matched.csv
+python run.py --item-ref-code DrugsAndMedicine \
+  --annex inputs/annex_f.csv \
+  --pnf inputs/pnf.csv \
+  --esoa inputs/esoa.csv \
+  --out esoa_matched.csv
 ```
 
 **DrugBank prerequisite**  
@@ -335,8 +356,10 @@ Optional flags
 - `--skip-r` — Skip the WHO ATC R preprocessing stage
 - `--skip-brandmap` — Reuse the most recent FDA brand map instead of rebuilding
 - `--skip-excel` — Skip writing the XLSX workbook (CSV and summaries only)
+- `--skip-unknowns` — Skip the post-match enrichment step that runs `resolve_unknowns.py`
 - `--annex` / `--pnf` / `--esoa` — Override default input paths (relative paths fall back to `inputs/`)
 - `--out` — Override the matched CSV filename (always placed under `./outputs`)
+- `--item-ref-code` — Select which registered pipeline to run (defaults to `DrugsAndMedicine`; scaffolds for `LaboratoryAndDiagnostic` are in place for future development)
 
 ⚙️ **Parallelism controls**  
 CPU-heavy stages (brand swaps, WHO detection, scoring passes) now fan out across a process pool when large datasets are detected. Set `ESOA_MAX_WORKERS=<N>` to pin the worker count (use `1` to force serial execution, or leave unset to auto-detect cores). In restricted sandboxes the helpers fall back to single-process execution automatically.
@@ -366,6 +389,9 @@ python debug.py --pnf inputs/pnf.csv --esoa inputs/esoa.csv --out esoa_matched.c
 ## 📂 Repository Structure
 
 - scripts/
+- pipelines/ — Registry-driven ITEM_REF_CODE pipelines and shared orchestration contracts
+- [pipelines/drugs/pipeline.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/pipeline.py) — Current DrugsAndMedicine implementation (Annex/PNF matching)
+- [pipelines/lab_and_dx/pipeline.py](https://github.com/carlosresu/esoa/blob/main/pipelines/lab_and_dx/pipeline.py) — Scaffold for Laboratory & Diagnostic matching
 - [aho.py](https://github.com/carlosresu/esoa/blob/main/scripts/aho.py) — Aho–Corasick automata for PNF names
 - [combos.py](https://github.com/carlosresu/esoa/blob/main/scripts/combos.py) — Combination vs. salt logic
 - [dose.py](https://github.com/carlosresu/esoa/blob/main/scripts/dose.py) — Dose parsing & similarity

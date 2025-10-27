@@ -83,15 +83,14 @@ _bootstrap_requirements()
 import argparse
 import csv
 import re
-import shutil
 import threading
 from datetime import datetime
 from typing import Callable, Iterable
 
+from pipelines import PipelineContext, PipelineOptions, PipelineRunParams, get_pipeline
+
 DEFAULT_INPUTS_DIR = "inputs"
 OUTPUTS_DIR = "outputs"
-ATCD_SUBDIR = Path("dependencies") / "atcd"
-ATCD_SCRIPTS: tuple[str, ...] = ("atcd.R", "export.R", "filter.R")
 
 # Ensure local imports when called from other CWDs
 if str(THIS_DIR) not in sys.path:
@@ -409,101 +408,12 @@ def _print_grouped_summary(timings: TimingCollector) -> None:
     print(f"• Total{'':<{padding}} {total:9.2f}s")
 
 # ----------------------------
-# Steps (silent)
-# ----------------------------
-def run_r_scripts() -> None:
-    """Execute the bundled R preprocessors when the environment has the needed tools."""
-    atcd_dir = THIS_DIR / ATCD_SUBDIR
-    if not atcd_dir.is_dir():
-        return
-    out_dir = atcd_dir / "output"
-    # Ensure the ATC output directory exists for downstream CSVs.
-    out_dir.mkdir(parents=True, exist_ok=True)
-    rscript = shutil.which("Rscript")
-    if not rscript:
-        return
-    try:
-        # Validate that all orchestrated R scripts are present before looping.
-        _assert_all_exist(atcd_dir, ATCD_SCRIPTS)
-    except FileNotFoundError:
-        return
-    with open(os.devnull, "w") as devnull:
-        for script in ATCD_SCRIPTS:
-            # Run each R script sequentially, surfacing errors if any command fails.
-            subprocess.run([rscript, script], check=True, cwd=str(atcd_dir), stdout=devnull, stderr=devnull)
-
-def build_brand_map(inputs_dir: Path, outfile: Path | None) -> Path:
-    """Ensure an FDA brand map exists, constructing a fresh one when required."""
-    date_str = datetime.now().strftime("%Y-%m-%d")
-    out_csv = outfile or (inputs_dir / f"fda_brand_map_{date_str}.csv")
-    if out_csv.exists():
-        # print(
-        #     f"✓ Using existing FDA brand map for {date_str}: {out_csv.name}",
-        #     file=sys.stderr,
-        # )
-        return out_csv
-    existing_maps = sorted(inputs_dir.glob("fda_brand_map_*.csv"), reverse=True)
-    with open(os.devnull, "w") as devnull:
-        try:
-            # Attempt to build a fresh brand map using the scraper module.
-            subprocess.run(
-                [
-                    sys.executable,
-                    "-m",
-                    "scripts.fda_ph_drug_scraper",
-                    "--outdir",
-                    str(inputs_dir),
-                    "--outfile",
-                    str(out_csv),
-                ],
-                check=True,
-                cwd=str(THIS_DIR),
-                stdout=devnull,
-                stderr=devnull,
-            )
-        except subprocess.CalledProcessError as exc:
-            if existing_maps:
-                fallback = existing_maps[0]
-                print(
-                    "! Build FDA brand map failed; reusing existing file "
-                    f"{fallback.name}. Run with --skip-brandmap to avoid this step when offline.",
-                    file=sys.stderr,
-                )
-                return fallback
-            raise RuntimeError(
-                "Building FDA brand map failed and no prior map is available. "
-                "Re-run with --skip-brandmap if the FDA site is unreachable."
-            ) from exc
-    return out_csv
-
-def run_resolve_unknowns() -> None:
-    """Run resolve_unknowns.py if present (either at project root or under scripts/)."""
-    # Prefer scripts/resolve_unknowns.py when available, otherwise fallback to root-level resolve_unknowns.py
-    mod_name = None
-    if (THIS_DIR / "scripts" / "resolve_unknowns.py").is_file():
-        mod_name = "scripts.resolve_unknowns"
-    elif (THIS_DIR / "resolve_unknowns.py").is_file():
-        mod_name = "resolve_unknowns"
-    else:
-        # If the script doesn't exist, nothing to do
-        return
-    with open(os.devnull, "w") as devnull:
-        # Invoke the module via python -m so relative imports resolve correctly.
-        subprocess.run(
-            [sys.executable, "-m", mod_name],
-            check=True,
-            cwd=str(THIS_DIR),
-            stdout=devnull,
-            stderr=devnull,
-        )
-
-# ----------------------------
 # Main entry
 # ----------------------------
 def main_entry() -> None:
-    """CLI front-end that mirrors README flow: WHO ATC scraping, FDA brand map build, prepare+match, then reporting."""
+    """CLI front-end that mirrors README flow with pluggable ITEM_REF_CODE pipelines."""
     parser = argparse.ArgumentParser(
-        description="Run full ESOA pipeline (ATC → brand map → prepare → match) with spinner+timing",
+        description="Run eSOA pipeline with spinner+timing using the registered ITEM_REF_CODE pipelines.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     # Flags align with README guidance: allow skipping R preprocessing or FDA brand rebuilds when rerunning.
@@ -514,58 +424,62 @@ def main_entry() -> None:
     parser.add_argument("--skip-r", action="store_true", help="Skip running ATC R preprocessing scripts")
     parser.add_argument("--skip-brandmap", action="store_true", help="Skip building FDA brand map CSV")
     parser.add_argument("--skip-excel", action="store_true", help="Skip writing XLSX output (CSV and summaries still produced)")
+    parser.add_argument(
+        "--item-ref-code",
+        default="DrugsAndMedicine",
+        help="ITEM_REF_CODE category to process (must have a registered pipeline)",
+    )
+    parser.add_argument(
+        "--skip-unknowns",
+        action="store_true",
+        help="Skip running resolve_unknowns enrichment after matching when supported by the pipeline",
+    )
     args = parser.parse_args()
+
+    pipeline = get_pipeline(args.item_ref_code)
 
     outdir = _ensure_outputs_dir()
     inputs_dir = _ensure_inputs_dir()
     # Resolve the requested raw inputs, enforcing the fallback search behavior.
-    annex_path = _resolve_input_path(args.annex)
-    pnf_path = _resolve_input_path(args.pnf)
+    def _optional(path: str | os.PathLike[str]) -> Path | None:
+        try:
+            return _resolve_input_path(path)
+        except FileNotFoundError:
+            print(
+                f"! Optional input {path!s} not found; passing None to pipeline {pipeline.item_ref_code}.",
+                file=sys.stderr,
+            )
+            return None
+
+    annex_path = _optional(args.annex)
+    pnf_path = _optional(args.pnf)
     esoa_path = _resolve_esoa_path(args.esoa)
     out_path = outdir / Path(args.out).name
 
-    from scripts.prepare import prepare as _prepare
-    from scripts.prepare_annex_f import prepare_annex_f as _prepare_annex
-    from scripts.match import match as _match
-
     timings = TimingCollector()
-
-    if not args.skip_r:
-        # Execute the R preprocessing stage (WHO ATC scraping -> filtered outputs).
-        t = run_with_spinner("ATC R preprocessing", run_r_scripts)
-        timings.add("ATC R preprocessing", t)
-
-    if not args.skip_brandmap:
-        # Generate or reuse the FDA brand map that feeds the feature builder.
-        t = run_with_spinner("Build FDA brand map", lambda: build_brand_map(inputs_dir, outfile=None))
-        timings.add("Build FDA brand map", t)
-
-    # Prepare inputs prior to matching (Annex F + PNF normalization + eSOA renaming).
-    prepared_paths: dict[str, str] = {}
-
-    def _prepare_all() -> None:
-        ann_out = _prepare_annex(str(annex_path), str(inputs_dir / "annex_f_prepared.csv"))
-        prepared_paths["annex"] = ann_out
-        pnf_out, esoa_out = _prepare(str(pnf_path), str(esoa_path), str(inputs_dir))
-        prepared_paths["pnf"] = pnf_out
-        prepared_paths["esoa"] = esoa_out
-
-    t = run_with_spinner("Prepare inputs", _prepare_all)
-    timings.add("Prepare inputs", t)
-
-    # Let tqdm own the console for matching; no outer spinner here.
-    _match(
-        prepared_paths.get("annex", str(inputs_dir / "annex_f_prepared.csv")),
-        prepared_paths.get("pnf", str(inputs_dir / "pnf_prepared.csv")),
-        prepared_paths.get("esoa", str(inputs_dir / "esoa_prepared.csv")),
-        str(out_path),
-        timing_hook=timings.add,
+    context = PipelineContext(
+        project_root=THIS_DIR,
+        inputs_dir=inputs_dir,
+        outputs_dir=outdir,
+    )
+    params = PipelineRunParams(
+        annex_csv=annex_path,
+        pnf_csv=pnf_path,
+        esoa_csv=esoa_path,
+        out_csv=out_path,
+    )
+    options = PipelineOptions(
         skip_excel=args.skip_excel,
+        extra={
+            "spinner": run_with_spinner,
+            "skip_r": args.skip_r,
+            "skip_brandmap": args.skip_brandmap,
+            "skip_unknowns": args.skip_unknowns,
+            "out_csv": out_path,
+        },
     )
 
-    # Run the follow-up enrichment step to analyze unknown tokens.
-    t = run_with_spinner("Resolve unknowns", run_resolve_unknowns)
-    timings.add("Resolve unknowns", t)
+    pipeline.run(context, params, options, timing_hook=timings.add)
 
     # Final timing summary (console only)
     _print_grouped_summary(timings)
