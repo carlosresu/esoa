@@ -50,26 +50,13 @@ def main(argv: Iterable[str] | None = None) -> None:
         action="store_true",
         help="(Reserved) Attempt to run any pipelines still marked as stubs.",
     )
-    parser.add_argument(
-        "--skip-drugbank",
-        action="store_true",
-        help="Skip running the DrugBank aggregation helper before the drugs pipeline.",
-    )
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     selected = args.pipelines or _default_pipeline_order()
-    drugbank_ready = args.skip_drugbank
     for code in selected:
         print(f"=== Running pipeline: {code} ===")
         if code == "DrugsAndMedicine":
             extra_args: List[str] = []
-            if not drugbank_ready:
-                from run_drugs_all_parts import run_drugbank_export
-
-                run_drugbank_export()
-                drugbank_ready = True
-            if drugbank_ready:
-                extra_args.append("--skip-drugbank")
             _run_drugs(extra_args)
             continue
         if code == "LaboratoryAndDiagnostic":

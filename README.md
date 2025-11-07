@@ -339,6 +339,7 @@ Additional lines list the top molecules or match-quality drivers per bucket when
 
 `run_drugs_all_parts.py` self-bootstraps `requirements.txt`, ensures `inputs/drugs/` and `outputs/drugs/` exist, concatenates partitioned `inputs/drugs/esoa_pt_*.csv` files into a temporary `esoa_combined.csv`, and shows live spinners plus grouped timing totals for every major stage. R remains optional and is only required when you want to refresh the WHO ATC exports. You can also run individual stages explicitly:
 
+- `run_drugs_pt_0_drugbank_onetime.py` — refreshes the DrugBank generics/brands exports whenever the upstream dataset changes.
 - `run_drugs_pt_1_annex_f.py` — prepares `annex_f_prepared.csv` and prints a short preview so you can validate the normalization before matching.
 - `run_drugs_pt_2_esoa_matching.py` — runs the full matcher assuming the prepared Annex F already exists (accepts an explicit `--annex-prepared` path).
 - `run_drugs_pt_2_esoa_matching_minimal.py` — same as above but automatically passes `--skip-r --skip-brandmap --skip-excel` for a lighter-weight iteration loop.
@@ -356,7 +357,7 @@ python run_drugs_all_parts.py \
 ```
 
 **DrugBank prerequisite**  
-Refresh `dependencies/drugbank/output/generics.csv` (or drop a curated copy in `inputs/drugs/generics.csv`) by running `python -m pipelines.drugs.scripts.run_drugbank_drugs` whenever the upstream DrugBank dataset changes. The pipeline will automatically consume the freshest export.
+Run `python run_drugs_pt_0_drugbank_onetime.py` whenever the upstream DrugBank dataset changes. The helper wraps `python -m pipelines.drugs.scripts.run_drugbank_drugs`, streams the R output, and copies the resulting CSVs into `dependencies/drugbank_generics/output/` plus `inputs/drugs/` so downstream stages pick up the fresh exports automatically.
 
 Optional flags
 
