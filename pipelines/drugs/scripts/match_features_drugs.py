@@ -18,6 +18,7 @@ from .text_utils_drugs import (
     _base_name,
     _normalize_text_basic,
     normalize_text,
+    strip_after_as,
     extract_parenthetical_phrases,
     STOPWORD_TOKENS,
 )
@@ -1164,9 +1165,11 @@ def build_features(
         raw_values = tmp["raw_text"].tolist()
         tmp["parentheticals"] = maybe_parallel_map(raw_values, extract_parenthetical_phrases)
         tmp["esoa_idx"] = tmp.index
-        normalized_values = maybe_parallel_map(raw_values, normalize_text)
-        tmp["normalized"] = normalized_values
-        tmp["norm_compact"] = [re.sub(r"[ \-]", "", s) for s in normalized_values]
+        normalized_full_values = maybe_parallel_map(raw_values, normalize_text)
+        normalized_generic_values = [strip_after_as(val) for val in normalized_full_values]
+        tmp["normalized_full"] = normalized_full_values
+        tmp["normalized"] = normalized_generic_values
+        tmp["norm_compact"] = [re.sub(r"[ \-]", "", s) for s in normalized_generic_values]
         df.append(tmp)
     _timed("Normalize ESOA text", _mk_base)
     df = df[-1]
@@ -1185,7 +1188,8 @@ def build_features(
         summary_col: List[str] = []
         detail_col: List[str] = []
 
-        for norm_text in df["normalized"].astype(str).tolist():
+        norm_series = df.get("normalized_full", df["normalized"])
+        for norm_text in norm_series.astype(str).tolist():
             if not norm_text:
                 hits_col.append([])
                 tokens_col.append([])
@@ -1296,10 +1300,11 @@ def build_features(
         summaries: List[str] = []
         details: List[str] = []
 
+        norm_series = df.get("normalized_full", df["normalized"])
         for idx, (hits, norm_text, form_raw, route_raw) in enumerate(
             zip(
                 df["non_therapeutic_hits"],
-                df["normalized"],
+                norm_series,
                 df.get("form_raw", [None] * len(df)),
                 df.get("route_raw", [None] * len(df)),
             )
@@ -1344,7 +1349,7 @@ def build_features(
     # 7) Dose/route/form on original normalized text
     def _dose_route_form_raw():
         from .dose_drugs import extract_dosage as _extract_dosage
-        norm_values = df["normalized"].tolist()
+        norm_values = df.get("normalized_full", df["normalized"]).tolist()
         dosage_parsed = maybe_parallel_map(norm_values, _extract_dosage)
         df["dosage_parsed_raw"] = dosage_parsed
         df["dose_recognized"] = [_friendly_dose(item) for item in dosage_parsed]
