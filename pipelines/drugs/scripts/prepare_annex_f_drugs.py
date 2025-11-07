@@ -114,6 +114,48 @@ GENERIC_STOPWORDS |= {  # forms/vehicles that do not affect the molecule identit
 DIGIT_ONLY_RX = re.compile(r"^\d+(?:\.\d+)?$")
 UNIT_FRAGMENT_RX = re.compile(r"(?:mg|mcg|ug|g|iu|lsu|ml|l|%)", re.I)
 
+PNF_PRIORITY = 0
+WHO_PRIORITY = 1
+DRUGBANK_GENERIC_PRIORITY = 2
+FDA_BRAND_PRIORITY = 3
+DRUGBANK_BRAND_PRIORITY = 4
+FDA_FOOD_PRIORITY = 5
+
+MAX_SINGLE_TOKEN_START_INDEX = 4
+GENERIC_SINGLE_TOKEN_BLACKLIST = {
+    "sodium",
+    "potassium",
+    "calcium",
+    "magnesium",
+    "chloride",
+    "iodine",
+    "iron",
+    "zinc",
+    "solution",
+    "suspension",
+    "tablet",
+    "capsule",
+    "cream",
+    "ointment",
+    "powder",
+    "syrup",
+    "drops",
+    "drop",
+    "gel",
+    "spray",
+    "lotion",
+    "ampule",
+    "vial",
+    "bag",
+    "bottle",
+    "vitamins",
+    "trace",
+    "elements",
+    "intravenous",
+    "intramuscular",
+    "subcutaneous",
+}
+
 
 @dataclass(frozen=True)
 class _NameEntry:
@@ -121,6 +163,12 @@ class _NameEntry:
     canonical: str
     priority: int
     source: str
+
+
+@dataclass(frozen=True)
+class _ResolvedMatch:
+    entry: _NameEntry
+    start: int
 
 
 class _ReferenceNameResolver:
@@ -145,11 +193,12 @@ class _ReferenceNameResolver:
         bucket = self.token_index.setdefault(tokens[0], [])
         bucket.append(entry)
 
-    def resolve(self, raw_text: str) -> Optional[_NameEntry]:
+    def resolve(self, raw_text: str) -> Optional[_ResolvedMatch]:
         tokens = tuple(normalize_text(raw_text).split())
         if not tokens:
             return None
         best: Optional[_NameEntry] = None
+        best_start = -1
         # Prefer longest span, then highest priority (lower number), then earliest position.
         best_score: Tuple[int, int, int] = (-1, 0, 0)
         for idx, tok in enumerate(tokens):
@@ -166,7 +215,11 @@ class _ReferenceNameResolver:
                 if score > best_score:
                     best = entry
                     best_score = score
-        return best
+                    best_start = idx
+        if not best:
+            return None
+        start_idx = best_start if best_start >= 0 else 0
+        return _ResolvedMatch(entry=best, start=start_idx)
 
 
 def _read_csv(path: Path, usecols: Iterable[str]) -> Optional[pd.DataFrame]:
@@ -233,16 +286,29 @@ def _reference_name_resolver() -> _ReferenceNameResolver:
 
     # PNF prepared (preferred) then fallback to raw PNF.
     pnf_prepared = PIPELINE_INPUTS_DIR / "pnf_prepared.csv"
-    if not _register_column_values(resolver, pnf_prepared, "generic_name", 0, "pnf_prepared"):
-        _register_column_values(resolver, PIPELINE_INPUTS_DIR / "pnf.csv", "Molecule", 1, "pnf_raw")
+    if not _register_column_values(resolver, pnf_prepared, "generic_name", PNF_PRIORITY, "pnf_prepared"):
+        _register_column_values(
+            resolver,
+            PIPELINE_INPUTS_DIR / "pnf.csv",
+            "Molecule",
+            PNF_PRIORITY,
+            "pnf_raw",
+        )
 
     # WHO ATC molecule lists (allow multiple dated files).
     for path in sorted(PIPELINE_INPUTS_DIR.glob("who_atc*_molecules.csv")):
-        _register_column_values(resolver, path, "atc_name", 5, f"who:{path.name}")
+        _register_column_values(resolver, path, "atc_name", WHO_PRIORITY, f"who:{path.name}")
 
     # FDA brand map(s) contribute both generic and brand aliases.
     for path in sorted(PIPELINE_INPUTS_DIR.glob("fda_brand_map*.csv")):
-        _register_alias_pairs(resolver, path, "brand_name", "generic_name", 3, f"fda:{path.name}")
+        _register_alias_pairs(
+            resolver,
+            path,
+            "brand_name",
+            "generic_name",
+            FDA_BRAND_PRIORITY,
+            f"fda:{path.name}",
+        )
 
     # DrugBank generics/brands (prefer freshly exported dependencies, then inputs copies).
     drugbank_candidates = [
@@ -251,14 +317,43 @@ def _reference_name_resolver() -> _ReferenceNameResolver:
         PIPELINE_INPUTS_DIR / "generics.csv",
     ]
     for path in drugbank_candidates:
-        _register_column_values(resolver, path, "generic", 4, f"drugbank:{path.name}")
+        _register_column_values(
+            resolver,
+            path,
+            "generic",
+            DRUGBANK_GENERIC_PRIORITY,
+            f"drugbank:{path.name}",
+        )
 
     drugbank_brand_candidates = [
         PROJECT_ROOT / "dependencies" / "drugbank_generics" / "output" / "drugbank_brands.csv",
         PIPELINE_INPUTS_DIR / "drugbank_brands.csv",
     ]
     for path in drugbank_brand_candidates:
-        _register_alias_pairs(resolver, path, "brand", "generic", 4, f"drugbank_brand:{path.name}")
+        _register_alias_pairs(
+            resolver,
+            path,
+            "brand",
+            "generic",
+            DRUGBANK_BRAND_PRIORITY,
+            f"drugbank_brand:{path.name}",
+        )
+
+    food_catalog = PIPELINE_INPUTS_DIR / "fda_food_products.csv"
+    _register_column_values(
+        resolver,
+        food_catalog,
+        "brand_name",
+        FDA_FOOD_PRIORITY,
+        "fda_food_brand",
+    )
+    _register_column_values(
+        resolver,
+        food_catalog,
+        "product_name",
+        FDA_FOOD_PRIORITY,
+        "fda_food_product",
+    )
 
     for alias, canonical, priority in CUSTOM_ALIAS_ENTRIES:
         resolver.register(alias, canonical, priority, "custom")
@@ -324,20 +419,42 @@ def _vitamin_descriptor(normalized_desc: str) -> Optional[str]:
     return None
 
 
+def _accept_resolved_match(match: _ResolvedMatch) -> bool:
+    entry = match.entry
+    tokens = entry.tokens
+    if len(tokens) > 1:
+        return True
+    token = tokens[0]
+    if match.start <= 2:
+        return True
+    if match.start > MAX_SINGLE_TOKEN_START_INDEX:
+        return False
+    if token in GENERIC_SINGLE_TOKEN_BLACKLIST:
+        return False
+    if token in GENERIC_STOPWORDS:
+        return False
+    return True
+
+
 def _derive_generic_name(
     raw_desc: str,
     normalized_desc: str,
     resolver: _ReferenceNameResolver,
-) -> str:
+) -> Tuple[str, str]:
     custom_descriptor = _vitamin_descriptor(normalized_desc)
     resolved = resolver.resolve(raw_desc) if isinstance(raw_desc, str) else None
+    match_source = "fallback"
+    if resolved and not _accept_resolved_match(resolved):
+        resolved = None
     if resolved:
-        name = resolved.canonical
+        name = resolved.entry.canonical
+        match_source = resolved.entry.source
     else:
         name = _fallback_generic_name(raw_desc)
+        match_source = "fallback"
     if custom_descriptor and custom_descriptor.lower() not in name.lower():
         name = f"{name} ({custom_descriptor})"
-    return name.upper()
+    return name.upper(), match_source
 
 
 PACK_FREETEXT_SKIP = {
@@ -557,7 +674,7 @@ def prepare_annex_f(input_csv: str, output_csv: str) -> str:
 
         route_allowed, form_token, route_evidence = _deduce_route_form(norm, pack_container)
 
-        generic_name = _derive_generic_name(desc, norm, resolver)
+        generic_name, generic_source = _derive_generic_name(desc, norm, resolver)
         generic_id = slug_id(generic_name) if generic_name else ""
 
         records.append(
@@ -565,6 +682,7 @@ def prepare_annex_f(input_csv: str, output_csv: str) -> str:
                 "drug_code": str(raw_code).strip(),
                 "generic_id": generic_id,
                 "generic_name": generic_name,
+                "generic_source": generic_source,
                 "raw_description": desc,
                 "normalized_description": norm,
                 "dose_kind": dose_kind,
