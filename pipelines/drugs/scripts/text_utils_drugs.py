@@ -256,6 +256,8 @@ def extract_base_and_salts(raw_text: str) -> Tuple[str, List[str]]:
         if tok_lower in BASE_GENERIC_IGNORE:
             return False
         if tok_lower in SALT_TOKEN_WORDS:
+            if base_tokens:
+                salt_tokens.append(tok.upper())
             return False
         if tok_lower == "%":
             return False
@@ -277,6 +279,7 @@ def extract_base_and_salts(raw_text: str) -> Tuple[str, List[str]]:
         if not _is_candidate(tok):
             continue
         base_tokens.append(tok.upper())
+
     def _trim_trailing_salts(seq: List[str]) -> List[str]:
         if not seq:
             return []
@@ -284,11 +287,13 @@ def extract_base_and_salts(raw_text: str) -> Tuple[str, List[str]]:
             return []
         trimmed: List[str] = []
         while seq and seq[-1].lower() in SALT_TOKEN_WORDS:
-            trimmed.append(seq.pop().upper())
+            token = seq.pop()
+            if token.lower() in {"salt", "salts"}:
+                continue
+            trimmed.append(token.upper())
         return list(reversed(trimmed))
 
-    trimmed = _trim_trailing_salts(base_tokens)
-    salt_tokens.extend(trimmed)
+    salt_tokens.extend(_trim_trailing_salts(base_tokens))
     if base_tokens:
         base = " ".join(base_tokens).strip().upper()
     else:
