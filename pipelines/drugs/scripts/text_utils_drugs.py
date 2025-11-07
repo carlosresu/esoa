@@ -9,6 +9,45 @@ from typing import Iterable, Optional, List, Tuple
 
 from .combos_drugs import SALT_TOKENS
 
+BASE_GENERIC_IGNORE = {
+    "and",
+    "with",
+    "plus",
+    "in",
+    "solution",
+    "suspension",
+    "syrup",
+    "powder",
+    "cream",
+    "ointment",
+    "gel",
+    "lotion",
+    "drops",
+    "drop",
+    "tablet",
+    "capsule",
+    "ampule",
+    "ampoule",
+    "vial",
+    "bottle",
+    "bag",
+    "sachet",
+    "nebule",
+    "spray",
+    "patch",
+    "pre-filled",
+    "syringe",
+    "oral",
+    "intravenous",
+    "intramuscular",
+    "subcutaneous",
+    "ophthalmic",
+    "nasal",
+    "topical",
+    "unit",
+    "units",
+}
+
 PAREN_CONTENT_RX = re.compile(r"\(([^)]+)\)")
 
 def _normalize_text_basic(s: str) -> str:
@@ -127,6 +166,8 @@ STOPWORD_TOKENS = (
     }
 )
 
+BASE_GENERIC_IGNORE |= STOPWORD_TOKENS
+
 
 def _build_salt_token_words() -> set:
     tokens: set[str] = set()
@@ -168,23 +209,29 @@ def extract_base_and_salts(raw_text: str) -> Tuple[str, List[str]]:
     salt_tokens: list[str] = []
     base_tokens: list[str] = []
     for tok in scan_tokens:
-        if tok in SALT_TOKEN_WORDS:
-            salt_tokens.append(tok.upper())
-        else:
-            base_tokens.append(tok.upper())
-    if not base_tokens:
-        base = raw_text.strip().upper()
-    else:
+        tok_lower = tok.lower()
+        if tok_lower in SALT_TOKEN_WORDS:
+            salt_tokens.append(tok_upper := tok.upper())
+            continue
+        if tok_lower in BASE_GENERIC_IGNORE:
+            continue
+        if any(ch.isdigit() for ch in tok_lower) or tok_lower == "%":
+            continue
+        if not re.search(r"[a-z]", tok_lower):
+            continue
+        base_tokens.append(tok.upper())
+    if base_tokens:
         base = " ".join(base_tokens).strip().upper()
+    else:
+        base = ""
     unique_salts = []
     seen = set()
     for tok in salt_tokens:
         if tok and tok not in seen:
             seen.add(tok)
             unique_salts.append(tok)
-    if not base and raw_text:
-        base = raw_text.strip().upper()
     if not base and unique_salts:
         base = " ".join(unique_salts)
-        unique_salts = []
+    if not base and raw_text:
+        base = raw_text.strip().upper()
     return base, unique_salts
