@@ -15,12 +15,14 @@ from __future__ import annotations
 
 import math
 import re
+from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
-from typing import Iterable, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 import pandas as pd
 
-from ..constants import PIPELINE_INPUTS_DIR
+from ..constants import PIPELINE_INPUTS_DIR, PROJECT_ROOT
 from .dose_drugs import parse_dose_struct_from_text, safe_ratio_mg_per_ml, to_mg
 from .routes_forms_drugs import FORM_TO_ROUTE, extract_route_and_form, parse_form_from_text
 from .text_utils_drugs import normalize_text, slug_id
@@ -113,8 +115,159 @@ DIGIT_ONLY_RX = re.compile(r"^\d+(?:\.\d+)?$")
 UNIT_FRAGMENT_RX = re.compile(r"(?:mg|mcg|ug|g|iu|lsu|ml|l|%)", re.I)
 
 
-def _derive_generic_name(raw_desc: str) -> str:
-    """Strip dose/pack cues to surface the base Annex F molecule name."""
+@dataclass(frozen=True)
+class _NameEntry:
+    tokens: Tuple[str, ...]
+    canonical: str
+    priority: int
+    source: str
+
+
+class _ReferenceNameResolver:
+    """Token-based matching between Annex F free text and reference catalogues."""
+
+    def __init__(self) -> None:
+        self.token_index: Dict[str, List[_NameEntry]] = {}
+        self._seen: set[Tuple[Tuple[str, ...], str]] = set()
+
+    def register(self, label: str, canonical: Optional[str], priority: int, source: str) -> None:
+        canonical = (canonical or label).strip()
+        if not canonical:
+            return
+        tokens = tuple(normalize_text(label).split())
+        if not tokens:
+            return
+        key = (tokens, canonical.lower())
+        if key in self._seen:
+            return
+        self._seen.add(key)
+        entry = _NameEntry(tokens=tokens, canonical=canonical, priority=priority, source=source)
+        bucket = self.token_index.setdefault(tokens[0], [])
+        bucket.append(entry)
+
+    def resolve(self, raw_text: str) -> Optional[_NameEntry]:
+        tokens = tuple(normalize_text(raw_text).split())
+        if not tokens:
+            return None
+        best: Optional[_NameEntry] = None
+        # Prefer longest span, then highest priority (lower number), then earliest position.
+        best_score: Tuple[int, int, int] = (-1, 0, 0)
+        for idx, tok in enumerate(tokens):
+            bucket = self.token_index.get(tok)
+            if not bucket:
+                continue
+            for entry in bucket:
+                span = len(entry.tokens)
+                if idx + span > len(tokens):
+                    continue
+                if entry.tokens != tokens[idx : idx + span]:
+                    continue
+                score = (span, -entry.priority, -idx)
+                if score > best_score:
+                    best = entry
+                    best_score = score
+        return best
+
+
+def _read_csv(path: Path, usecols: Iterable[str]) -> Optional[pd.DataFrame]:
+    if not path.is_file():
+        return None
+    try:
+        frame = pd.read_csv(path, usecols=list(usecols), dtype=str).fillna("")
+    except Exception:
+        return None
+    return frame
+
+
+def _register_column_values(
+    resolver: _ReferenceNameResolver,
+    path: Path,
+    column: str,
+    priority: int,
+    source: str,
+) -> bool:
+    frame = _read_csv(path, [column])
+    if frame is None or column not in frame.columns:
+        return False
+    for value in frame[column].dropna().astype(str):
+        clean = value.strip()
+        if not clean:
+            continue
+        resolver.register(clean, clean, priority, source)
+    return True
+
+
+def _register_alias_pairs(
+    resolver: _ReferenceNameResolver,
+    path: Path,
+    alias_col: str,
+    canonical_col: str,
+    priority: int,
+    source: str,
+) -> None:
+    frame = _read_csv(path, [alias_col, canonical_col])
+    if frame is None:
+        return
+    for _, row in frame.iterrows():
+        alias = str(row.get(alias_col, "") or "").strip()
+        canonical = str(row.get(canonical_col, "") or "").strip()
+        if not canonical:
+            continue
+        resolver.register(canonical, canonical, max(priority - 1, 0), source)
+        if alias:
+            resolver.register(alias, canonical, priority, source)
+
+
+CUSTOM_ALIAS_ENTRIES: Tuple[Tuple[str, str, int], ...] = (
+    ("Vitamins Intravenous Fat-Soluble", "Vitamins Intravenous, Fat-Soluble", 0),
+    ("Vitamins Intravenous Trace Elements", "Vitamins Intravenous, Trace Elements", 0),
+    ("Vitamins Intravenous Water-Soluble", "Vitamins Intravenous, Water-Soluble", 0),
+    ("Vitamins Intravenous", "Vitamins Intravenous", 1),
+    ("Dextrose in Lactated Ringer's Solution", "Dextrose in Lactated Ringer's Solution", 0),
+)
+
+
+@lru_cache(maxsize=1)
+def _reference_name_resolver() -> _ReferenceNameResolver:
+    resolver = _ReferenceNameResolver()
+
+    # PNF prepared (preferred) then fallback to raw PNF.
+    pnf_prepared = PIPELINE_INPUTS_DIR / "pnf_prepared.csv"
+    if not _register_column_values(resolver, pnf_prepared, "generic_name", 0, "pnf_prepared"):
+        _register_column_values(resolver, PIPELINE_INPUTS_DIR / "pnf.csv", "Molecule", 1, "pnf_raw")
+
+    # WHO ATC molecule lists (allow multiple dated files).
+    for path in sorted(PIPELINE_INPUTS_DIR.glob("who_atc*_molecules.csv")):
+        _register_column_values(resolver, path, "atc_name", 5, f"who:{path.name}")
+
+    # FDA brand map(s) contribute both generic and brand aliases.
+    for path in sorted(PIPELINE_INPUTS_DIR.glob("fda_brand_map*.csv")):
+        _register_alias_pairs(resolver, path, "brand_name", "generic_name", 3, f"fda:{path.name}")
+
+    # DrugBank generics/brands (prefer freshly exported dependencies, then inputs copies).
+    drugbank_candidates = [
+        PROJECT_ROOT / "dependencies" / "drugbank_generics" / "output" / "drugbank_generics.csv",
+        PIPELINE_INPUTS_DIR / "drugbank_generics.csv",
+        PIPELINE_INPUTS_DIR / "generics.csv",
+    ]
+    for path in drugbank_candidates:
+        _register_column_values(resolver, path, "generic", 4, f"drugbank:{path.name}")
+
+    drugbank_brand_candidates = [
+        PROJECT_ROOT / "dependencies" / "drugbank_generics" / "output" / "drugbank_brands.csv",
+        PIPELINE_INPUTS_DIR / "drugbank_brands.csv",
+    ]
+    for path in drugbank_brand_candidates:
+        _register_alias_pairs(resolver, path, "brand", "generic", 4, f"drugbank_brand:{path.name}")
+
+    for alias, canonical, priority in CUSTOM_ALIAS_ENTRIES:
+        resolver.register(alias, canonical, priority, "custom")
+
+    return resolver
+
+
+def _fallback_generic_name(raw_desc: str) -> str:
+    """Strip dose/pack cues to surface the base Annex F molecule name when references miss."""
     if not isinstance(raw_desc, str):
         return ""
     norm = normalize_text(raw_desc)
@@ -131,7 +284,7 @@ def _derive_generic_name(raw_desc: str) -> str:
             continue
         if tok in UNIT_NORMAL:
             continue
-        if UNIT_FRAGMENT_RX.search(tok) and tok.lower() not in SALT_WHITELIST:
+        if UNIT_FRAGMENT_RX.search(tok) and not tok.isalpha() and tok.lower() not in SALT_WHITELIST:
             continue
         if re.search(r"\d", tok):
             continue
@@ -157,6 +310,34 @@ def _derive_generic_name(raw_desc: str) -> str:
         # Fall back to the raw uppercase name when stripping produced nothing.
         return raw_desc.strip().upper()
     return re.sub(r"\s+\+\s+", " + ", " ".join(cleaned)).upper()
+
+
+def _vitamin_descriptor(normalized_desc: str) -> Optional[str]:
+    if "vitamins intravenous" not in normalized_desc:
+        return None
+    if "trace elements" in normalized_desc:
+        return "Trace Elements"
+    if "fat soluble" in normalized_desc:
+        return "Fat-Soluble"
+    if "water soluble" in normalized_desc:
+        return "Water-Soluble"
+    return None
+
+
+def _derive_generic_name(
+    raw_desc: str,
+    normalized_desc: str,
+    resolver: _ReferenceNameResolver,
+) -> str:
+    custom_descriptor = _vitamin_descriptor(normalized_desc)
+    resolved = resolver.resolve(raw_desc) if isinstance(raw_desc, str) else None
+    if resolved:
+        name = resolved.canonical
+    else:
+        name = _fallback_generic_name(raw_desc)
+    if custom_descriptor and custom_descriptor.lower() not in name.lower():
+        name = f"{name} ({custom_descriptor})"
+    return name.upper()
 
 
 PACK_FREETEXT_SKIP = {
@@ -348,6 +529,7 @@ def prepare_annex_f(input_csv: str, output_csv: str) -> str:
     if "Drug Code" not in frame.columns or "Drug Description" not in frame.columns:
         raise ValueError("annex_f.csv must contain 'Drug Code' and 'Drug Description' columns")
 
+    resolver = _reference_name_resolver()
     records = []
     for raw_code, raw_desc in frame[["Drug Code", "Drug Description"]].itertuples(index=False):
         desc = (raw_desc or "").strip()
@@ -375,7 +557,7 @@ def prepare_annex_f(input_csv: str, output_csv: str) -> str:
 
         route_allowed, form_token, route_evidence = _deduce_route_form(norm, pack_container)
 
-        generic_name = _derive_generic_name(desc)
+        generic_name = _derive_generic_name(desc, norm, resolver)
         generic_id = slug_id(generic_name) if generic_name else ""
 
         records.append(
