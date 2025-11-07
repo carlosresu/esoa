@@ -207,8 +207,23 @@ def extract_base_and_salts(raw_text: str) -> Tuple[str, List[str]]:
     norm = normalize_text(raw_text)
     tokens = norm.split()
     boundary = detect_as_boundary(norm)
-    base_candidates = tokens if boundary is None else tokens[:boundary]
-    salt_candidates = [] if boundary is None else tokens[boundary + 1 :]
+    base_candidates = tokens
+    salt_candidates: List[str] = []
+    if boundary is not None:
+        tail_tokens = tokens[boundary + 1 :]
+        combo_split_idx: Optional[int] = None
+        for idx, tok in enumerate(tail_tokens):
+            if tok in {"+", "/", "with", "plus"}:
+                next_tok = tail_tokens[idx + 1] if idx + 1 < len(tail_tokens) else ""
+                if next_tok and re.search(r"[a-z]", next_tok):
+                    combo_split_idx = idx
+                    break
+        if combo_split_idx is None:
+            base_candidates = tokens[:boundary]
+            salt_candidates = tail_tokens
+        else:
+            base_candidates = tokens[:boundary] + tail_tokens[combo_split_idx:]
+            salt_candidates = tail_tokens[:combo_split_idx]
     salt_tokens: list[str] = []
     base_tokens: list[str] = []
     for tok in salt_candidates:
@@ -217,15 +232,26 @@ def extract_base_and_salts(raw_text: str) -> Tuple[str, List[str]]:
             continue
         if not tok_lower:
             continue
+        if not re.search(r"[a-z]", tok_lower):
+            continue
+        if tok_lower not in SALT_TOKEN_WORDS:
+            continue
         salt_tokens.append(tok.upper())
     def _is_candidate(tok: str) -> bool:
         tok_lower = tok.lower()
         if tok_lower in BASE_GENERIC_IGNORE:
             return False
-        if any(ch.isdigit() for ch in tok_lower) or tok_lower == "%":
+        if tok_lower in SALT_TOKEN_WORDS:
+            return False
+        if tok_lower == "%":
             return False
         if not re.search(r"[a-z]", tok_lower):
             return False
+        if tok_lower[0].isdigit():
+            return False
+        if any(ch.isdigit() for ch in tok_lower):
+            if not re.fullmatch(r"[a-z]+[0-9]+[a-z]*", tok_lower):
+                return False
         return True
 
     for idx, tok in enumerate(base_candidates):

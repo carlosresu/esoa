@@ -9,7 +9,7 @@ from typing import List
 SALT_TOKENS = {
     "calcium","sodium","potassium","magnesium","zinc","ammonium",
     "hydrochloride","nitrate","nitrite","sulfate","sulphate","phosphate","dihydrogen phosphate",
-    "acetate","tartrate","fumarate","oxalate","maleate","mesylate","tosylate","besylate",
+    "acetate","tartrate","fumarate","oxalate","maleate","mesylate","tosylate","besylate","besilate",
     "bitartrate","succinate","citrate","lactate","gluconate","bicarbonate","carbonate",
     "bromide","chloride","iodide","nitrate","selenite","thiosulfate",
     "dihydrate","trihydrate","monohydrate","hydrate","hemihydrate","anhydrous",

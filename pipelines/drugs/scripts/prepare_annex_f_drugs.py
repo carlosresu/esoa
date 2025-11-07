@@ -18,7 +18,7 @@ import re
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import pandas as pd
 
@@ -167,6 +167,56 @@ GENERIC_SINGLE_TOKEN_BLACKLIST = {
     "subcutaneous",
 }
 
+COMBO_KEYWORDS = {
+    "combined",
+    "combination",
+    "compound",
+    "coformulated",
+    "co-formulated",
+}
+
+COMBO_ALPHA_PLUS_RX = re.compile(r"[a-z]\s*\+\s*[a-z]")
+COMBO_ALPHA_SLASH_RX = re.compile(r"[a-z]\s*/\s*[a-z]")
+VITAMIN_COMPLEX_RX = re.compile(r"\bvitamin\s+b\d+(?:\s+b\d+)+")
+DOSE_DIGIT_RX = re.compile(r"\d")
+EXTRA_TOKEN_STOPWORDS = (
+    GENERIC_STOPWORDS
+    | {
+        "as",
+        "per",
+        "contains",
+        "containing",
+        "include",
+        "including",
+        "compound",
+        "combination",
+        "combined",
+        "combo",
+        "plus",
+        "and",
+        "with",
+        "without",
+        "coformulated",
+        "co-formulated",
+        "ratio",
+        "preparation",
+        "formula",
+        "formulation",
+        "applicator",
+        "applicators",
+        "dropper",
+        "droppers",
+        "device",
+        "devices",
+        "kit",
+        "kits",
+        "unit",
+        "units",
+    }
+    | set(CONTAINER_NORMAL.keys())
+    | set(UNIT_NORMAL.keys())
+    | SALT_TOKEN_WORDS
+)
 
 @dataclass(frozen=True)
 class _NameEntry:
@@ -233,6 +283,84 @@ class _ReferenceNameResolver:
         start_idx = best_start if best_start >= 0 else 0
         end_idx = start_idx + len(best.tokens) if best else start_idx
         return _ResolvedMatch(entry=best, start=start_idx, end=end_idx)
+
+
+def _token_has_letters(token: str) -> bool:
+    return bool(token and re.search(r"[a-z]", token))
+
+
+def _token_is_substance(token: str) -> bool:
+    tok = (token or "").lower()
+    if not _token_has_letters(tok):
+        return False
+    if tok in EXTRA_TOKEN_STOPWORDS:
+        return False
+    if tok in CONTAINER_NORMAL or tok in UNIT_NORMAL:
+        return False
+    if tok in {"-", "+", "/"}:
+        return False
+    return True
+
+
+def _first_dose_token_index(tokens: Sequence[str]) -> int:
+    for idx, tok in enumerate(tokens):
+        if not tok:
+            continue
+        low = tok.lower()
+        if low in UNIT_NORMAL or low in {"mg", "mcg", "ug", "g", "iu", "lsu", "ml", "l", "%"}:
+            return idx
+        if low in {"per", "ratio"}:
+            return idx
+        if DOSE_DIGIT_RX.search(tok):
+            return idx
+    return len(tokens)
+
+
+def _combo_indicator_present(normalized_desc: str, tokens: Sequence[str]) -> bool:
+    text = normalized_desc
+    if COMBO_ALPHA_PLUS_RX.search(text):
+        return True
+    if COMBO_ALPHA_SLASH_RX.search(text):
+        return True
+    if any(tok in COMBO_KEYWORDS for tok in tokens):
+        return True
+    if VITAMIN_COMPLEX_RX.search(text):
+        return True
+    return False
+
+
+def _name_looks_combo(name: str) -> bool:
+    norm = normalize_text(name)
+    if COMBO_ALPHA_PLUS_RX.search(norm):
+        return True
+    if COMBO_ALPHA_SLASH_RX.search(norm):
+        return True
+    if " with " in norm:
+        return True
+    if " and " in norm:
+        return True
+    if any(keyword in norm for keyword in COMBO_KEYWORDS):
+        return True
+    return False
+
+
+def _has_unmatched_substances(
+    normalized_desc: str,
+    match: Optional[_ResolvedMatch],
+) -> bool:
+    if not match:
+        return False
+    tokens = normalized_desc.split()
+    limit = _first_dose_token_index(tokens)
+    match_range = set(range(match.start, match.end))
+    for idx, tok in enumerate(tokens[:limit]):
+        if idx in match_range:
+            continue
+        if tok in {"+", "/"}:
+            continue
+        if _token_is_substance(tok):
+            return True
+    return False
 
 
 def _read_csv(path: Path, usecols: Iterable[str]) -> Optional[pd.DataFrame]:
@@ -398,7 +526,8 @@ def _fallback_generic_name(raw_desc: str, normalized_desc: str, as_index: Option
         if UNIT_FRAGMENT_RX.search(tok) and not tok.isalpha() and tok.lower() not in SALT_WHITELIST:
             continue
         if re.search(r"\d", tok):
-            continue
+            if not re.search(r"[a-z]", tok) or tok[0].isdigit():
+                continue
         tokens.append(tok)
 
     cleaned: list[str] = []
@@ -423,6 +552,144 @@ def _fallback_generic_name(raw_desc: str, normalized_desc: str, as_index: Option
     return re.sub(r"\s+\+\s+", " + ", " ".join(cleaned)).upper()
 
 
+def _looks_like_vitamin_combo(norm_text: str) -> bool:
+    return bool(VITAMIN_B_MULTI_RX.search(norm_text))
+
+
+def _combo_fragments(raw_desc: str, normalized_desc: str) -> List[str]:
+    fragments: List[str] = []
+    seen: set[str] = set()
+    for snippet in extract_parenthetical_phrases(raw_desc):
+        norm = normalize_text(snippet)
+        if not norm or norm in seen:
+            continue
+        if looks_like_combination(norm, 0, 0) or _looks_like_vitamin_combo(norm):
+            fragments.append(norm)
+            seen.add(norm)
+
+    def _needs_full_scan(text: str) -> bool:
+        if not text:
+            return False
+        if looks_like_combination(text, 0, 0):
+            return True
+        if _looks_like_vitamin_combo(text):
+            return True
+        if any(keyword in text for keyword in ("combined", "combination", "compound", "coformulated")):
+            return True
+        return False
+
+    if normalized_desc and _needs_full_scan(normalized_desc) and normalized_desc not in seen:
+        fragments.append(normalized_desc)
+    return fragments
+
+
+def _segment_has_molecule_hint(segment: str) -> bool:
+    tokens = segment.split()
+    for tok in tokens:
+        if not tok:
+            continue
+        if DIGIT_ONLY_RX.fullmatch(tok):
+            continue
+        if tok in UNIT_NORMAL or tok in CONTAINER_NORMAL:
+            continue
+        if tok in GENERIC_STOPWORDS:
+            continue
+        if re.search(r"[a-z]", tok):
+            return True
+    return False
+
+
+def _expand_component_aliases(
+    name: str,
+    salts: List[str],
+    raw_source: Optional[str] = None,
+) -> List[Tuple[str, List[str]]]:
+    upper = (name or "").strip().upper()
+    if not upper:
+        return []
+    source = (raw_source or name or "").strip().upper()
+    b_tokens = [match.upper() for match in VITAMIN_B_TOKEN_RX.findall(source)]
+    if upper.startswith("VITAMIN") and len(b_tokens) >= 2:
+        return [(f"VITAMIN {token}", []) for token in b_tokens]
+    return [(upper, salts)]
+
+
+def _segment_component_entries(segment: str, resolver: _ReferenceNameResolver) -> List[Tuple[str, List[str]]]:
+    if not segment or not _segment_has_molecule_hint(segment):
+        return []
+    tokens = segment.split()
+    matches = resolver.resolve_all(segment)
+    components: List[Tuple[str, List[str]]] = []
+    seen_spans: set[Tuple[int, int]] = set()
+    seen_names: set[str] = set()
+    for match in matches:
+        canonical_raw = match.entry.canonical or ""
+        canonical_norm = normalize_text(canonical_raw)
+        if not _segment_has_molecule_hint(canonical_norm):
+            continue
+        if "+" in canonical_norm or "/" in canonical_norm or " with " in canonical_norm:
+            continue
+        canonical_tokens = canonical_norm.split()
+        if canonical_tokens and all(
+            tok in SALT_TOKEN_WORDS or tok in UNIT_NORMAL or tok in CONTAINER_NORMAL for tok in canonical_tokens
+        ):
+            continue
+        span = (match.start, match.end)
+        if span in seen_spans:
+            continue
+        seen_spans.add(span)
+        snippet_tokens = tokens[match.start : match.end]
+        snippet_text = " ".join(snippet_tokens)
+        base, salts = extract_base_and_salts(snippet_text or canonical_raw)
+        source_text = snippet_text or canonical_raw
+        for expanded_name, expanded_salts in _expand_component_aliases(base or canonical_raw, salts, source_text):
+            key = expanded_name.strip().upper()
+            if not key or key in seen_names:
+                continue
+            seen_names.add(key)
+            components.append((key, expanded_salts))
+    if len(components) > 1:
+        has_specific_vitamins = any(name.startswith("VITAMIN ") for name, _ in components)
+        if has_specific_vitamins:
+            components = [comp for comp in components if comp[0] != "VITAMIN"]
+    if not components:
+        base, salts = extract_base_and_salts(segment)
+        components = _expand_component_aliases(base, salts, segment) if base else []
+    return components
+
+
+def _combo_components_from_text(
+    raw_desc: str,
+    normalized_desc: str,
+    resolver: _ReferenceNameResolver,
+) -> Tuple[List[str], List[str]]:
+    fragments = _combo_fragments(raw_desc, normalized_desc)
+    if not fragments:
+        return [], []
+    components: List[Tuple[str, List[str]]] = []
+    seen_names: set[str] = set()
+    for fragment in fragments:
+        segments = split_combo_segments(fragment) or [fragment]
+        frag_components: List[Tuple[str, List[str]]] = []
+        for segment in segments:
+            frag_components.extend(_segment_component_entries(segment, resolver))
+        for name, salts in frag_components:
+            key = name.strip().upper()
+            if not key or key in seen_names:
+                continue
+            seen_names.add(key)
+            components.append((key, salts))
+        if len(components) >= 2:
+            break
+    if len(components) < 2:
+        return [], []
+    salt_tokens: List[str] = []
+    for _, salts in components:
+        salt_tokens.extend(salts)
+    ordered_names = [name for name, _ in components]
+    return ordered_names, salt_tokens
+
+
 def _vitamin_descriptor(normalized_desc: str) -> Optional[str]:
     if "vitamins intravenous" not in normalized_desc:
         return None
@@ -441,6 +708,8 @@ def _accept_resolved_match(match: _ResolvedMatch, as_index: Optional[int]) -> bo
     if len(tokens) > 1:
         return True
     token = tokens[0]
+    if not re.search(r"[a-z]", token):
+        return False
     if token in GENERIC_SINGLE_TOKEN_BLACKLIST:
         return False
     if token in GENERIC_STOPWORDS:
@@ -458,8 +727,14 @@ def _derive_generic_name(
     resolver: _ReferenceNameResolver,
 ) -> Tuple[str, str, List[str]]:
     custom_descriptor = _vitamin_descriptor(normalized_desc)
+    tokens_full = normalized_desc.split()
+    combo_hint = _combo_indicator_present(normalized_desc, tokens_full)
     trimmed_norm = strip_after_as(normalized_desc)
-    norm_for_matching = trimmed_norm if trimmed_norm else normalized_desc
+    norm_for_matching = (
+        normalized_desc
+        if combo_hint
+        else (trimmed_norm if trimmed_norm else normalized_desc)
+    )
     as_index_full = detect_as_boundary(normalized_desc)
     as_index_trimmed = detect_as_boundary(norm_for_matching)
     base_name_from_text, salts_from_text = extract_base_and_salts(norm_for_matching)
@@ -467,6 +742,9 @@ def _derive_generic_name(
     match_source = "fallback"
     if resolved and not _accept_resolved_match(resolved, as_index_full):
         resolved = None
+    if resolved and combo_hint and not _name_looks_combo(resolved.entry.canonical):
+        if _has_unmatched_substances(normalized_desc, resolved):
+            resolved = None
     if resolved:
         name = resolved.entry.canonical
         match_source = resolved.entry.source
