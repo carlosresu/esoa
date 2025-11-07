@@ -65,7 +65,7 @@ field exists and how it is consumed downstream.
 - To add a new category, create a sub-package under `pipelines/`, implement the
   `pre_run`, `prepare_inputs`, `match`, and `post_run` hooks, and decorate the
   class with `@register_pipeline`. The registry makes the pipeline immediately
-  available to `main.py`, `run_drugs.py`, and any custom callers.
+  available to `main.py`, `run_drugs_all_parts.py`, and any custom callers.
 - Shared orchestration primitives—`PipelineContext`, `PipelineRunParams`,
   `PipelineOptions`, and `PipelineResult`—are defined in
   `pipelines/base.py` so category-specific code stays focused on data handling.
@@ -337,14 +337,18 @@ Additional lines list the top molecules or match-quality drivers per bucket when
 
 ## 🛠️ Running the Pipeline
 
-`run_drugs.py` self-bootstraps `requirements.txt`, ensures `inputs/drugs/` and `outputs/drugs/` exist, concatenates partitioned `inputs/drugs/esoa_pt_*.csv` files into a temporary `esoa_combined.csv`, and shows live spinners plus grouped timing totals for every major stage. R remains optional and is only required when you want to refresh the WHO ATC exports.
+`run_drugs_all_parts.py` self-bootstraps `requirements.txt`, ensures `inputs/drugs/` and `outputs/drugs/` exist, concatenates partitioned `inputs/drugs/esoa_pt_*.csv` files into a temporary `esoa_combined.csv`, and shows live spinners plus grouped timing totals for every major stage. R remains optional and is only required when you want to refresh the WHO ATC exports. You can also run individual stages explicitly:
+
+- `run_drugs_pt_1_annex_f.py` — prepares `annex_f_prepared.csv` and prints a short preview so you can validate the normalization before matching.
+- `run_drugs_pt_2_esoa_matching.py` — runs the full matcher assuming the prepared Annex F already exists (accepts an explicit `--annex-prepared` path).
+- `run_drugs_pt_2_esoa_matching_minimal.py` — same as above but automatically passes `--skip-r --skip-brandmap --skip-excel` for a lighter-weight iteration loop.
 
 ```bash
 # Python 3.10+ (optional virtualenv setup shown for reproducibility)
 pip install -r requirements.txt  # the runner will bootstrap dependencies if you skip this
 
 # Run full DrugsAndMedicine pipeline (writes fresh artifacts to ./outputs/drugs)
-python run_drugs.py \
+python run_drugs_all_parts.py \
   --annex inputs/drugs/annex_f.csv \
   --pnf inputs/drugs/pnf.csv \
   --esoa inputs/drugs/esoa_combined.csv \
@@ -371,13 +375,13 @@ CPU-heavy stages (brand swaps, WHO detection, scoring passes) now fan out across
 For incremental testing without touching external data sources or emitting Excel, use:
 
 ```bash
-python run_drugs_minimal.py \
+python run_drugs_all_parts_minimal.py \
   --pnf inputs/drugs/pnf.csv \
   --esoa inputs/drugs/esoa_combined.csv \
   --out esoa_matched.csv
 ```
 
-This helper invokes `run_drugs.py` with `--skip-r --skip-brandmap --skip-excel`, keeping dependency bootstrapping and path resolution identical to the full runner while limiting the workload to CSV and summary generation.
+This helper invokes `run_drugs_all_parts.py` with `--skip-r --skip-brandmap --skip-excel`, keeping dependency bootstrapping and path resolution identical to the full runner while limiting the workload to CSV and summary generation.
 
 ### Profiling the pipeline
 
@@ -387,7 +391,7 @@ To inspect runtime hotspots, execute the profiled wrapper:
 python -m pipelines.drugs.scripts.debug_drugs --pnf inputs/drugs/pnf.csv --esoa inputs/drugs/esoa_combined.csv --out esoa_matched.csv
 ```
 
-The profiler mirrors `run_drugs.py` but wraps execution with [pyinstrument](https://github.com/joerick/pyinstrument). Profiling reports are saved to `./outputs/drugs/pyinstrument_profile_<timestamp>.html` and `.txt`, allowing you to review the call tree in a browser or terminal.
+The profiler mirrors `run_drugs_all_parts.py` but wraps execution with [pyinstrument](https://github.com/joerick/pyinstrument). Profiling reports are saved to `./outputs/drugs/pyinstrument_profile_<timestamp>.html` and `.txt`, allowing you to review the call tree in a browser or terminal.
 
 ### LaboratoryAndDiagnostic pipeline
 
@@ -430,7 +434,7 @@ Use `python run_all.py` to execute every registered ITEM_REF_CODE sequentially. 
   - `labs/` — LaboratoryAndDiagnostic match results (`esoa_matched_labs.csv`)
 - Top-level entrypoints
   - `main.py` — Programmatic API (prepare/match/run_all)
-  - `run_drugs.py` / `run_drugs_minimal.py`
+  - `run_drugs_all_parts.py` / `run_drugs_all_parts_minimal.py`
   - `run_labs.py` / `run_labs_minimal.py`
   - `run_all.py` — Sequential runner scaffold for multiple pipelines
 - Supporting files: `requirements.txt`, `install_requirements.py`, `dependencies/`, `raw/`, `prompt.txt`, `data_dictionary_drugs.md`, `pipeline_drugs.md`, `data_dictionary_labs.md`, `pipeline_labs.md`

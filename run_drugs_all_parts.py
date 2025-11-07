@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-run_drugs.py — Full DrugsAndMedicine pipeline with on-demand spinner and timing.
+run_drugs_all_parts.py — Full DrugsAndMedicine pipeline with on-demand spinner and timing.
 
 Console behavior:
   • Only the spinner/timer lines and the final timing summary are printed.
@@ -85,7 +85,7 @@ import csv
 import re
 import threading
 from datetime import datetime
-from typing import Callable, Iterable
+from typing import Callable, Iterable, Optional
 
 from pipelines import (
     PipelineContext,
@@ -94,6 +94,7 @@ from pipelines import (
     get_pipeline,
     slugify_item_ref_code,
 )
+from pipelines.drugs.scripts.prepare_annex_f_drugs import prepare_annex_f
 
 DEFAULT_INPUTS_DIR = "inputs"
 OUTPUTS_DIR = "outputs"
@@ -212,6 +213,50 @@ def _ensure_inputs_dir() -> Path:
     inp.mkdir(parents=True, exist_ok=True)
     return inp
 
+
+def _annex_output_path(inputs_dir: Path) -> Path:
+    return (inputs_dir / "annex_f_prepared.csv").resolve()
+
+
+def _resolve_repo_path(candidate: str | os.PathLike[str]) -> Path:
+    path = Path(candidate)
+    if path.is_absolute():
+        return path.resolve()
+    return (THIS_DIR / path).resolve()
+
+
+def _prepare_annex_core(
+    annex_path: Path,
+    inputs_dir: Path,
+    *,
+    output_path: Optional[Path] = None,
+) -> Path:
+    """Run the Annex F preparation script and return the prepared CSV path."""
+    out_path = output_path or _annex_output_path(inputs_dir)
+    result = prepare_annex_f(str(annex_path), str(out_path))
+    return Path(result).resolve()
+
+
+def _preview_csv(path: Path, data_lines: int) -> None:
+    """Print the header and a handful of rows from a CSV file."""
+    if data_lines <= 0:
+        return
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            print(f"\nPreview of {path}:")
+            for idx, line in enumerate(handle):
+                line = line.rstrip("\n")
+                print(f"  {line}")
+                if idx >= data_lines:
+                    break
+    except FileNotFoundError:
+        print(f"! Unable to preview Annex F (missing file: {path})")
+
+
+def _announce_annex(path: Path, preview_lines: int) -> None:
+    print(f"\nAnnex F prepared at: {path}")
+    _preview_csv(path, preview_lines)
+
 def _assert_all_exist(root: Path, files: Iterable[str | os.PathLike[str]]) -> None:
     """Validate that every filename under root exists before shelling out to R scripts."""
     for f in files:
@@ -310,15 +355,16 @@ def run_with_spinner(label: str, func: Callable[[], None], start_delay: float = 
 # Timing aggregation
 # ----------------------------
 GROUP_DEFINITIONS: list[tuple[str, tuple[str, ...]]] = [
-    (
-        "Setup & Prerequisites",
         (
-            "DrugBank aggregation",
-            "ATC R preprocessing",
-            "Build FDA brand map",
-            "Prepare inputs",
+            "Setup & Prerequisites",
+            (
+                "DrugBank aggregation",
+                "Prepare Annex F",
+                "ATC R preprocessing",
+                "Build FDA brand map",
+                "Prepare inputs",
+            ),
         ),
-    ),
     (
         "Data Loading & Validation",
         (
@@ -463,6 +509,27 @@ def main_entry() -> None:
     parser.add_argument("--skip-r", action="store_true", help="Skip running ATC R preprocessing scripts")
     parser.add_argument("--skip-brandmap", action="store_true", help="Skip building FDA brand map CSV")
     parser.add_argument(
+        "--skip-annex-stage",
+        action="store_true",
+        help="Skip the standalone Annex F preparation preview stage (pipeline still prepares Annex F internally).",
+    )
+    parser.add_argument(
+        "--prepare-annex-only",
+        action="store_true",
+        help="Only run the Annex F preparation/preview stage and exit.",
+    )
+    parser.add_argument(
+        "--annex-preview-lines",
+        type=int,
+        default=5,
+        help="Number of lines (including header) to print from annex_f_prepared.csv after preparation.",
+    )
+    parser.add_argument(
+        "--annex-prepared",
+        default=None,
+        help="Path to an existing annex_f_prepared.csv to reuse (skips Annex preparation stage when provided).",
+    )
+    parser.add_argument(
         "--skip-drugbank",
         action="store_true",
         help="Skip running the DrugBank aggregation helper before the Python pipeline",
@@ -497,7 +564,31 @@ def main_entry() -> None:
     esoa_path = _resolve_esoa_path(args.esoa)
     out_path = outdir / Path(args.out).name
 
+    if annex_path is None:
+        raise FileNotFoundError("Annex F CSV is required; provide --annex with a valid path.")
+
     timings = TimingCollector()
+    annex_prepared_path: Optional[Path] = None
+    if args.annex_prepared:
+        candidate = _resolve_repo_path(args.annex_prepared)
+        if not candidate.is_file():
+            raise FileNotFoundError(f"Provided --annex-prepared file not found: {candidate}")
+        annex_prepared_path = candidate
+
+    run_annex_stage = ((not args.skip_annex_stage) or args.prepare_annex_only) and annex_prepared_path is None
+    if run_annex_stage:
+        def _annex_task() -> None:
+            nonlocal annex_prepared_path
+            annex_prepared_path = _prepare_annex_core(annex_path, inputs_dir)
+
+        elapsed_annex = run_with_spinner("Prepare Annex F", _annex_task)
+        timings.add("Prepare Annex F", elapsed_annex)
+        if annex_prepared_path:
+            _announce_annex(annex_prepared_path, args.annex_preview_lines)
+        if args.prepare_annex_only:
+            _print_grouped_summary(timings)
+            return
+
     context = PipelineContext(
         project_root=THIS_DIR,
         inputs_dir=inputs_dir,
@@ -509,15 +600,19 @@ def main_entry() -> None:
         esoa_csv=esoa_path,
         out_csv=out_path,
     )
+    extra_options = {
+        "spinner": run_with_spinner,
+        "skip_r": args.skip_r,
+        "skip_brandmap": args.skip_brandmap,
+        "skip_unknowns": args.skip_unknowns,
+        "out_csv": out_path,
+    }
+    if annex_prepared_path:
+        extra_options["annex_prepared_path"] = str(annex_prepared_path)
+
     options = PipelineOptions(
         skip_excel=args.skip_excel,
-        extra={
-            "spinner": run_with_spinner,
-            "skip_r": args.skip_r,
-            "skip_brandmap": args.skip_brandmap,
-            "skip_unknowns": args.skip_unknowns,
-            "out_csv": out_path,
-        },
+        extra=extra_options,
     )
 
     if not args.skip_drugbank:

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Profile run_drugs.main_entry with pyinstrument and write reports under ./outputs.
+"""Profile run_drugs_all_parts.main_entry with pyinstrument and write reports under ./outputs.
 
-Usage mirrors run_drugs; pass the same CLI flags. Produces HTML and text
+Usage mirrors run_drugs_all_parts; pass the same CLI flags. Produces HTML and text
 profiling artifacts timestamped inside the DrugsAndMedicine outputs directory so
 teams can inspect the hottest sections of the pipeline end-to-end.
 """
@@ -19,7 +19,7 @@ except ModuleNotFoundError:  # pragma: no cover - runtime dependency bootstrappi
     subprocess.check_call([sys.executable, "-m", "pip", "install", "pyinstrument>=4.4"], stdout=sys.stdout)
     from pyinstrument import Profiler
 
-import run_drugs as run_dm
+import run_drugs_all_parts as run_dm
 
 
 def _profiled_main() -> None:
@@ -43,7 +43,7 @@ def _profiled_main() -> None:
 
 
 def main() -> None:
-    """Entry point to keep CLI parity with run_drugs while enabling profiling."""
+    """Entry point to keep CLI parity with run_drugs_all_parts while enabling profiling."""
     _profiled_main()
 
 

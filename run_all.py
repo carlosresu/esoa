@@ -17,11 +17,11 @@ def _default_pipeline_order() -> List[str]:
 
 
 def _run_drugs(extra_args: Iterable[str] | None = None) -> None:
-    import run_drugs
+    import run_drugs_all_parts as run_drugs
 
     original = sys.argv
     try:
-        sys.argv = ["run_drugs.py"]
+        sys.argv = ["run_drugs_all_parts.py"]
         if extra_args:
             sys.argv.extend(list(extra_args))
         run_drugs.main_entry()
@@ -64,7 +64,7 @@ def main(argv: Iterable[str] | None = None) -> None:
         if code == "DrugsAndMedicine":
             extra_args: List[str] = []
             if not drugbank_ready:
-                from run_drugs import run_drugbank_export
+                from run_drugs_all_parts import run_drugbank_export
 
                 run_drugbank_export()
                 drugbank_ready = True
