@@ -60,6 +60,11 @@ CONTAINER_NORMAL = {alias: base for base, aliases in CONTAINER_ALIASES.items() f
 
 # Tokens that should never be stripped from molecule names when building the Annex F generic.
 SALT_WHITELIST = set(SALT_TOKENS)
+SALT_TOKEN_WORDS = {token.lower() for token in SALT_TOKENS}
+for phrase in SALT_TOKENS:
+    for part in normalize_text(phrase).split():
+        SALT_TOKEN_WORDS.add(part)
+SALT_TOKEN_WORDS.update({"salt", "salts"})
 
 # Additional words that add no value to the canonical molecule string.
 GENERIC_STOPWORDS = {
@@ -390,6 +395,8 @@ def _fallback_generic_name(raw_desc: str, normalized_desc: str, as_index: Option
             continue
         tokens.append(tok)
 
+    tokens = _strip_trailing_salts(tokens)
+
     cleaned: list[str] = []
     prev_plus = False
     for tok in tokens:
@@ -424,23 +431,46 @@ def _vitamin_descriptor(normalized_desc: str) -> Optional[str]:
     return None
 
 
+def _strip_trailing_salts(tokens: list[str]) -> list[str]:
+    if not tokens:
+        return tokens
+    non_salt_exists = any(tok not in SALT_TOKEN_WORDS for tok in tokens)
+    if not non_salt_exists:
+        return tokens
+    idx = len(tokens)
+    while idx > 0 and tokens[idx - 1] in SALT_TOKEN_WORDS:
+        idx -= 1
+    return tokens[:idx] if idx > 0 else tokens
+
+
 def _accept_resolved_match(match: _ResolvedMatch, as_index: Optional[int]) -> bool:
     entry = match.entry
     tokens = entry.tokens
+    if as_index is not None and as_index > 0 and match.start >= as_index:
+        return False
     if len(tokens) > 1:
         return True
     token = tokens[0]
-    if match.start <= 2:
-        return True
-    if as_index is not None and as_index > 0 and match.start >= as_index:
-        return False
-    if match.start > MAX_SINGLE_TOKEN_START_INDEX:
-        return False
     if token in GENERIC_SINGLE_TOKEN_BLACKLIST:
         return False
     if token in GENERIC_STOPWORDS:
         return False
+    if match.start > MAX_SINGLE_TOKEN_START_INDEX:
+        return False
+    if match.start <= 2:
+        return True
     return True
+
+
+def _prefer_non_salt_name(candidate: str, reference_norm: str) -> str:
+    cand_norm = normalize_text(candidate)
+    cand_tokens = cand_norm.split()
+    if cand_tokens and any(tok not in SALT_TOKEN_WORDS for tok in cand_tokens):
+        return candidate
+    ref_tokens = [tok for tok in normalize_text(reference_norm).split() if tok not in SALT_TOKEN_WORDS]
+    if ref_tokens:
+        return " ".join(ref_tokens).upper()
+    return candidate
 
 
 def _derive_generic_name(
@@ -449,19 +479,21 @@ def _derive_generic_name(
     resolver: _ReferenceNameResolver,
 ) -> Tuple[str, str]:
     custom_descriptor = _vitamin_descriptor(normalized_desc)
-    as_index = detect_as_boundary(normalized_desc)
+    trimmed_norm = strip_after_as(normalized_desc)
+    norm_for_matching = trimmed_norm if trimmed_norm else normalized_desc
+    as_index_full = detect_as_boundary(normalized_desc)
+    as_index_trimmed = detect_as_boundary(norm_for_matching)
     resolved = resolver.resolve(raw_desc) if isinstance(raw_desc, str) else None
     match_source = "fallback"
-    if resolved and not _accept_resolved_match(resolved, as_index):
+    if resolved and not _accept_resolved_match(resolved, as_index_full):
         resolved = None
     if resolved:
         name = resolved.entry.canonical
         match_source = resolved.entry.source
     else:
-        trimmed_norm = strip_after_as(normalized_desc)
-        norm_for_fallback = trimmed_norm if trimmed_norm else normalized_desc
-        name = _fallback_generic_name(raw_desc, norm_for_fallback, as_index)
+        name = _fallback_generic_name(raw_desc, norm_for_matching, as_index_trimmed)
         match_source = "fallback"
+    name = _prefer_non_salt_name(name, norm_for_matching)
     if custom_descriptor and custom_descriptor.lower() not in name.lower():
         name = f"{name} ({custom_descriptor})"
     return name.upper(), match_source
