@@ -13,7 +13,7 @@ from typing import Dict, Iterable, List, Set, Tuple
 import pandas as pd
 
 from ..constants import PIPELINE_INPUTS_DIR, PROJECT_ROOT
-from .text_utils_drugs import _normalize_text_basic
+from .text_utils_drugs import _normalize_text_basic, extract_base_and_salts, serialize_salt_list
 
 _TOKEN_RX = re.compile(r"[a-z]+")
 _PIPELINE_INPUTS_SUBPATH = PIPELINE_INPUTS_DIR.relative_to(PROJECT_ROOT)
@@ -44,7 +44,7 @@ def _iter_csv_column(frame: pd.DataFrame, candidates: Iterable[str]) -> Iterable
 @lru_cache(maxsize=None)
 def load_drugbank_generics(
     project_root: str | Path | None = None,
-) -> Tuple[Set[str], Set[str], Dict[str, Set[Tuple[str, ...]]], Dict[str, str]]:
+) -> Tuple[Set[str], Set[str], Dict[str, Set[Tuple[str, ...]]], Dict[str, str], Dict[str, str]]:
     """
     Load DrugBank generics (prefer the freshly exported dependencies/drugbank_generics/output/drugbank_generics.csv).
 
@@ -53,6 +53,7 @@ def load_drugbank_generics(
         - token_pool: All individual tokens present across the normalized names.
         - token_index: first-token -> set of token tuples representing each generic phrase.
         - display_lookup: normalized generic -> representative display string.
+        - salt_lookup: normalized generic -> serialized salt descriptor string.
     """
     root = _project_root(project_root)
     inputs_dir = root / _PIPELINE_INPUTS_SUBPATH
@@ -64,6 +65,7 @@ def load_drugbank_generics(
     ]
 
     normalized_map: Dict[str, str] = {}
+    salt_lookup: Dict[str, str] = {}
     for path in candidates:
         if not path.is_file():
             continue
@@ -72,9 +74,12 @@ def load_drugbank_generics(
         except Exception:
             continue
         for raw in _iter_csv_column(frame, ("name", "generic")):
-            norm = _normalize_text_basic(raw)
+            base, salts = extract_base_and_salts(raw)
+            display = base or raw.strip().upper()
+            norm = _normalize_text_basic(display)
             if norm and norm not in normalized_map:
-                normalized_map[norm] = raw.strip()
+                normalized_map[norm] = display
+                salt_lookup[norm] = serialize_salt_list(salts)
         if normalized_map:
             # Prefer the first successfully loaded dataset (dependencies path takes precedence).
             break
@@ -91,7 +96,7 @@ def load_drugbank_generics(
         bucket.add(tokens)
 
     normalized_names = set(normalized_map.keys())
-    return normalized_names, token_pool, token_index, normalized_map
+    return normalized_names, token_pool, token_index, normalized_map, salt_lookup
 
 
 DEFAULT_IGNORE_TOKENS: Set[str] = {

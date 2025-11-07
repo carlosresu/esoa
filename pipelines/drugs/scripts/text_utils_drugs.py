@@ -5,7 +5,9 @@
 
 import re
 import unicodedata
-from typing import Optional, List
+from typing import Iterable, Optional, List, Tuple
+
+from .combos_drugs import SALT_TOKENS
 
 PAREN_CONTENT_RX = re.compile(r"\(([^)]+)\)")
 
@@ -124,3 +126,65 @@ STOPWORD_TOKENS = (
         "bottle","bottles","box","boxes","sachet","sachets","container","containers"
     }
 )
+
+
+def _build_salt_token_words() -> set:
+    tokens: set[str] = set()
+    for token in SALT_TOKENS:
+        if not token:
+            continue
+        tokens.add(token.lower())
+        norm = normalize_text(token)
+        for part in norm.split():
+            tokens.add(part)
+    tokens.update({"salt", "salts"})
+    return tokens
+
+
+SALT_TOKEN_WORDS = _build_salt_token_words()
+
+
+def serialize_salt_list(salts: Iterable[str]) -> str:
+    """Join unique salt labels using a consistent delimiter for CSV output."""
+    ordered = []
+    seen = set()
+    for salt in salts:
+        clean = str(salt).strip().upper()
+        if not clean or clean in seen:
+            continue
+        seen.add(clean)
+        ordered.append(clean)
+    return " + ".join(ordered)
+
+
+def extract_base_and_salts(raw_text: str) -> Tuple[str, List[str]]:
+    """Return the base molecule name (sans salts) plus a list of salt descriptors."""
+    if not isinstance(raw_text, str):
+        return "", []
+    norm = normalize_text(raw_text)
+    tokens = norm.split()
+    boundary = detect_as_boundary(norm)
+    scan_tokens = tokens[:boundary] if boundary else tokens
+    salt_tokens: list[str] = []
+    base_tokens: list[str] = []
+    for tok in scan_tokens:
+        if tok in SALT_TOKEN_WORDS:
+            salt_tokens.append(tok.upper())
+        else:
+            base_tokens.append(tok.upper())
+    if not base_tokens:
+        base = raw_text.strip().upper()
+    else:
+        base = " ".join(base_tokens).strip().upper()
+    unique_salts = []
+    seen = set()
+    for tok in salt_tokens:
+        if tok and tok not in seen:
+            seen.add(tok)
+            unique_salts.append(tok)
+    if not base and raw_text:
+        base = raw_text.strip().upper()
+    if not base and unique_salts:
+        base = " ".join(unique_salts)
+        unique_salts = []
+    return base, unique_salts

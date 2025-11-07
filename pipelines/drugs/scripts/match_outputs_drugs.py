@@ -233,7 +233,7 @@ def _known_tokens() -> Set[str]:
             pass
 
     tokens.update(load_ignore_words(project_root))
-    _, drugbank_tokens, _, _ = load_drugbank_generics(project_root)
+    _, drugbank_tokens, _, _, _ = load_drugbank_generics(project_root)
     tokens.update(drugbank_tokens)
 
     _KNOWN_TOKENS_CACHE = tokens

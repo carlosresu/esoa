@@ -966,7 +966,13 @@ def build_features(
     for name in fda_gens:
         fda_tokens.update(_tokenize_unknowns(name))
 
-    drugbank_name_set, drugbank_tokens, drugbank_token_index, drugbank_display_lookup = load_drugbank_generics()
+    (
+        drugbank_name_set,
+        drugbank_tokens,
+        drugbank_token_index,
+        drugbank_display_lookup,
+        drugbank_salt_lookup,
+    ) = load_drugbank_generics()
     drugbank_name_set = set(drugbank_name_set)
     drugbank_tokens = set(drugbank_tokens)
     therapeutic_tokens: Set[str] = pnf_tokens | who_tokens | fda_tokens | drugbank_tokens

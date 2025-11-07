@@ -12,6 +12,8 @@ Reference hierarchy used during matching:
 5. **FDA brand map** (brand → generic swaps feeding Annex/PNF matches)
 6. **FDA Philippines food product catalog** (non-therapeutic identification and debug trail)
 
+Every normalized reference now carries a `salt_form` column so formulation salts are captured without polluting the core `generic_name`. Annex F and PNF prepared CSVs physically expose the column, while WHO, DrugBank, and FDA sources compute the same metadata in-memory for downstream use.
+
 It prepares raw CSVs, parses text into structured features, detects candidate generics, scores/classifies matches, and outputs a labeled dataset with a detailed distribution summary and unknown token report. The goal is to support **public health operations and oversight**, not commercial decision-making.
 
 ## Requirements

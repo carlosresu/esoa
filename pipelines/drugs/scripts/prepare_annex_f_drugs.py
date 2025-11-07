@@ -25,7 +25,14 @@ import pandas as pd
 from ..constants import PIPELINE_INPUTS_DIR, PROJECT_ROOT
 from .dose_drugs import parse_dose_struct_from_text, safe_ratio_mg_per_ml, to_mg
 from .routes_forms_drugs import FORM_TO_ROUTE, extract_route_and_form, parse_form_from_text
-from .text_utils_drugs import detect_as_boundary, normalize_text, slug_id, strip_after_as
+from .text_utils_drugs import (
+    detect_as_boundary,
+    extract_base_and_salts,
+    normalize_text,
+    serialize_salt_list,
+    slug_id,
+    strip_after_as,
+)
 from .combos_drugs import SALT_TOKENS
 
 # Containers observed in Annex F (canonical form -> token variants)
@@ -60,11 +67,6 @@ CONTAINER_NORMAL = {alias: base for base, aliases in CONTAINER_ALIASES.items() f
 
 # Tokens that should never be stripped from molecule names when building the Annex F generic.
 SALT_WHITELIST = set(SALT_TOKENS)
-SALT_TOKEN_WORDS = {token.lower() for token in SALT_TOKENS}
-for phrase in SALT_TOKENS:
-    for part in normalize_text(phrase).split():
-        SALT_TOKEN_WORDS.add(part)
-SALT_TOKEN_WORDS.update({"salt", "salts"})
 
 # Additional words that add no value to the canonical molecule string.
 GENERIC_STOPWORDS = {
@@ -395,8 +397,6 @@ def _fallback_generic_name(raw_desc: str, normalized_desc: str, as_index: Option
             continue
         tokens.append(tok)
 
-    tokens = _strip_trailing_salts(tokens)
-
     cleaned: list[str] = []
     prev_plus = False
     for tok in tokens:
@@ -429,20 +429,6 @@ def _vitamin_descriptor(normalized_desc: str) -> Optional[str]:
     if "water soluble" in normalized_desc:
         return "Water-Soluble"
     return None
-
-
-def _strip_trailing_salts(tokens: list[str]) -> list[str]:
-    if not tokens:
-        return tokens
-    non_salt_exists = any(tok not in SALT_TOKEN_WORDS for tok in tokens)
-    if not non_salt_exists:
-        return tokens
-    idx = len(tokens)
-    while idx > 0 and tokens[idx - 1] in SALT_TOKEN_WORDS:
-        idx -= 1
-    return tokens[:idx] if idx > 0 else tokens
-
-
 def _accept_resolved_match(match: _ResolvedMatch, as_index: Optional[int]) -> bool:
     entry = match.entry
     tokens = entry.tokens
@@ -459,25 +445,14 @@ def _accept_resolved_match(match: _ResolvedMatch, as_index: Optional[int]) -> bo
         return False
     if match.start <= 2:
         return True
-    return True
-
-
-def _prefer_non_salt_name(candidate: str, reference_norm: str) -> str:
-    cand_norm = normalize_text(candidate)
-    cand_tokens = cand_norm.split()
-    if cand_tokens and any(tok not in SALT_TOKEN_WORDS for tok in cand_tokens):
-        return candidate
-    ref_tokens = [tok for tok in normalize_text(reference_norm).split() if tok not in SALT_TOKEN_WORDS]
-    if ref_tokens:
-        return " ".join(ref_tokens).upper()
-    return candidate
+    return False
 
 
 def _derive_generic_name(
     raw_desc: str,
     normalized_desc: str,
     resolver: _ReferenceNameResolver,
-) -> Tuple[str, str]:
+) -> Tuple[str, str, List[str]]:
     custom_descriptor = _vitamin_descriptor(normalized_desc)
     trimmed_norm = strip_after_as(normalized_desc)
     norm_for_matching = trimmed_norm if trimmed_norm else normalized_desc
@@ -493,10 +468,11 @@ def _derive_generic_name(
     else:
         name = _fallback_generic_name(raw_desc, norm_for_matching, as_index_trimmed)
         match_source = "fallback"
-    name = _prefer_non_salt_name(name, norm_for_matching)
-    if custom_descriptor and custom_descriptor.lower() not in name.lower():
-        name = f"{name} ({custom_descriptor})"
-    return name.upper(), match_source
+    base_name, salts = extract_base_and_salts(name)
+    generic_name = base_name or name
+    if custom_descriptor and custom_descriptor.lower() not in generic_name.lower():
+        generic_name = f"{generic_name} ({custom_descriptor})"
+    return generic_name.upper(), match_source, salts
 
 
 PACK_FREETEXT_SKIP = {
@@ -716,8 +692,9 @@ def prepare_annex_f(input_csv: str, output_csv: str) -> str:
 
         route_allowed, form_token, route_evidence = _deduce_route_form(norm, pack_container)
 
-        generic_name, generic_source = _derive_generic_name(desc, norm, resolver)
+        generic_name, generic_source, salt_tokens = _derive_generic_name(desc, norm, resolver)
         generic_id = slug_id(generic_name) if generic_name else ""
+        salt_form = serialize_salt_list(salt_tokens)
 
         records.append(
             {
@@ -725,6 +702,7 @@ def prepare_annex_f(input_csv: str, output_csv: str) -> str:
                 "generic_id": generic_id,
                 "generic_name": generic_name,
                 "generic_source": generic_source,
+                "salt_form": salt_form,
                 "raw_description": desc,
                 "normalized_description": norm,
                 "dose_kind": dose_kind,

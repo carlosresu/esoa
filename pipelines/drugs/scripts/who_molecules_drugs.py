@@ -9,7 +9,12 @@ from typing import Dict, List, Tuple
 
 import pandas as pd
 
-from .text_utils_drugs import _base_name, _normalize_text_basic
+from .text_utils_drugs import (
+    _base_name,
+    _normalize_text_basic,
+    extract_base_and_salts,
+    serialize_salt_list,
+)
 
 
 def load_who_molecules(who_csv: str) -> Tuple[Dict[str, set], List[str], Dict[str, List[dict]]]:
@@ -17,13 +22,22 @@ def load_who_molecules(who_csv: str) -> Tuple[Dict[str, set], List[str], Dict[st
     who = pd.read_csv(who_csv)
     who["name_base"] = who["atc_name"].fillna("").map(_base_name)
     who["name_norm"] = who["atc_name"].fillna("").map(_normalize_text_basic)
+    split_vals = who["atc_name"].fillna("").map(extract_base_and_salts)
+    who["salt_form"] = [serialize_salt_list(salts) for _, salts in split_vals]
+    saltless_bases = [base if base else str(original).strip().upper() for (base, _), original in zip(split_vals, who["atc_name"].fillna("").astype(str))]
+    who["name_saltless"] = saltless_bases
     who["name_base_norm"] = who["name_base"].map(_normalize_text_basic)
+    who["name_saltless_norm"] = [
+        _normalize_text_basic(name) if name else _normalize_text_basic(str(original))
+        for name, original in zip(saltless_bases, who["atc_name"].fillna("").astype(str))
+    ]
 
     codes_by_name = defaultdict(set)
     details_by_code: Dict[str, List[dict]] = defaultdict(list)
     for _, r in who.iterrows():
         # Store both base and fully normalized variants for lookup flexibility.
         codes_by_name[r["name_base_norm"]].add(r["atc_code"])
+        codes_by_name[r["name_saltless_norm"]].add(r["atc_code"])
         codes_by_name[r["name_norm"]].add(r["atc_code"])
 
         details_by_code[r["atc_code"]].append(
@@ -33,11 +47,12 @@ def load_who_molecules(who_csv: str) -> Tuple[Dict[str, set], List[str], Dict[st
                 "uom": r.get("uom"),
                 "adm_r": r.get("adm_r"),
                 "note": r.get("note"),
+                "salt_form": r.get("salt_form"),
             }
         )
 
     candidate_names = sorted(
-        set(list(who["name_norm"]) + list(who["name_base_norm"])),
+        set(list(who["name_norm"]) + list(who["name_base_norm"]) + list(who["name_saltless_norm"])),
         key=len, reverse=True
     )
     candidate_names = [n for n in candidate_names if len(n) > 2]

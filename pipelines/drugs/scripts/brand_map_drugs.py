@@ -11,7 +11,13 @@ from typing import Dict, List, Optional, Tuple, Set
 import ahocorasick  # type: ignore
 import pandas as pd
 
-from .text_utils_drugs import _base_name, _normalize_text_basic, normalize_compact
+from .text_utils_drugs import (
+    _base_name,
+    _normalize_text_basic,
+    extract_base_and_salts,
+    normalize_compact,
+    serialize_salt_list,
+)
 
 
 @dataclass
@@ -19,6 +25,7 @@ class BrandMatch:
     """Structured payload describing an FDA brand and its normalized attributes."""
     brand: str
     generic: str
+    salt_form: str
     dosage_form: str
     route: str
     dosage_strength: str
@@ -49,6 +56,12 @@ def load_latest_brandmap(inputs_dir: str) -> Optional[pd.DataFrame]:
         for c in ["brand_name", "generic_name", "dosage_form", "route", "dosage_strength"]:
             if c not in df.columns:
                 df[c] = ""
+        if "generic_name" in df.columns:
+            split_vals = df["generic_name"].fillna("").astype(str).map(extract_base_and_salts)
+            df["generic_name"] = [base or original.strip().upper() for (base, _), original in zip(split_vals, df["generic_name"].fillna("").astype(str))]
+            df["salt_form"] = [serialize_salt_list(salts) for _, salts in split_vals]
+        else:
+            df["salt_form"] = ""
         return df
     except Exception:
         return None
@@ -69,13 +82,19 @@ def build_brand_automata(brand_df: pd.DataFrame) -> Tuple[ahocorasick.Automaton,
         dosage_form = str(r.get("dosage_form") or "").strip()
         route = str(r.get("route") or "").strip()
         dosage_strength = str(r.get("dosage_strength") or "").strip()
+        salt_form = str(r.get("salt_form") or "").strip()
         bn = _normalize_text_basic(_base_name(b))
         bc = normalize_compact(b)
         if not bn:
             continue
         # Map the normalized brand token to its full metadata payload.
         mapping.setdefault(bn, []).append(BrandMatch(
-            brand=b, generic=g, dosage_form=dosage_form, route=route, dosage_strength=dosage_strength
+            brand=b,
+            generic=g,
+            salt_form=salt_form,
+            dosage_form=dosage_form,
+            route=route,
+            dosage_strength=dosage_strength,
         ))
         if bn not in seen_norm:
             # Register the normalized token once for the standard automaton.

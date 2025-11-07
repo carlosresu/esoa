@@ -14,7 +14,13 @@ import pandas as pd
 
 from .routes_forms_drugs import map_route_token, parse_form_from_text
 from .dose_drugs import parse_dose_struct_from_text, to_mg, safe_ratio_mg_per_ml
-from .text_utils_drugs import clean_atc, normalize_text, slug_id
+from .text_utils_drugs import (
+    clean_atc,
+    extract_base_and_salts,
+    normalize_text,
+    serialize_salt_list,
+    slug_id,
+)
 
 
 def prepare(pnf_csv: str, esoa_csv: str, outdir: str = ".") -> tuple[str, str]:
@@ -31,6 +37,9 @@ def prepare(pnf_csv: str, esoa_csv: str, outdir: str = ".") -> tuple[str, str]:
     # Canonicalize the identifying columns that later stages depend on.  These
     # are split out early so failures surface before any heavy parsing work.
     pnf["generic_name"] = pnf["Molecule"].fillna("").astype(str)
+    split_values = pnf["generic_name"].map(extract_base_and_salts)
+    pnf["generic_name"] = [base or original.strip().upper() for (base, _), original in zip(split_values, pnf["Molecule"].fillna("").astype(str))]
+    pnf["salt_form"] = [serialize_salt_list(salts) for _, salts in split_values]
     pnf["generic_id"] = pnf["generic_name"].map(slug_id)
     pnf["synonyms"] = ""
     pnf["route_tokens"] = pnf["Route"].map(map_route_token)
@@ -77,7 +86,7 @@ def prepare(pnf_csv: str, esoa_csv: str, outdir: str = ".") -> tuple[str, str]:
     keep = exploded[exploded["generic_name"].astype(bool)].copy()
 
     pnf_prepared = keep[[
-        "generic_id", "generic_name", "synonyms", "atc_code",
+        "generic_id", "generic_name", "salt_form", "synonyms", "atc_code",
         "route_allowed", "form_token", "dose_kind",
         "strength", "unit", "per_val", "per_unit", "pct",
         "strength_mg", "ratio_mg_per_ml",
