@@ -25,7 +25,7 @@ import pandas as pd
 from ..constants import PIPELINE_INPUTS_DIR, PROJECT_ROOT
 from .dose_drugs import parse_dose_struct_from_text, safe_ratio_mg_per_ml, to_mg
 from .routes_forms_drugs import FORM_TO_ROUTE, extract_route_and_form, parse_form_from_text
-from .text_utils_drugs import normalize_text, slug_id
+from .text_utils_drugs import detect_as_boundary, normalize_text, slug_id, strip_after_as
 from .combos_drugs import SALT_TOKENS
 
 # Containers observed in Annex F (canonical form -> token variants)
@@ -169,6 +169,7 @@ class _NameEntry:
 class _ResolvedMatch:
     entry: _NameEntry
     start: int
+    end: int
 
 
 class _ReferenceNameResolver:
@@ -219,7 +220,8 @@ class _ReferenceNameResolver:
         if not best:
             return None
         start_idx = best_start if best_start >= 0 else 0
-        return _ResolvedMatch(entry=best, start=start_idx)
+        end_idx = start_idx + len(best.tokens) if best else start_idx
+        return _ResolvedMatch(entry=best, start=start_idx, end=end_idx)
 
 
 def _read_csv(path: Path, usecols: Iterable[str]) -> Optional[pd.DataFrame]:
@@ -361,14 +363,17 @@ def _reference_name_resolver() -> _ReferenceNameResolver:
     return resolver
 
 
-def _fallback_generic_name(raw_desc: str) -> str:
+def _fallback_generic_name(raw_desc: str, normalized_desc: str, as_index: Optional[int]) -> str:
     """Strip dose/pack cues to surface the base Annex F molecule name when references miss."""
     if not isinstance(raw_desc, str):
         return ""
-    norm = normalize_text(raw_desc)
+    norm = normalized_desc if normalized_desc else normalize_text(raw_desc)
     norm = norm.replace("+", " + ").replace("/", " / ")
+    tokens_source = norm.split()
+    if as_index is not None and as_index > 0:
+        tokens_source = tokens_source[:as_index]
     tokens: list[str] = []
-    for tok in norm.split():
+    for tok in tokens_source:
         if not tok or tok == "/":
             continue
         if DIGIT_ONLY_RX.fullmatch(tok):
@@ -419,7 +424,7 @@ def _vitamin_descriptor(normalized_desc: str) -> Optional[str]:
     return None
 
 
-def _accept_resolved_match(match: _ResolvedMatch) -> bool:
+def _accept_resolved_match(match: _ResolvedMatch, as_index: Optional[int]) -> bool:
     entry = match.entry
     tokens = entry.tokens
     if len(tokens) > 1:
@@ -427,6 +432,8 @@ def _accept_resolved_match(match: _ResolvedMatch) -> bool:
     token = tokens[0]
     if match.start <= 2:
         return True
+    if as_index is not None and as_index > 0 and match.start >= as_index:
+        return False
     if match.start > MAX_SINGLE_TOKEN_START_INDEX:
         return False
     if token in GENERIC_SINGLE_TOKEN_BLACKLIST:
@@ -442,15 +449,18 @@ def _derive_generic_name(
     resolver: _ReferenceNameResolver,
 ) -> Tuple[str, str]:
     custom_descriptor = _vitamin_descriptor(normalized_desc)
+    as_index = detect_as_boundary(normalized_desc)
     resolved = resolver.resolve(raw_desc) if isinstance(raw_desc, str) else None
     match_source = "fallback"
-    if resolved and not _accept_resolved_match(resolved):
+    if resolved and not _accept_resolved_match(resolved, as_index):
         resolved = None
     if resolved:
         name = resolved.entry.canonical
         match_source = resolved.entry.source
     else:
-        name = _fallback_generic_name(raw_desc)
+        trimmed_norm = strip_after_as(normalized_desc)
+        norm_for_fallback = trimmed_norm if trimmed_norm else normalized_desc
+        name = _fallback_generic_name(raw_desc, norm_for_fallback, as_index)
         match_source = "fallback"
     if custom_descriptor and custom_descriptor.lower() not in name.lower():
         name = f"{name} ({custom_descriptor})"

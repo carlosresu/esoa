@@ -35,6 +35,31 @@ def normalize_text(s: str) -> str:
     s = re.sub(r"\s+", " ", s).strip()
     return s
 
+
+def detect_as_boundary(norm_text: str) -> Optional[int]:
+    """Return the index of the first standalone 'as' token in already-normalized text."""
+    if not isinstance(norm_text, str):
+        return None
+    tokens = norm_text.split()
+    for idx, tok in enumerate(tokens):
+        if tok == "as":
+            return idx
+    return None
+
+
+def strip_after_as(norm_text: str) -> str:
+    """Remove tokens occurring after the first standalone 'as' token, preserving prefixes."""
+    if not isinstance(norm_text, str):
+        return ""
+    boundary = detect_as_boundary(norm_text)
+    if boundary is None or boundary <= 0:
+        return norm_text
+    tokens = norm_text.split()
+    if boundary >= len(tokens):
+        return norm_text
+    stripped = " ".join(tokens[:boundary]).strip()
+    return stripped or norm_text
+
 def normalize_compact(s: str) -> str:
     """Compact the normalized text by removing whitespace and hyphens."""
     return re.sub(r"[ \-]", "", normalize_text(s))
