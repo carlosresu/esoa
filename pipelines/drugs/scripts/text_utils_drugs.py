@@ -13,30 +13,35 @@ BASE_GENERIC_IGNORE = {
     "and",
     "with",
     "plus",
-    "in",
-    "solution",
-    "suspension",
-    "syrup",
-    "powder",
+    "per",
+    "unit",
+    "units",
+    "approx",
+    "approximately",
+    "pre",
+    "filled",
+    "pre-filled",
+    "syringe",
+    "bag",
+    "bottle",
+    "vial",
+    "ampule",
+    "ampoule",
+    "sachet",
+    "drops",
+    "drop",
+    "spray",
+    "patch",
+    "capsule",
+    "tablet",
     "cream",
     "ointment",
     "gel",
     "lotion",
-    "drops",
-    "drop",
-    "tablet",
-    "capsule",
-    "ampule",
-    "ampoule",
-    "vial",
-    "bottle",
-    "bag",
-    "sachet",
+    "suspension",
+    "powder",
+    "syrup",
     "nebule",
-    "spray",
-    "patch",
-    "pre-filled",
-    "syringe",
     "oral",
     "intravenous",
     "intramuscular",
@@ -44,8 +49,8 @@ BASE_GENERIC_IGNORE = {
     "ophthalmic",
     "nasal",
     "topical",
-    "unit",
-    "units",
+    "l",
+    "ml",
 }
 
 PAREN_CONTENT_RX = re.compile(r"\(([^)]+)\)")
@@ -166,9 +171,6 @@ STOPWORD_TOKENS = (
     }
 )
 
-BASE_GENERIC_IGNORE |= STOPWORD_TOKENS
-
-
 def _build_salt_token_words() -> set:
     tokens: set[str] = set()
     for token in SALT_TOKENS:
@@ -205,26 +207,41 @@ def extract_base_and_salts(raw_text: str) -> Tuple[str, List[str]]:
     norm = normalize_text(raw_text)
     tokens = norm.split()
     boundary = detect_as_boundary(norm)
-    scan_tokens = tokens[:boundary] if boundary else tokens
+    base_candidates = tokens if boundary is None else tokens[:boundary]
+    salt_candidates = [] if boundary is None else tokens[boundary + 1 :]
     salt_tokens: list[str] = []
     base_tokens: list[str] = []
-    for tok in scan_tokens:
+    for tok in salt_candidates:
         tok_lower = tok.lower()
-        if tok_lower in SALT_TOKEN_WORDS:
-            salt_tokens.append(tok_upper := tok.upper())
+        if tok_lower in {"and", "with", "plus", "+", "/"}:
             continue
+        if not tok_lower:
+            continue
+        salt_tokens.append(tok.upper())
+    def _is_candidate(tok: str) -> bool:
+        tok_lower = tok.lower()
         if tok_lower in BASE_GENERIC_IGNORE:
-            continue
+            return False
         if any(ch.isdigit() for ch in tok_lower) or tok_lower == "%":
-            continue
+            return False
         if not re.search(r"[a-z]", tok_lower):
+            return False
+        return True
+
+    for idx, tok in enumerate(base_candidates):
+        tok_lower = tok.lower()
+        if tok in {"+", "/", "&"}:
+            if base_tokens and any(_is_candidate(t) for t in base_candidates[idx + 1 :]):
+                base_tokens.append(tok)
+            continue
+        if not _is_candidate(tok):
             continue
         base_tokens.append(tok.upper())
     if base_tokens:
         base = " ".join(base_tokens).strip().upper()
     else:
         base = ""
-    unique_salts = []
+    unique_salts: List[str] = []
     seen = set()
     for tok in salt_tokens:
         if tok and tok not in seen:
@@ -232,6 +249,7 @@ def extract_base_and_salts(raw_text: str) -> Tuple[str, List[str]]:
             unique_salts.append(tok)
     if not base and unique_salts:
         base = " ".join(unique_salts)
+        unique_salts = []
     if not base and raw_text:
         base = raw_text.strip().upper()
     return base, unique_salts

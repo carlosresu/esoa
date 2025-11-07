@@ -67,6 +67,10 @@ CONTAINER_NORMAL = {alias: base for base, aliases in CONTAINER_ALIASES.items() f
 
 # Tokens that should never be stripped from molecule names when building the Annex F generic.
 SALT_WHITELIST = set(SALT_TOKENS)
+SALT_TOKEN_WORDS = {token.lower() for token in SALT_TOKENS}
+for phrase in SALT_TOKENS:
+    for part in normalize_text(phrase).split():
+        SALT_TOKEN_WORDS.add(part)
 
 # Additional words that add no value to the canonical molecule string.
 GENERIC_STOPWORDS = {
@@ -458,6 +462,7 @@ def _derive_generic_name(
     norm_for_matching = trimmed_norm if trimmed_norm else normalized_desc
     as_index_full = detect_as_boundary(normalized_desc)
     as_index_trimmed = detect_as_boundary(norm_for_matching)
+    base_name_from_text, salts_from_text = extract_base_and_salts(norm_for_matching)
     resolved = resolver.resolve(raw_desc) if isinstance(raw_desc, str) else None
     match_source = "fallback"
     if resolved and not _accept_resolved_match(resolved, as_index_full):
@@ -465,14 +470,19 @@ def _derive_generic_name(
     if resolved:
         name = resolved.entry.canonical
         match_source = resolved.entry.source
+        resolved_norm_tokens = normalize_text(name).split()
+        if base_name_from_text and resolved_norm_tokens and all(tok in SALT_TOKEN_WORDS for tok in resolved_norm_tokens):
+            name = base_name_from_text
+            match_source = "fallback_preferred"
     else:
         name = _fallback_generic_name(raw_desc, norm_for_matching, as_index_trimmed)
         match_source = "fallback"
     base_name, salts = extract_base_and_salts(name)
     generic_name = base_name or name
+    salt_tokens = salts or salts_from_text
     if custom_descriptor and custom_descriptor.lower() not in generic_name.lower():
         generic_name = f"{generic_name} ({custom_descriptor})"
-    return generic_name.upper(), match_source, salts
+    return generic_name.upper(), match_source, salt_tokens
 
 
 PACK_FREETEXT_SKIP = {
