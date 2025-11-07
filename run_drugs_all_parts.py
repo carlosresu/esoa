@@ -298,11 +298,6 @@ def _prune_dated_exports(directory: Path) -> None:
                 path.unlink()
 
 
-def run_drugbank_export() -> None:
-    """Execute the DrugBank aggregation helper so dependency CSVs land in inputs/drugs."""
-    cmd = [sys.executable, "-m", "pipelines.drugs.scripts.run_drugbank_drugs"]
-    subprocess.check_call(cmd, cwd=str(THIS_DIR))
-
 # ----------------------------
 # Spinner + timing
 # ----------------------------
@@ -358,7 +353,6 @@ GROUP_DEFINITIONS: list[tuple[str, tuple[str, ...]]] = [
         (
             "Setup & Prerequisites",
             (
-                "DrugBank aggregation",
                 "Prepare Annex F",
                 "ATC R preprocessing",
                 "Build FDA brand map",
@@ -529,11 +523,6 @@ def main_entry() -> None:
         default=None,
         help="Path to an existing annex_f_prepared.csv to reuse (skips Annex preparation stage when provided).",
     )
-    parser.add_argument(
-        "--skip-drugbank",
-        action="store_true",
-        help="Skip running the DrugBank aggregation helper before the Python pipeline",
-    )
     parser.add_argument("--skip-excel", action="store_true", help="Skip writing XLSX output (CSV and summaries still produced)")
     parser.add_argument(
         "--skip-unknowns",
@@ -614,10 +603,6 @@ def main_entry() -> None:
         skip_excel=args.skip_excel,
         extra=extra_options,
     )
-
-    if not args.skip_drugbank:
-        elapsed = run_with_spinner("DrugBank aggregation", run_drugbank_export)
-        timings.add("DrugBank aggregation", elapsed)
 
     pipeline.run(context, params, options, timing_hook=timings.add)
 

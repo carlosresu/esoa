@@ -30,7 +30,6 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--out", default="esoa_matched_drugs.csv", help="Output CSV filename (stored under ./outputs/drugs)")
     parser.add_argument("--skip-r", action="store_true", help="Skip running ATC R preprocessing scripts")
     parser.add_argument("--skip-brandmap", action="store_true", help="Skip building FDA brand map CSV")
-    parser.add_argument("--skip-drugbank", action="store_true", help="Skip running the DrugBank aggregation helper")
     parser.add_argument("--skip-excel", action="store_true", help="Skip writing XLSX output (CSV and summaries still produced)")
     parser.add_argument("--skip-unknowns", action="store_true", help="Skip resolve_unknowns enrichment after matching")
     args = parser.parse_args(argv)
@@ -59,8 +58,6 @@ def main(argv: list[str] | None = None) -> None:
         forwarded.append("--skip-r")
     if args.skip_brandmap:
         forwarded.append("--skip-brandmap")
-    if args.skip_drugbank:
-        forwarded.append("--skip-drugbank")
     if args.skip_excel:
         forwarded.append("--skip-excel")
     if args.skip_unknowns:
