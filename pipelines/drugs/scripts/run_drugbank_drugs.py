@@ -4,7 +4,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-from ..constants import PIPELINE_DRUGBANK_GENERICS_PATH
+from ..constants import (
+    PIPELINE_DRUGBANK_BRANDS_PATH,
+    PIPELINE_DRUGBANK_GENERICS_PATH,
+    PIPELINE_INPUTS_DIR,
+)
 
 
 def stream_r_script(executable: str, script_path: Path) -> int:
@@ -58,14 +62,23 @@ def main() -> None:
         sys.exit(return_code)
 
     output_dir = project_root / "dependencies" / "drugbank_generics" / "output"
-    source = output_dir / "generics.csv"
-    target = PIPELINE_DRUGBANK_GENERICS_PATH
-    if source.is_file():
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, target)
-        print(f"Copied {source.name} to {target}")
-    else:
-        sys.stderr.write(f"Warning: expected {source} not found; nothing copied.\n")
+    copies = {
+        "drugbank_generics.csv": [
+            PIPELINE_DRUGBANK_GENERICS_PATH,
+            PIPELINE_INPUTS_DIR / "generics.csv",  # legacy fallback for older tooling
+        ],
+        "drugbank_brands.csv": [PIPELINE_DRUGBANK_BRANDS_PATH],
+    }
+
+    for filename, targets in copies.items():
+        source = output_dir / filename
+        if not source.is_file():
+            sys.stderr.write(f"Warning: expected {source} not found; nothing copied.\n")
+            continue
+        for target in targets:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+            print(f"Copied {source.name} to {target}")
 
 
 if __name__ == "__main__":

@@ -45,7 +45,7 @@ def load_drugbank_generics(
     project_root: str | Path | None = None,
 ) -> Tuple[Set[str], Set[str], Dict[str, Set[Tuple[str, ...]]], Dict[str, str]]:
     """
-    Load DrugBank generics (prefer the freshly exported dependencies/drugbank/output/generics.csv).
+    Load DrugBank generics (prefer the freshly exported dependencies/drugbank_generics/output/drugbank_generics.csv).
 
     Returns:
         - normalized_names: Unique normalized generic phrases (lowercase, punctuation-stripped).
@@ -56,9 +56,10 @@ def load_drugbank_generics(
     root = _project_root(project_root)
     inputs_dir = root / "inputs" / PIPELINE_SLUG
     candidates = [
-        root / "dependencies" / "drugbank" / "output" / "generics.csv",
-        inputs_dir / "generics.csv",
+        root / "dependencies" / "drugbank_generics" / "output" / "drugbank_generics.csv",
+        root / "dependencies" / "drugbank" / "output" / "generics.csv",  # legacy path
         inputs_dir / "drugbank_generics.csv",
+        inputs_dir / "generics.csv",
     ]
 
     normalized_map: Dict[str, str] = {}
