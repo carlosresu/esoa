@@ -28,9 +28,13 @@ BASE_GENERIC_IGNORE = {
     "ampule",
     "ampoule",
     "sachet",
+    "sachets",
+    "can",
+    "cans",
     "drops",
     "drop",
     "spray",
+    "solution",
     "patch",
     "capsule",
     "tablet",
@@ -76,19 +80,42 @@ def normalize_text(s: str) -> str:
     s = s.lower()
     s = re.sub(r"[^\w%/+\.\- ]+", " ", s)
     s = s.replace("microgram", "mcg").replace("μg", "mcg").replace("µg", "mcg")
-    s = s.replace("cc", "ml").replace("milli litre", "ml").replace("milliliter", "ml")
+    s = re.sub(r"(?<![a-z])cc(?![a-z])", "ml", s).replace("milli litre", "ml").replace("milliliter", "ml")
     s = s.replace("gm", "g").replace("gms", "g").replace("milligram", "mg")
+    s = s.replace("polymixin", "polymyxin")
     s = re.sub(r"\s+", " ", s).strip()
     return s
 
+_SALT_TAIL_BREAK_TOKENS = {"+", "/", "&", "and", "with"}
+
+
+def _looks_like_salt_tail(tokens: List[str], start_idx: int) -> bool:
+    """Heuristic to ensure 'as' only signals salts, not new molecules."""
+    seen_salt = False
+    for tok in tokens[start_idx:]:
+        if tok in _SALT_TAIL_BREAK_TOKENS:
+            break
+        if not tok:
+            continue
+        if any(ch.isdigit() for ch in tok) or tok in {"%", "per"}:
+            break
+        tok_lower = tok.lower()
+        if tok_lower in SALT_TOKEN_WORDS:
+            seen_salt = True
+            continue
+        return False
+    return seen_salt
+
 
 def detect_as_boundary(norm_text: str) -> Optional[int]:
-    """Return the index of the first standalone 'as' token in already-normalized text."""
+    """Return the index of the first 'as' token that introduces salt descriptors."""
     if not isinstance(norm_text, str):
         return None
     tokens = norm_text.split()
     for idx, tok in enumerate(tokens):
-        if tok == "as":
+        if tok != "as":
+            continue
+        if _looks_like_salt_tail(tokens, idx + 1):
             return idx
     return None
 
@@ -207,23 +234,8 @@ def extract_base_and_salts(raw_text: str) -> Tuple[str, List[str]]:
     norm = normalize_text(raw_text)
     tokens = norm.split()
     boundary = detect_as_boundary(norm)
-    base_candidates = tokens
-    salt_candidates: List[str] = []
-    if boundary is not None:
-        tail_tokens = tokens[boundary + 1 :]
-        combo_split_idx: Optional[int] = None
-        for idx, tok in enumerate(tail_tokens):
-            if tok in {"+", "/", "with", "plus"}:
-                next_tok = tail_tokens[idx + 1] if idx + 1 < len(tail_tokens) else ""
-                if next_tok and re.search(r"[a-z]", next_tok):
-                    combo_split_idx = idx
-                    break
-        if combo_split_idx is None:
-            base_candidates = tokens[:boundary]
-            salt_candidates = tail_tokens
-        else:
-            base_candidates = tokens[:boundary] + tail_tokens[combo_split_idx:]
-            salt_candidates = tail_tokens[:combo_split_idx]
+    base_candidates = tokens if boundary is None else tokens[:boundary]
+    salt_candidates = [] if boundary is None else tokens[boundary + 1 :]
     salt_tokens: list[str] = []
     base_tokens: list[str] = []
     for tok in salt_candidates:
@@ -235,6 +247,8 @@ def extract_base_and_salts(raw_text: str) -> Tuple[str, List[str]]:
         if not re.search(r"[a-z]", tok_lower):
             continue
         if tok_lower not in SALT_TOKEN_WORDS:
+            continue
+        if tok_lower in {"salt", "salts"}:
             continue
         salt_tokens.append(tok.upper())
     def _is_candidate(tok: str) -> bool:
@@ -263,6 +277,18 @@ def extract_base_and_salts(raw_text: str) -> Tuple[str, List[str]]:
         if not _is_candidate(tok):
             continue
         base_tokens.append(tok.upper())
+    def _trim_trailing_salts(seq: List[str]) -> List[str]:
+        if not seq:
+            return []
+        if not any(tok.lower() not in SALT_TOKEN_WORDS for tok in seq):
+            return []
+        trimmed: List[str] = []
+        while seq and seq[-1].lower() in SALT_TOKEN_WORDS:
+            trimmed.append(seq.pop().upper())
+        return list(reversed(trimmed))
+
+    trimmed = _trim_trailing_salts(base_tokens)
+    salt_tokens.extend(trimmed)
     if base_tokens:
         base = " ".join(base_tokens).strip().upper()
     else:

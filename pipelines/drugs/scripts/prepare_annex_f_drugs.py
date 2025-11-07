@@ -28,12 +28,13 @@ from .routes_forms_drugs import FORM_TO_ROUTE, extract_route_and_form, parse_for
 from .text_utils_drugs import (
     detect_as_boundary,
     extract_base_and_salts,
+    extract_parenthetical_phrases,
     normalize_text,
     serialize_salt_list,
     slug_id,
     strip_after_as,
 )
-from .combos_drugs import SALT_TOKENS
+from .combos_drugs import SALT_TOKENS, looks_like_combination, split_combo_segments
 
 # Containers observed in Annex F (canonical form -> token variants)
 # Recognized containers observed in Annex F (canonical form -> token variants).
@@ -42,6 +43,7 @@ CONTAINER_ALIASES = {
     "vial": {"vial", "vialx"},
     "bottle": {"bottle", "bot", "bottl"},
     "bag": {"bag", "bagxx"},
+    "can": {"can"},
     "sachet": {"sachet", "sachets"},
     "capsule": {"capsule", "capsules", "cap", "caps"},
     "tablet": {"tablet", "tablets", "tab", "tabs", "tabx"},
@@ -94,6 +96,12 @@ GENERIC_STOPWORDS = {
     "per",
     "dose",
     "doses",
+    "unit",
+    "units",
+    "meter",
+    "metered",
+    "count",
+    "counts",
     "sol",
     "soln",
     "susp",
@@ -118,6 +126,7 @@ GENERIC_STOPWORDS |= {  # forms/vehicles that do not affect the molecule identit
     "drop",
     "nebule",
     "neb",
+    "inhaler",
 }
 
 # Compile regexes once so the preparation pass stays fast enough for CLI usage.
@@ -173,12 +182,15 @@ COMBO_KEYWORDS = {
     "compound",
     "coformulated",
     "co-formulated",
+    "coformulation",
 }
 
 COMBO_ALPHA_PLUS_RX = re.compile(r"[a-z]\s*\+\s*[a-z]")
 COMBO_ALPHA_SLASH_RX = re.compile(r"[a-z]\s*/\s*[a-z]")
 VITAMIN_COMPLEX_RX = re.compile(r"\bvitamin\s+b\d+(?:\s+b\d+)+")
+VITAMIN_B_TOKEN_RX = re.compile(r"\b(b\d+)\b", re.I)
 DOSE_DIGIT_RX = re.compile(r"\d")
+
 EXTRA_TOKEN_STOPWORDS = (
     GENERIC_STOPWORDS
     | {
@@ -212,6 +224,10 @@ EXTRA_TOKEN_STOPWORDS = (
         "kits",
         "unit",
         "units",
+        "meter",
+        "metered",
+        "count",
+        "counts",
     }
     | set(CONTAINER_NORMAL.keys())
     | set(UNIT_NORMAL.keys())
@@ -283,6 +299,30 @@ class _ReferenceNameResolver:
         start_idx = best_start if best_start >= 0 else 0
         end_idx = start_idx + len(best.tokens) if best else start_idx
         return _ResolvedMatch(entry=best, start=start_idx, end=end_idx)
+
+    def resolve_all(self, raw_text: str) -> List[_ResolvedMatch]:
+        tokens = tuple(normalize_text(raw_text).split())
+        if not tokens:
+            return []
+        matches: List[_ResolvedMatch] = []
+        seen_spans: set[Tuple[int, int, str]] = set()
+        for idx, tok in enumerate(tokens):
+            bucket = self.token_index.get(tok)
+            if not bucket:
+                continue
+            for entry in bucket:
+                span = len(entry.tokens)
+                if idx + span > len(tokens):
+                    continue
+                if entry.tokens != tokens[idx : idx + span]:
+                    continue
+                key = (idx, idx + span, entry.canonical.lower())
+                if key in seen_spans:
+                    continue
+                seen_spans.add(key)
+                matches.append(_ResolvedMatch(entry=entry, start=idx, end=idx + span))
+        matches.sort(key=lambda m: (m.start, -len(m.entry.tokens), m.entry.priority))
+        return matches
 
 
 def _token_has_letters(token: str) -> bool:
@@ -553,7 +593,7 @@ def _fallback_generic_name(raw_desc: str, normalized_desc: str, as_index: Option
 
 
 def _looks_like_vitamin_combo(norm_text: str) -> bool:
-    return bool(VITAMIN_B_MULTI_RX.search(norm_text))
+    return bool(VITAMIN_COMPLEX_RX.search(norm_text))
 
 
 def _combo_fragments(raw_desc: str, normalized_desc: str) -> List[str]:
@@ -574,7 +614,7 @@ def _combo_fragments(raw_desc: str, normalized_desc: str) -> List[str]:
             return True
         if _looks_like_vitamin_combo(text):
             return True
-        if any(keyword in text for keyword in ("combined", "combination", "compound", "coformulated")):
+        if any(keyword in text for keyword in COMBO_KEYWORDS):
             return True
         return False
 
@@ -584,8 +624,7 @@ def _combo_fragments(raw_desc: str, normalized_desc: str) -> List[str]:
 
 
 def _segment_has_molecule_hint(segment: str) -> bool:
-    tokens = segment.split()
-    for tok in tokens:
+    for tok in segment.split():
         if not tok:
             continue
         if DIGIT_ONLY_RX.fullmatch(tok):
@@ -644,7 +683,15 @@ def _segment_component_entries(segment: str, resolver: _ReferenceNameResolver) -
         source_text = snippet_text or canonical_raw
         for expanded_name, expanded_salts in _expand_component_aliases(base or canonical_raw, salts, source_text):
             key = expanded_name.strip().upper()
-            if not key or key in seen_names:
+            if not key:
+                continue
+            key_norm = normalize_text(expanded_name)
+            if not _segment_has_molecule_hint(key_norm):
+                continue
+            key_tokens = key_norm.split()
+            if key_tokens and all(tok in SALT_TOKEN_WORDS for tok in key_tokens):
+                continue
+            if key in seen_names:
                 continue
             seen_names.add(key)
             components.append((key, expanded_salts))
@@ -688,6 +735,10 @@ def _combo_components_from_text(
         salt_tokens.extend(salts)
     ordered_names = [name for name, _ in components]
     return ordered_names, salt_tokens
+
+
+def _looks_like_vitamin_combo(norm_text: str) -> bool:
+    return bool(VITAMIN_COMPLEX_RX.search(norm_text))
 
 
 def _vitamin_descriptor(normalized_desc: str) -> Optional[str]:
@@ -738,6 +789,16 @@ def _derive_generic_name(
     as_index_full = detect_as_boundary(normalized_desc)
     as_index_trimmed = detect_as_boundary(norm_for_matching)
     base_name_from_text, salts_from_text = extract_base_and_salts(norm_for_matching)
+    combo_components, combo_salts = _combo_components_from_text(raw_desc, normalized_desc, resolver)
+    if combo_components:
+        salt_tokens = combo_salts.copy()
+        for tok in salts_from_text:
+            if tok not in salt_tokens:
+                salt_tokens.append(tok)
+        generic_combo_name = " + ".join(combo_components).upper()
+        if custom_descriptor and custom_descriptor.lower() not in generic_combo_name.lower():
+            generic_combo_name = f"{generic_combo_name} ({custom_descriptor})"
+        return generic_combo_name, "combo_fallback", salt_tokens
     resolved = resolver.resolve(raw_desc) if isinstance(raw_desc, str) else None
     match_source = "fallback"
     if resolved and not _accept_resolved_match(resolved, as_index_full):
