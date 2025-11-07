@@ -62,7 +62,7 @@ COMMON_UNKNOWN_STOPWORDS = {
 }
 
 COMMON_UNKNOWN_STOPWORDS |= set(load_ignore_words())
-_, _drugbank_tokens, _, _ = load_drugbank_generics()
+_, _drugbank_tokens, _, _, _ = load_drugbank_generics()
 COMMON_UNKNOWN_STOPWORDS |= set(_drugbank_tokens)
 
 # -----------------------------
