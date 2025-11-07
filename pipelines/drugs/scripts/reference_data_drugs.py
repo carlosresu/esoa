@@ -12,10 +12,11 @@ from typing import Dict, Iterable, List, Set, Tuple
 
 import pandas as pd
 
-from ..constants import PIPELINE_INPUTS_DIR, PIPELINE_SLUG, PROJECT_ROOT
+from ..constants import PIPELINE_INPUTS_DIR, PROJECT_ROOT
 from .text_utils_drugs import _normalize_text_basic
 
 _TOKEN_RX = re.compile(r"[a-z]+")
+_PIPELINE_INPUTS_SUBPATH = PIPELINE_INPUTS_DIR.relative_to(PROJECT_ROOT)
 
 
 def _project_root(project_root: str | Path | None = None) -> Path:
@@ -54,7 +55,7 @@ def load_drugbank_generics(
         - display_lookup: normalized generic -> representative display string.
     """
     root = _project_root(project_root)
-    inputs_dir = root / "inputs" / PIPELINE_SLUG
+    inputs_dir = root / _PIPELINE_INPUTS_SUBPATH
     candidates = [
         root / "dependencies" / "drugbank_generics" / "output" / "drugbank_generics.csv",
         root / "dependencies" / "drugbank" / "output" / "generics.csv",  # legacy path
@@ -134,7 +135,7 @@ def load_ignore_words(project_root: str | Path | None = None) -> Set[str]:
     Returns a set of lowercase alphanumeric tokens.
     """
     root = _project_root(project_root)
-    inputs_dir = root / "inputs" / PIPELINE_SLUG
+    inputs_dir = root / _PIPELINE_INPUTS_SUBPATH
 
     tokens: Set[str] = set(DEFAULT_IGNORE_TOKENS)
 
