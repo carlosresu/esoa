@@ -252,6 +252,12 @@ def _prune_dated_exports(directory: Path) -> None:
             if date != latest_date and path.exists():
                 path.unlink()
 
+
+def run_drugbank_export() -> None:
+    """Execute the DrugBank aggregation helper so dependency CSVs land in inputs/drugs."""
+    cmd = [sys.executable, "-m", "pipelines.drugs.scripts.run_drugbank_drugs"]
+    subprocess.check_call(cmd, cwd=str(THIS_DIR))
+
 # ----------------------------
 # Spinner + timing
 # ----------------------------
@@ -307,6 +313,7 @@ GROUP_DEFINITIONS: list[tuple[str, tuple[str, ...]]] = [
     (
         "Setup & Prerequisites",
         (
+            "DrugBank aggregation",
             "ATC R preprocessing",
             "Build FDA brand map",
             "Prepare inputs",
@@ -455,6 +462,11 @@ def main_entry() -> None:
     parser.add_argument("--out", default="esoa_matched_drugs.csv", help="Output CSV filename (saved under ./outputs/drugs)")
     parser.add_argument("--skip-r", action="store_true", help="Skip running ATC R preprocessing scripts")
     parser.add_argument("--skip-brandmap", action="store_true", help="Skip building FDA brand map CSV")
+    parser.add_argument(
+        "--skip-drugbank",
+        action="store_true",
+        help="Skip running the DrugBank aggregation helper before the Python pipeline",
+    )
     parser.add_argument("--skip-excel", action="store_true", help="Skip writing XLSX output (CSV and summaries still produced)")
     parser.add_argument(
         "--skip-unknowns",
@@ -507,6 +519,10 @@ def main_entry() -> None:
             "out_csv": out_path,
         },
     )
+
+    if not args.skip_drugbank:
+        elapsed = run_with_spinner("DrugBank aggregation", run_drugbank_export)
+        timings.add("DrugBank aggregation", elapsed)
 
     pipeline.run(context, params, options, timing_hook=timings.add)
 
