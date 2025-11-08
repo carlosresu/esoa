@@ -42,6 +42,10 @@ BASE_GENERIC_IGNORE = {
     "ointment",
     "gel",
     "lotion",
+    "agent",
+    "agents",
+    "forming",
+    "gas",
     "suspension",
     "powder",
     "syrup",
@@ -53,9 +57,33 @@ BASE_GENERIC_IGNORE = {
     "ophthalmic",
     "nasal",
     "topical",
-    "l",
-    "ml",
+    "percent",
+    "elemental",
+    "equiv",
+    "equivalent",
 }
+
+MEASUREMENT_TOKENS = {
+    "ml",
+    "l",
+    "cc",
+    "mg",
+    "mcg",
+    "ug",
+    "g",
+    "kg",
+    "iu",
+    "lsu",
+    "mu",
+    "meq",
+    "meqs",
+    "mol",
+    "mmol",
+    "pct",
+}
+
+BASE_GENERIC_IGNORE |= MEASUREMENT_TOKENS
+BASE_GENERIC_IGNORE |= {"%", "ratio", "per"}
 
 PAREN_CONTENT_RX = re.compile(r"\(([^)]+)\)")
 
@@ -78,6 +106,7 @@ def normalize_text(s: str) -> str:
     s = unicodedata.normalize("NFKD", s)
     s = "".join(c for c in s if not unicodedata.combining(c))
     s = s.lower()
+    s = re.sub(r"\biv\b", "intravenous", s)
     s = re.sub(r"[^\w%/+\.\- ]+", " ", s)
     s = s.replace("microgram", "mcg").replace("μg", "mcg").replace("µg", "mcg")
     s = re.sub(r"(?<![a-z])cc(?![a-z])", "ml", s).replace("milli litre", "ml").replace("milliliter", "ml")
@@ -100,6 +129,8 @@ def _looks_like_salt_tail(tokens: List[str], start_idx: int) -> bool:
         if any(ch.isdigit() for ch in tok) or tok in {"%", "per"}:
             break
         tok_lower = tok.lower()
+        if tok_lower == "and/or":
+            continue
         if tok_lower in SALT_TOKEN_WORDS:
             seen_salt = True
             continue
@@ -213,6 +244,14 @@ def _build_salt_token_words() -> set:
 
 SALT_TOKEN_WORDS = _build_salt_token_words()
 
+def _is_measurement_token(tok: str) -> bool:
+    tok = tok.lower()
+    if tok in MEASUREMENT_TOKENS or tok in {"%", "ratio", "per"}:
+        return True
+    if tok.endswith("ml") or tok.endswith("mg"):
+        return True
+    return False
+
 
 def serialize_salt_list(salts: Iterable[str]) -> str:
     """Join unique salt labels using a consistent delimiter for CSV output."""
@@ -255,6 +294,8 @@ def extract_base_and_salts(raw_text: str) -> Tuple[str, List[str]]:
         tok_lower = tok.lower()
         if tok_lower in BASE_GENERIC_IGNORE:
             return False
+        if _is_measurement_token(tok_lower):
+            return False
         if tok_lower in SALT_TOKEN_WORDS:
             if base_tokens:
                 salt_tokens.append(tok.upper())
@@ -270,6 +311,29 @@ def extract_base_and_salts(raw_text: str) -> Tuple[str, List[str]]:
                 return False
         return True
 
+    def _truncate_tokens(tokens: List[str]) -> List[str]:
+        truncated: List[str] = []
+        for tok in tokens:
+            tok_lower = tok.lower()
+            if tok in {"+", "/", "&"}:
+                if truncated:
+                    truncated.append(tok.upper())
+                continue
+            if tok_lower in {"as"}:
+                break
+            if _is_measurement_token(tok_lower):
+                continue
+            if tok_lower in BASE_GENERIC_IGNORE and tok_lower not in SALT_TOKEN_WORDS:
+                continue
+            if not re.search(r"[a-z]", tok_lower):
+                continue
+            if any(ch.isdigit() for ch in tok_lower):
+                if re.fullmatch(r"[a-z]+[0-9]+[a-z0-9]*", tok_lower):
+                    truncated.append(tok.upper())
+                continue
+            truncated.append(tok.upper())
+        return truncated
+
     for idx, tok in enumerate(base_candidates):
         tok_lower = tok.lower()
         if tok in {"+", "/", "&"}:
@@ -279,6 +343,9 @@ def extract_base_and_salts(raw_text: str) -> Tuple[str, List[str]]:
         if not _is_candidate(tok):
             continue
         base_tokens.append(tok.upper())
+
+    if not base_tokens:
+        base_tokens = _truncate_tokens(list(base_candidates))
 
     def _trim_trailing_salts(seq: List[str]) -> List[str]:
         if not seq:

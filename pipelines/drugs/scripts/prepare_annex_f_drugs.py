@@ -124,6 +124,10 @@ GENERIC_STOPWORDS |= {  # forms/vehicles that do not affect the molecule identit
     "spray",
     "drops",
     "drop",
+    "gas",
+    "agent",
+    "agents",
+    "forming",
     "nebule",
     "neb",
     "inhaler",
@@ -633,6 +637,9 @@ def _segment_has_molecule_hint(segment: str) -> bool:
             continue
         if tok in GENERIC_STOPWORDS:
             continue
+        letters_only = re.sub(r"[^a-z]", "", tok.lower())
+        if letters_only and letters_only in UNIT_NORMAL:
+            continue
         if re.search(r"[a-z]", tok):
             return True
     return False
@@ -669,9 +676,9 @@ def _segment_component_entries(segment: str, resolver: _ReferenceNameResolver) -
         if "+" in canonical_norm or "/" in canonical_norm or " with " in canonical_norm:
             continue
         canonical_tokens = canonical_norm.split()
-        if canonical_tokens and all(
-            tok in SALT_TOKEN_WORDS or tok in UNIT_NORMAL or tok in CONTAINER_NORMAL for tok in canonical_tokens
-        ):
+        if canonical_tokens and len(canonical_tokens) == 1 and canonical_tokens[0] in SALT_TOKEN_WORDS:
+            continue
+        if canonical_tokens and all(tok in UNIT_NORMAL or tok in CONTAINER_NORMAL for tok in canonical_tokens):
             continue
         span = (match.start, match.end)
         if span in seen_spans:
@@ -689,7 +696,9 @@ def _segment_component_entries(segment: str, resolver: _ReferenceNameResolver) -
             if not _segment_has_molecule_hint(key_norm):
                 continue
             key_tokens = key_norm.split()
-            if key_tokens and all(tok in SALT_TOKEN_WORDS for tok in key_tokens):
+            if key_tokens and len(key_tokens) == 1 and key_tokens[0] in SALT_TOKEN_WORDS:
+                continue
+            if key_tokens and all(tok in UNIT_NORMAL or tok in CONTAINER_NORMAL for tok in key_tokens):
                 continue
             if key in seen_names:
                 continue
@@ -703,6 +712,62 @@ def _segment_component_entries(segment: str, resolver: _ReferenceNameResolver) -
         base, salts = extract_base_and_salts(segment)
         components = _expand_component_aliases(base, salts, segment) if base else []
     return components
+
+
+def _prune_combo_components(components: List[Tuple[str, List[str]]]) -> List[Tuple[str, List[str]]]:
+    if not components:
+        return []
+    normalized = [normalize_text(name).split() for name, _ in components]
+    keep: List[Tuple[str, List[str]]] = []
+    for idx, tokens in enumerate(normalized):
+        tokens = [tok for tok in tokens if tok]
+        if not tokens:
+            continue
+        if not _segment_has_molecule_hint(" ".join(tokens)):
+            continue
+        if all(tok in {"as", "and", "or", "salt", "salts"} for tok in tokens):
+            continue
+        if len(tokens) == 1 and tokens[0] in SALT_TOKEN_WORDS:
+            continue
+        token_set = set(tokens)
+        is_subset = False
+        for j, other in enumerate(normalized):
+            if idx == j:
+                continue
+            other_tokens = [tok for tok in other if tok]
+            if not other_tokens:
+                continue
+            other_set = set(other_tokens)
+            if token_set and token_set < other_set:
+                is_subset = True
+                break
+        if not is_subset:
+            keep.append(components[idx])
+    return keep
+
+
+def _shared_combo_tokens(names: Sequence[str]) -> set[str]:
+    def _fingerprint(token: str) -> Optional[str]:
+        if not token:
+            return None
+        stripped = re.sub(r"[^a-z]", "", token.lower())
+        if not stripped or len(stripped) < 4:
+            return None
+        return stripped[:6]
+
+    token_sets: List[set[str]] = []
+    for name in names:
+        tokens = [tok for tok in normalize_text(name).split() if _token_is_substance(tok)]
+        fingerprints = {_fingerprint(tok) for tok in tokens if _fingerprint(tok)}
+        if not fingerprints:
+            return set()
+        token_sets.append(fingerprints)
+    if not token_sets:
+        return set()
+    shared = set(token_sets[0])
+    for tokens in token_sets[1:]:
+        shared &= tokens
+    return shared
 
 
 def _combo_components_from_text(
@@ -728,6 +793,9 @@ def _combo_components_from_text(
             components.append((key, salts))
         if len(components) >= 2:
             break
+    if len(components) < 2:
+        return [], []
+    components = _prune_combo_components(components)
     if len(components) < 2:
         return [], []
     salt_tokens: List[str] = []
@@ -790,37 +858,65 @@ def _derive_generic_name(
     as_index_trimmed = detect_as_boundary(norm_for_matching)
     base_name_from_text, salts_from_text = extract_base_and_salts(norm_for_matching)
     combo_components, combo_salts = _combo_components_from_text(raw_desc, normalized_desc, resolver)
-    if combo_components:
-        salt_tokens = combo_salts.copy()
-        for tok in salts_from_text:
-            if tok not in salt_tokens:
-                salt_tokens.append(tok)
-        generic_combo_name = " + ".join(combo_components).upper()
-        if custom_descriptor and custom_descriptor.lower() not in generic_combo_name.lower():
-            generic_combo_name = f"{generic_combo_name} ({custom_descriptor})"
-        return generic_combo_name, "combo_fallback", salt_tokens
+    shared_combo_tokens = _shared_combo_tokens(combo_components) if combo_components else set()
+    ratio_pattern = bool(re.search(r"\d+\s*/\s*\d+", normalized_desc))
+    ratio_combo_collapse = False
+    if combo_components and ratio_pattern and shared_combo_tokens:
+        combo_components = []
+        ratio_combo_collapse = True
     resolved = resolver.resolve(raw_desc) if isinstance(raw_desc, str) else None
-    match_source = "fallback"
     if resolved and not _accept_resolved_match(resolved, as_index_full):
         resolved = None
     if resolved and combo_hint and not _name_looks_combo(resolved.entry.canonical):
         if _has_unmatched_substances(normalized_desc, resolved):
             resolved = None
+    if resolved and combo_components:
+        resolved_norm = normalize_text(resolved.entry.canonical)
+        combo_missing = False
+        for component in combo_components:
+            comp_norm = normalize_text(component)
+            if comp_norm and comp_norm not in resolved_norm:
+                combo_missing = True
+                break
+        if combo_missing:
+            resolved = None
+    match_source = "fallback"
     if resolved:
         name = resolved.entry.canonical
         match_source = resolved.entry.source
         resolved_norm_tokens = normalize_text(name).split()
-        if base_name_from_text and resolved_norm_tokens and all(tok in SALT_TOKEN_WORDS for tok in resolved_norm_tokens):
+        filtered_tokens = [tok for tok in resolved_norm_tokens if tok not in {"as"}]
+        if base_name_from_text and filtered_tokens and all(tok in SALT_TOKEN_WORDS for tok in filtered_tokens):
             name = base_name_from_text
             match_source = "fallback_preferred"
+        combo_name = any(sep in name for sep in ("+", "/", " with "))
+        if combo_name:
+            generic_name = name
+            salt_tokens = salts_from_text
+        else:
+            base_name, salts = extract_base_and_salts(name)
+            generic_name = base_name or name
+            salt_tokens = salts or salts_from_text
+    elif combo_components:
+        salt_tokens = combo_salts.copy()
+        for tok in salts_from_text:
+            if tok not in salt_tokens:
+                salt_tokens.append(tok)
+        generic_name = " + ".join(combo_components)
+        match_source = "combo_fallback"
     else:
         name = _fallback_generic_name(raw_desc, norm_for_matching, as_index_trimmed)
-        match_source = "fallback"
-    base_name, salts = extract_base_and_salts(name)
-    generic_name = base_name or name
-    salt_tokens = salts or salts_from_text
-    if custom_descriptor and custom_descriptor.lower() not in generic_name.lower():
-        generic_name = f"{generic_name} ({custom_descriptor})"
+        base_name, salts = extract_base_and_salts(name)
+        generic_name = base_name or name
+        if ratio_combo_collapse and "+" in generic_name:
+            generic_name = generic_name.split("+", 1)[0].strip()
+        salt_tokens = salts or salts_from_text
+    if custom_descriptor:
+        descriptor_lower = custom_descriptor.lower()
+        if "vitamins intravenous" in normalized_desc and "vitamins intravenous" not in generic_name.lower():
+            generic_name = f"VITAMINS INTRAVENOUS ({custom_descriptor})"
+        elif descriptor_lower not in generic_name.lower():
+            generic_name = f"{generic_name} ({custom_descriptor})"
     return generic_name.upper(), match_source, salt_tokens
 
 
