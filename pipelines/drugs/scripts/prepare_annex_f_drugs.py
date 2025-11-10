@@ -153,6 +153,8 @@ GENERIC_STOPWORDS |= {  # forms/vehicles that do not affect the molecule identit
     "sachets",
     "pouch",
     "container",
+    "jar",
+    "jars",
     "intravenous",
     "intramuscular",
     "subcutaneous",
@@ -280,6 +282,11 @@ EXTRA_TOKEN_STOPWORDS = (
     | set(UNIT_NORMAL.keys())
     | SALT_TOKEN_WORDS
 )
+
+RINGER_TERMS = {"RINGER", "RINGERS", "RINGER'S"}
+RINGER_SOLUTION_RX = re.compile(r"ringer(?:'s|s|\s+s)?\s+solution", re.IGNORECASE)
+SYNONYM_SKIP_PREFIXES = ("AS ", "AS/", "FOR ", "WITH ", "IN ", "OF ", "TO ", "ON ")
+SYNONYM_SKIP_TERMS = {"SOLUTION"}
 
 GENERIC_ROUTE_FORM_TOKENS = (
     {token.upper() for token in FORM_TO_ROUTE}
@@ -568,6 +575,8 @@ def _maybe_restore_parenthetical(raw_desc: str, candidate: str) -> str:
         phrase_norm = normalize_text(phrase)
         if not phrase_norm:
             continue
+        if phrase_norm.startswith("as "):
+            continue
         if cand_norm == phrase_norm or (cand_norm and cand_norm in phrase_norm):
             base = leading if leading else candidate
             return f"{base.strip()} ({phrase.strip()})"
@@ -663,16 +672,8 @@ def _dedupe_component_names(components: List[Tuple[str, List[str]]]) -> List[Tup
 
 
 def _maybe_merge_primary_salt(generic_name: str, salt_tokens: List[str]) -> Tuple[str, List[str]]:
-    if not salt_tokens:
-        return generic_name, salt_tokens
-    upper = generic_name.upper()
-    if any(sep in upper for sep in (" + ", " / ", " IN ", " WITH ")):
-        return generic_name, salt_tokens
-    tokens = [tok for tok in upper.split() if tok]
-    if len(tokens) > 1:
-        return generic_name, salt_tokens
-    merged = f"{upper} {' '.join(salt_tokens)}".strip()
-    return merged, salt_tokens
+    # Keep salts in their dedicated column rather than merging into the generic label.
+    return generic_name, salt_tokens
 
 
 def _clean_repeated_words(name: str) -> str:
@@ -695,6 +696,8 @@ def _token_should_strip_from_generic_name(token: str) -> bool:
     if upper_token in GENERIC_ROUTE_FORM_TOKENS:
         return True
     lower_token = token.lower()
+    if lower_token in GENERIC_STOPWORDS:
+        return True
     if lower_token in UNIT_NORMAL:
         return True
     if lower_token and lower_token[0].isdigit():
@@ -706,20 +709,30 @@ def _token_should_strip_from_generic_name(token: str) -> bool:
     if ":" in lower_token and any(ch.isdigit() for ch in lower_token):
         return True
     if any(lower_token.endswith(suffix) for suffix in GENERIC_MEASUREMENT_SUFFIXES):
-        return True
+        if re.search(r"\d", lower_token):
+            return True
     return False
 
 
 def _strip_generic_name_extras(name: str) -> str:
     tokens = re.sub(r"([+/])", r" \1 ", name).split()
     filtered: List[str] = []
+    prev_raw = ""
     for tok in tokens:
         if tok in {"+", "/"}:
             filtered.append(tok)
+            prev_raw = tok
+            continue
+        upper_tok = tok.upper().strip(".,;:-()\"'")
+        if upper_tok == "SOLUTION" and _is_ringer_token(prev_raw):
+            filtered.append(tok)
+            prev_raw = tok
             continue
         if _token_should_strip_from_generic_name(tok):
+            prev_raw = tok
             continue
         filtered.append(tok)
+        prev_raw = tok
 
     cleaned: List[str] = []
     for tok in filtered:
@@ -741,6 +754,96 @@ def _strip_generic_name_extras(name: str) -> str:
     return sanitized.upper()
 
 
+def _normalize_token(token: str) -> str:
+    return re.sub(r"[^A-Z0-9']+", "", (token or "").upper())
+
+
+def _is_ringer_token(token: str) -> bool:
+    return _normalize_token(token) in RINGER_TERMS
+
+
+def _filter_synonyms(synonyms: Sequence[str]) -> List[str]:
+    filtered: List[str] = []
+    seen: set[str] = set()
+    for candidate in synonyms:
+        norm = (candidate or "").strip()
+        if not norm:
+            continue
+        upper = norm.upper()
+        if upper in seen:
+            continue
+        if upper in SYNONYM_SKIP_TERMS:
+            continue
+        if any(upper.startswith(prefix) for prefix in SYNONYM_SKIP_PREFIXES):
+            continue
+        if re.search(r"\d", upper):
+            continue
+        filtered.append(upper)
+        seen.add(upper)
+    return filtered
+
+
+def _extract_parenthetical_synonyms(name: str) -> Tuple[str, List[str]]:
+    buffer: list[str] = []
+    synonyms: List[str] = []
+    idx = 0
+    while idx < len(name):
+        char = name[idx]
+        if char == ")":
+            idx += 1
+            continue
+        if char == "(":
+            close = name.find(")", idx + 1)
+            if close == -1:
+                break
+            snippet = name[idx + 1 : close].strip()
+            if snippet:
+                synonyms.append(snippet)
+            idx = close + 1
+            continue
+        buffer.append(char)
+        idx += 1
+    cleaned = re.sub(r"\s+", " ", "".join(buffer)).strip(" ,;:-")
+    return cleaned, _filter_synonyms(synonyms)
+
+
+def _split_generic_variant(name: str) -> Tuple[str, str]:
+    if not name:
+        return "", ""
+    parts = [part.strip() for part in name.split(",", 1)]
+    base = parts[0] if parts else ""
+    variant = parts[1] if len(parts) > 1 else ""
+    return base, variant
+
+
+def _clean_variant_text(variant: str) -> str:
+    tokens = variant.split()
+    cleaned: List[str] = []
+    for tok in tokens:
+        if not tok:
+            continue
+        stripped = tok.strip(".,;:-)")
+        if not stripped:
+            continue
+        if "%" in stripped:
+            continue
+        if re.search(r"\d", stripped):
+            continue
+        cleaned.append(stripped.upper())
+    return " ".join(cleaned).strip()
+
+
+def _split_generic_components(name: str) -> Tuple[str, str, List[str]]:
+    stripped, synonyms = _extract_parenthetical_synonyms(name)
+    base, variant = _split_generic_variant(stripped)
+    base = base.strip()
+    variant = variant.strip()
+    variant = _clean_variant_text(variant)
+    if not base and stripped:
+        base = stripped
+    return base.upper(), variant.upper(), synonyms
+
+
 def _apply_suffix_fixes(name: str) -> str:
     updated = re.sub(r"\s+FOR ADULT\b", " (ADULT)", name)
     updated = re.sub(r"\s+FOR PEDIA\b", " (PEDIA)", updated)
@@ -754,6 +857,8 @@ def _should_use_prefix_name(candidate: str, prefix: str, match_source: str) -> b
         return False
     prefix_norm = normalize_text(prefix)
     if not prefix_norm:
+        return False
+    if " as " in prefix_norm:
         return False
     candidate_norm = normalize_text(candidate)
     if " IN " in candidate.upper():
@@ -921,6 +1026,9 @@ CUSTOM_ALIAS_ENTRIES: Tuple[Tuple[str, str, int], ...] = (
     ("Vitamins Intravenous Water-Soluble", "Vitamins Intravenous, Water-Soluble", 0),
     ("Vitamins Intravenous", "Vitamins Intravenous", 1),
     ("Dextrose in Lactated Ringer's Solution", "Dextrose in Lactated Ringer's Solution", 0),
+    ("Alpha-Tocopherol", "Alpha-Tocopherol", 0),
+    ("Alpha Tocopherol", "Alpha-Tocopherol", 0),
+    ("Alpha-Tocopherol Vitamin E", "Alpha-Tocopherol", 0),
 )
 
 
@@ -1314,7 +1422,7 @@ def _derive_generic_name(
     raw_desc: str,
     normalized_desc: str,
     resolver: _ReferenceNameResolver,
-) -> Tuple[str, str, List[str]]:
+) -> Tuple[str, str, List[str], str, List[str]]:
     custom_descriptor = _vitamin_descriptor(normalized_desc)
     tokens_full = normalized_desc.split()
     combo_hint = _combo_indicator_present(normalized_desc, tokens_full)
@@ -1394,8 +1502,24 @@ def _derive_generic_name(
             generic_name = f"{generic_name} ({descriptor_upper})"
     generic_name = _restore_possessives(generic_name)
     generic_name = _clean_repeated_words(generic_name)
-    generic_name = _strip_generic_name_extras(generic_name)
-    return generic_name, match_source, salt_tokens
+    sanitized_name = _strip_generic_name_extras(generic_name)
+    if salt_tokens:
+        salt_set = {tok.upper() for tok in salt_tokens if tok}
+        if salt_set:
+            tokens: List[str] = []
+            for tok in sanitized_name.split():
+                cleaned = tok.strip(".,;:-)")
+                if cleaned and cleaned.upper() in salt_set:
+                    continue
+                tokens.append(tok)
+            if tokens:
+                sanitized_name = " ".join(tokens)
+    derived_name, generic_variant, generic_synonyms = _split_generic_components(sanitized_name)
+    if normalized_desc and RINGER_SOLUTION_RX.search(normalized_desc):
+        if derived_name and not derived_name.endswith("SOLUTION"):
+            derived_name = f"{derived_name} SOLUTION"
+    final_name = derived_name or sanitized_name
+    return final_name, match_source, salt_tokens, generic_variant, generic_synonyms
 
 
 PACK_FREETEXT_SKIP = {
@@ -1615,15 +1739,24 @@ def prepare_annex_f(input_csv: str, output_csv: str) -> str:
 
         route_allowed, form_token, route_evidence = _deduce_route_form(norm, pack_container)
 
-        generic_name, generic_source, salt_tokens = _derive_generic_name(desc, norm, resolver)
+        (
+            generic_name,
+            generic_source,
+            salt_tokens,
+            generic_variant,
+            generic_synonyms,
+        ) = _derive_generic_name(desc, norm, resolver)
         generic_id = slug_id(generic_name) if generic_name else ""
         salt_form = serialize_salt_list(salt_tokens)
+        generic_synonyms_text = "; ".join(generic_synonyms) if generic_synonyms else ""
 
         records.append(
             {
                 "drug_code": str(raw_code).strip(),
                 "generic_id": generic_id,
                 "generic_name": generic_name,
+                "generic_variant": generic_variant,
+                "generic_synonyms": generic_synonyms_text,
                 "generic_source": generic_source,
                 "salt_form": salt_form,
                 "raw_description": desc,
