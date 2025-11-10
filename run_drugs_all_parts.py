@@ -237,25 +237,9 @@ def _prepare_annex_core(
     return Path(result).resolve()
 
 
-def _preview_csv(path: Path, data_lines: int) -> None:
-    """Print the header and a handful of rows from a CSV file."""
-    if data_lines <= 0:
-        return
-    try:
-        with path.open("r", encoding="utf-8") as handle:
-            print(f"\nPreview of {path}:")
-            for idx, line in enumerate(handle):
-                line = line.rstrip("\n")
-                print(f"  {line}")
-                if idx >= data_lines:
-                    break
-    except FileNotFoundError:
-        print(f"! Unable to preview Annex F (missing file: {path})")
-
-
-def _announce_annex(path: Path, preview_lines: int) -> None:
-    print(f"\nAnnex F prepared at: {path}")
-    _preview_csv(path, preview_lines)
+def _announce_annex(path: Path) -> None:
+    """Placeholder to avoid console output during Annex F preparation."""
+    _ = path
 
 def _assert_all_exist(root: Path, files: Iterable[str | os.PathLike[str]]) -> None:
     """Validate that every filename under root exists before shelling out to R scripts."""
@@ -513,12 +497,6 @@ def main_entry() -> None:
         help="Only run the Annex F preparation/preview stage and exit.",
     )
     parser.add_argument(
-        "--annex-preview-lines",
-        type=int,
-        default=5,
-        help="Number of lines (including header) to print from annex_f_prepared.csv after preparation.",
-    )
-    parser.add_argument(
         "--annex-prepared",
         default=None,
         help="Path to an existing annex_f_prepared.csv to reuse (skips Annex preparation stage when provided).",
@@ -573,7 +551,7 @@ def main_entry() -> None:
         elapsed_annex = run_with_spinner("Prepare Annex F", _annex_task)
         timings.add("Prepare Annex F", elapsed_annex)
         if annex_prepared_path:
-            _announce_annex(annex_prepared_path, args.annex_preview_lines)
+            _announce_annex(annex_prepared_path)
         if args.prepare_annex_only:
             _print_grouped_summary(timings)
             return

@@ -25,19 +25,12 @@ def main(argv: list[str] | None = None) -> None:
         default=str(run_dm.PIPELINE_INPUTS_SUBDIR / "annex_f_prepared.csv"),
         help="Destination CSV for the prepared Annex F output.",
     )
-    parser.add_argument(
-        "--preview-lines",
-        type=int,
-        default=5,
-        help="Number of lines (including header) to print after preparation.",
-    )
     args = parser.parse_args(argv)
 
     inputs_dir = run_dm._ensure_inputs_dir()
     annex_path = run_dm._resolve_input_path(args.annex)
     out_path = run_dm._resolve_repo_path(args.out)
-    prepared_path = run_dm._prepare_annex_core(annex_path, inputs_dir, output_path=out_path)
-    run_dm._announce_annex(prepared_path, args.preview_lines)
+    run_dm._prepare_annex_core(annex_path, inputs_dir, output_path=out_path)
 
 
 if __name__ == "__main__":
