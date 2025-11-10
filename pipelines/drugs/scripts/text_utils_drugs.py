@@ -85,6 +85,10 @@ MEASUREMENT_TOKENS = {
 BASE_GENERIC_IGNORE |= MEASUREMENT_TOKENS
 BASE_GENERIC_IGNORE |= {"%", "ratio", "per"}
 
+def _token_core(token: str) -> str:
+    """Return a normalized token key for comparisons."""
+    return token.lower().strip(".,;:'\"()[]{}")
+
 PAREN_CONTENT_RX = re.compile(r"\(([^)]+)\)")
 
 def _normalize_text_basic(s: str) -> str:
@@ -112,6 +116,7 @@ def normalize_text(s: str) -> str:
     s = re.sub(r"(?<![a-z])cc(?![a-z])", "ml", s).replace("milli litre", "ml").replace("milliliter", "ml")
     s = s.replace("gm", "g").replace("gms", "g").replace("milligram", "mg")
     s = s.replace("polymixin", "polymyxin")
+    s = s.replace("hydrochlorde", "hydrochloride")
     s = re.sub(r"\s+", " ", s).strip()
     return s
 
@@ -277,6 +282,7 @@ def extract_base_and_salts(raw_text: str) -> Tuple[str, List[str]]:
     salt_candidates = [] if boundary is None else tokens[boundary + 1 :]
     salt_tokens: list[str] = []
     base_tokens: list[str] = []
+    pending_leading_salts: list[str] = []
     for tok in salt_candidates:
         tok_lower = tok.lower()
         if tok_lower in {"and", "with", "plus", "+", "/"}:
@@ -292,13 +298,16 @@ def extract_base_and_salts(raw_text: str) -> Tuple[str, List[str]]:
         salt_tokens.append(tok.upper())
     def _is_candidate(tok: str) -> bool:
         tok_lower = tok.lower()
-        if tok_lower in BASE_GENERIC_IGNORE:
+        tok_key = _token_core(tok)
+        if tok_key in BASE_GENERIC_IGNORE:
             return False
-        if _is_measurement_token(tok_lower):
+        if _is_measurement_token(tok_key):
             return False
         if tok_lower in SALT_TOKEN_WORDS:
             if base_tokens:
                 salt_tokens.append(tok.upper())
+            else:
+                pending_leading_salts.append(tok.upper())
             return False
         if tok_lower == "%":
             return False
@@ -315,15 +324,16 @@ def extract_base_and_salts(raw_text: str) -> Tuple[str, List[str]]:
         truncated: List[str] = []
         for tok in tokens:
             tok_lower = tok.lower()
+            tok_key = _token_core(tok)
             if tok in {"+", "/", "&"}:
                 if truncated:
                     truncated.append(tok.upper())
                 continue
             if tok_lower in {"as"}:
                 break
-            if _is_measurement_token(tok_lower):
+            if _is_measurement_token(tok_key):
                 continue
-            if tok_lower in BASE_GENERIC_IGNORE and tok_lower not in SALT_TOKEN_WORDS:
+            if tok_key in BASE_GENERIC_IGNORE and tok_lower not in SALT_TOKEN_WORDS:
                 continue
             if not re.search(r"[a-z]", tok_lower):
                 continue
@@ -346,6 +356,8 @@ def extract_base_and_salts(raw_text: str) -> Tuple[str, List[str]]:
 
     if not base_tokens:
         base_tokens = _truncate_tokens(list(base_candidates))
+    if not base_tokens and pending_leading_salts:
+        base_tokens = pending_leading_salts
 
     def _trim_trailing_salts(seq: List[str]) -> List[str]:
         if not seq:
