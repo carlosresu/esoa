@@ -24,7 +24,7 @@ import pandas as pd
 
 from ..constants import PIPELINE_INPUTS_DIR, PROJECT_ROOT
 from .dose_drugs import parse_dose_struct_from_text, safe_ratio_mg_per_ml, to_mg
-from .routes_forms_drugs import FORM_TO_ROUTE, extract_route_and_form, parse_form_from_text
+from .routes_forms_drugs import FORM_TO_ROUTE, ROUTE_ALIASES, extract_route_and_form, parse_form_from_text
 from .text_utils_drugs import (
     detect_as_boundary,
     extract_base_and_salts,
@@ -131,6 +131,49 @@ GENERIC_STOPWORDS |= {  # forms/vehicles that do not affect the molecule identit
     "nebule",
     "neb",
     "inhaler",
+    "ampule",
+    "amp",
+    "ampul",
+    "ampoule",
+    "vial",
+    "vials",
+    "bottle",
+    "bottl",
+    "bott",
+    "bottles",
+    "bag",
+    "bags",
+    "pack",
+    "packs",
+    "box",
+    "boxes",
+    "kit",
+    "kits",
+    "sachet",
+    "sachets",
+    "pouch",
+    "container",
+    "intravenous",
+    "intramuscular",
+    "subcutaneous",
+    "intrathecal",
+    "parenteral",
+    "oral",
+    "topical",
+    "dermal",
+    "cutaneous",
+    "ophthalmic",
+    "otic",
+    "nasal",
+    "inhalation",
+    "transdermal",
+    "sublingual",
+    "buccal",
+    "injection",
+    "injectable",
+    "infusion",
+    "eye",
+    "ear",
 }
 
 # Compile regexes once so the preparation pass stays fast enough for CLI usage.
@@ -237,6 +280,38 @@ EXTRA_TOKEN_STOPWORDS = (
     | set(UNIT_NORMAL.keys())
     | SALT_TOKEN_WORDS
 )
+
+GENERIC_ROUTE_FORM_TOKENS = (
+    {token.upper() for token in FORM_TO_ROUTE}
+    | {alias.upper() for alias in ROUTE_ALIASES}
+    | {route.upper() for route in ROUTE_ALIASES.values()}
+    | {container.upper() for container in set(CONTAINER_NORMAL.values())}
+    | {
+        "INJECTION",
+        "INFUSION",
+        "INJECTABLE",
+        "DILUENT",
+        "CONCENTRATE",
+        "CONCENTRATED",
+        "STERILE",
+    }
+)
+GENERIC_MEASUREMENT_SUFFIXES = {
+    "mg",
+    "mcg",
+    "ug",
+    "ml",
+    "l",
+    "g",
+    "iu",
+    "lsu",
+    "meq",
+    "meqs",
+    "cc",
+    "pct",
+    "cl",
+    "kg",
+}
 
 PLACEHOLDER_TOKENS = {
     "balanced",
@@ -610,6 +685,60 @@ def _clean_repeated_words(name: str) -> str:
         cleaned.append(tok)
         prev = tok
     return " ".join(cleaned)
+
+
+def _token_should_strip_from_generic_name(token: str) -> bool:
+    token = token.strip(".,;:-()\"'")
+    if not token:
+        return True
+    upper_token = token.upper()
+    if upper_token in GENERIC_ROUTE_FORM_TOKENS:
+        return True
+    lower_token = token.lower()
+    if lower_token in UNIT_NORMAL:
+        return True
+    if lower_token and lower_token[0].isdigit():
+        return True
+    if "%" in lower_token:
+        return True
+    if "/" in lower_token and any(ch.isdigit() for ch in lower_token):
+        return True
+    if ":" in lower_token and any(ch.isdigit() for ch in lower_token):
+        return True
+    if any(lower_token.endswith(suffix) for suffix in GENERIC_MEASUREMENT_SUFFIXES):
+        return True
+    return False
+
+
+def _strip_generic_name_extras(name: str) -> str:
+    tokens = re.sub(r"([+/])", r" \1 ", name).split()
+    filtered: List[str] = []
+    for tok in tokens:
+        if tok in {"+", "/"}:
+            filtered.append(tok)
+            continue
+        if _token_should_strip_from_generic_name(tok):
+            continue
+        filtered.append(tok)
+
+    cleaned: List[str] = []
+    for tok in filtered:
+        if tok in {"+", "/"}:
+            if not cleaned or cleaned[-1] in {"+", "/"}:
+                continue
+            cleaned.append(tok)
+            continue
+        cleaned.append(tok)
+    if cleaned and cleaned[-1] in {"+", "/"}:
+        cleaned.pop()
+
+    sanitized = " ".join(cleaned).strip()
+    sanitized = re.sub(r"\s*\+\s*", " + ", sanitized)
+    sanitized = re.sub(r"\s*/\s*", " / ", sanitized)
+    sanitized = sanitized.strip(" ,;:-")
+    if not sanitized:
+        return name.strip().upper()
+    return sanitized.upper()
 
 
 def _apply_suffix_fixes(name: str) -> str:
@@ -1265,6 +1394,7 @@ def _derive_generic_name(
             generic_name = f"{generic_name} ({descriptor_upper})"
     generic_name = _restore_possessives(generic_name)
     generic_name = _clean_repeated_words(generic_name)
+    generic_name = _strip_generic_name_extras(generic_name)
     return generic_name, match_source, salt_tokens
 
 
