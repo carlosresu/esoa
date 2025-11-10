@@ -17,6 +17,7 @@ import math
 import re
 from dataclasses import dataclass
 from functools import lru_cache
+from itertools import zip_longest
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -26,6 +27,7 @@ from ..constants import PIPELINE_INPUTS_DIR, PROJECT_ROOT
 from .dose_drugs import parse_dose_struct_from_text, safe_ratio_mg_per_ml, to_mg
 from .routes_forms_drugs import FORM_TO_ROUTE, ROUTE_ALIASES, extract_route_and_form, parse_form_from_text
 from .text_utils_drugs import (
+    SPECIAL_SALT_TOKENS,
     detect_as_boundary,
     extract_base_and_salts,
     extract_parenthetical_phrases,
@@ -776,7 +778,7 @@ def _filter_synonyms(synonyms: Sequence[str]) -> List[str]:
             continue
         if any(upper.startswith(prefix) for prefix in SYNONYM_SKIP_PREFIXES):
             continue
-        if re.search(r"\d", upper):
+        if re.fullmatch(r"[\d./%]+", upper):
             continue
         filtered.append(upper)
         seen.add(upper)
@@ -1397,6 +1399,103 @@ def _vitamin_descriptor(normalized_desc: str) -> Optional[str]:
     if "water soluble" in normalized_desc:
         return "Water-Soluble"
     return None
+
+
+def _append_all_in_one_synonyms(
+    raw_desc: str,
+    normalized_desc: str,
+    synonyms: List[str],
+) -> List[str]:
+    if not raw_desc or not normalized_desc:
+        return synonyms
+    norm_lower = normalized_desc.lower()
+    if "all-in-one" not in norm_lower or "admixture" not in norm_lower:
+        return synonyms
+    for snippet in extract_parenthetical_phrases(raw_desc):
+        candidate = snippet.strip().upper()
+        if candidate and candidate not in synonyms:
+            synonyms.append(candidate)
+    return synonyms
+
+
+def _canonicalize_enteral_nutrition(name: str, normalized_desc: str) -> str:
+    norm = (normalized_desc or "").lower()
+    if "enteral nutrition" in norm and "disease" in norm:
+        return "ENTERAL NUTRITION DISEASE-SPECIFIC"
+    return name
+
+
+def _canonicalize_vaccine_name(name: str, normalized_desc: str) -> str:
+    text = (normalized_desc or "").lower()
+    if "vaccine" not in text:
+        return name
+    if "bcg" in text:
+        return "BCG VACCINE"
+    if "diphtheria" in text and "tetanus" in text:
+        return "DIPHTHERIA-TETANUS TOXOIDS"
+    if "live attenuated" in text or "opv" in text or "oral polio" in text:
+        return "LIVE ATTENUATED VACCINE"
+    if "polio" in text and ("inactivated" in text or "ipv" in text) and "live" not in text:
+        return "INACTIVATED POLIOMYELITIS VACCINE"
+    if "influenza" in text:
+        return "INFLUENZA POLYVALENT VACCINE"
+    if "hepatitis a" in text:
+        return "HEPATITIS A INACTIVATED VACCINE"
+    if "hepatitis b" in text:
+        return "HEPATITIS B VACCINE"
+    if "meningococcal" in text and "polysaccharide" in text:
+        return "MENINGOCOCCAL POLYSACCHARIDE"
+    if ("human papillomavirus" in text or "hpv" in text) and "quadrivalent" in text:
+        return "HUMAN PAPILLOMAVIRUS QUADRIVALENT RECOMBINANT VACCINE"
+    if "tetanus toxoid" in text and "diphtheria" not in text:
+        return "TETANUS TOXOID"
+    if "tuberculin" in text:
+        return "TUBERCULIN"
+    if "yellow fever" in text:
+        return "YELLOW FEVER VACCINE"
+    if "typhoid" in text:
+        return "TYPHOID VACCINE"
+    return name
+
+
+def _restore_special_salt_suffixes(name: str, raw_desc: str) -> str:
+    raw_text = (raw_desc or "").lower()
+    if not raw_text or not any(salt in raw_text for salt in SPECIAL_SALT_TOKENS):
+        return name
+    components = [comp.strip() for comp in re.split(r"\s*\+\s*", name)]
+    raw_segments = [seg.strip() for seg in re.split(r"\s*\+\s*", raw_desc or "")]
+    updated: List[str] = []
+    for comp, raw_segment in zip_longest(components, raw_segments, fillvalue=""):
+        comp_text = (comp or "").strip()
+        if not comp_text:
+            continue
+        comp_norm = normalize_text(comp_text)
+        raw_norm = normalize_text(raw_segment)
+        suffixes: List[str] = []
+        if comp_norm and raw_norm:
+            for salt in SPECIAL_SALT_TOKENS:
+                if salt in raw_norm and salt not in comp_norm:
+                    upper = salt.upper()
+                    if upper not in comp_text:
+                        suffixes.append(upper)
+        segment = comp_text
+        if suffixes:
+            segment = f"{segment} {' '.join(suffixes)}"
+        updated.append(segment.strip())
+    return " + ".join(updated)
+
+
+def _apply_special_name_overrides(
+    name: str,
+    normalized_desc: str,
+    raw_desc: str,
+    synonyms: List[str],
+) -> Tuple[str, List[str]]:
+    name = _restore_special_salt_suffixes(name, raw_desc)
+    synonyms = _append_all_in_one_synonyms(raw_desc, normalized_desc, synonyms)
+    name = _canonicalize_enteral_nutrition(name, normalized_desc)
+    name = _canonicalize_vaccine_name(name, normalized_desc)
+    return name, synonyms
 def _accept_resolved_match(match: _ResolvedMatch, as_index: Optional[int]) -> bool:
     entry = match.entry
     tokens = entry.tokens
@@ -1519,6 +1618,12 @@ def _derive_generic_name(
         if derived_name and not derived_name.endswith("SOLUTION"):
             derived_name = f"{derived_name} SOLUTION"
     final_name = derived_name or sanitized_name
+    final_name, generic_synonyms = _apply_special_name_overrides(
+        final_name,
+        normalized_desc,
+        raw_desc,
+        generic_synonyms,
+    )
     return final_name, match_source, salt_tokens, generic_variant, generic_synonyms
 
 
