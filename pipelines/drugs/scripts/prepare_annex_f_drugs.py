@@ -238,6 +238,68 @@ EXTRA_TOKEN_STOPWORDS = (
     | SALT_TOKEN_WORDS
 )
 
+PLACEHOLDER_TOKENS = {
+    "balanced",
+    "split",
+    "group",
+    "adult",
+    "pedia",
+    "pediatric",
+    "agent",
+    "agents",
+    "pouch",
+    "cartridge",
+    "diluent",
+    "dispersible",
+    "chewable",
+    "equiv",
+    "equivalent",
+    "standard",
+    "standardized",
+    "dose",
+    "doses",
+    "mci",
+    "drugs",
+    "medicines",
+    "episode",
+    "care",
+    "liquid",
+    "concentrate",
+}
+
+PREFIX_KEYWORDS = {
+    "agent",
+    "vaccine",
+    "dialysate",
+    "hemodialysis",
+    "irrigating",
+    "admixture",
+    "solution",
+    "maintenance",
+    "replacement",
+    "intravenous",
+    "gas",
+    "balanced",
+    "diluent",
+}
+
+FORM_BREAK_TOKENS = {
+    "tablet",
+    "tablets",
+    "capsule",
+    "capsules",
+    "syrup",
+    "suspension",
+    "drop",
+    "drops",
+    "ointment",
+    "cream",
+    "powder",
+    "gel",
+}
+
+MEASUREMENT_COMPONENT_HINTS = {"elemental", "equivalent", "equiv", "approximate", "radioactive"}
+
 @dataclass(frozen=True)
 class _NameEntry:
     tokens: Tuple[str, ...]
@@ -333,17 +395,285 @@ def _token_has_letters(token: str) -> bool:
     return bool(token and re.search(r"[a-z]", token))
 
 
-def _token_is_substance(token: str) -> bool:
+def _token_key(token: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", (token or "").lower())
+
+
+def _looks_like_measurement(token: str) -> bool:
+    tok = (token or "").lower()
+    if not tok:
+        return False
+    if tok in UNIT_NORMAL or tok in {"ml", "l", "g", "mg", "mcg", "iu", "lsu", "meq", "meqs", "pct"}:
+        return True
+    if "%" in tok:
+        return True
+    if DIGIT_ONLY_RX.fullmatch(tok):
+        return True
+    return any(ch.isdigit() for ch in tok)
+
+
+def _token_is_substance(token: str, allow_salts: bool = False) -> bool:
     tok = (token or "").lower()
     if not _token_has_letters(tok):
         return False
     if tok in EXTRA_TOKEN_STOPWORDS:
-        return False
+        if not (allow_salts and tok in SALT_TOKEN_WORDS):
+            return False
     if tok in CONTAINER_NORMAL or tok in UNIT_NORMAL:
         return False
     if tok in {"-", "+", "/"}:
         return False
     return True
+
+
+def _is_placeholder_name(name: str) -> bool:
+    tokens = [tok for tok in normalize_text(name).split() if tok]
+    if not tokens:
+        return True
+    cleaned = [tok for tok in tokens if tok not in {"and", "with", "in", "plus", "to", "of"}]
+    if not cleaned:
+        return True
+    return all(tok in PLACEHOLDER_TOKENS or len(tok) == 1 for tok in cleaned)
+
+
+def _raw_prefix_before_packaging(raw_desc: str) -> str:
+    if not isinstance(raw_desc, str):
+        return ""
+    words = raw_desc.strip().split()
+    prefix: List[str] = []
+    prev_norm = ""
+    for word in words:
+        norm = normalize_text(word)
+        tok = norm.split()[0] if norm else ""
+        tok_lower = tok.lower()
+        if tok == "+":
+            if "diluent" in raw_desc.lower():
+                prefix.append("+")
+                continue
+            if prefix:
+                break
+            continue
+        if _looks_like_measurement(tok_lower):
+            if "%" in word or "%" in tok_lower or prev_norm == "ph":
+                prefix.append(word)
+            prev_norm = tok_lower
+            continue
+        if tok_lower in CONTAINER_NORMAL or tok_lower in {"bag", "bottle", "ampule", "vial", "drum", "gallon", "kit", "set", "pack", "box"}:
+            break
+        if tok_lower in {"ml", "l", "g", "mg", "mcg", "iu", "lsu"}:
+            break
+        if tok_lower in {"approx", "approximately"}:
+            continue
+        if tok_lower in {"dose", "doses"}:
+            continue
+        if tok_lower in {"per"}:
+            continue
+        prefix.append(word)
+        prev_norm = tok_lower
+    return " ".join(prefix).strip(" ,-/")
+
+
+def _restore_possessives(text: str) -> str:
+    updated = re.sub(r"\bRINGER S\b", "RINGER'S", text)
+    updated = re.sub(r"\bRINGERS\b", "RINGER'S", updated)
+    return updated
+
+
+def _maybe_restore_parenthetical(raw_desc: str, candidate: str) -> str:
+    if "+" in candidate:
+        return candidate
+    phrases = extract_parenthetical_phrases(raw_desc)
+    if not phrases:
+        return candidate
+    cand_norm = normalize_text(candidate)
+    leading_raw = raw_desc.split("(")[0].strip()
+    leading = re.sub(r"[\s0-9/%.]+$", "", leading_raw).strip() or leading_raw
+    leading_norm = normalize_text(leading)
+    for phrase in phrases:
+        phrase_norm = normalize_text(phrase)
+        if not phrase_norm:
+            continue
+        if cand_norm == phrase_norm or (cand_norm and cand_norm in phrase_norm):
+            base = leading if leading else candidate
+            return f"{base.strip()} ({phrase.strip()})"
+        if leading and cand_norm == leading_norm:
+            return f"{leading.strip()} ({phrase.strip()})"
+        if phrase_norm and cand_norm.endswith(f" {phrase_norm}") and leading:
+            return f"{leading.strip()} ({phrase.strip()})"
+        if phrase_norm and phrase_norm in cand_norm and leading:
+            return f"{leading.strip()} ({phrase.strip()})"
+    return candidate
+
+
+def _collect_in_phrase_tokens(tokens: Sequence[str], reverse: bool) -> List[str]:
+    collected: List[str] = []
+    sequence = reversed(tokens) if reverse else tokens
+    for tok in sequence:
+        if not tok:
+            continue
+        if tok in {"in", "and", "with"}:
+            if collected:
+                break
+            if reverse:
+                continue
+            break
+        if tok in {"+", "/"}:
+            if collected:
+                break
+            continue
+        if tok in CONTAINER_NORMAL or tok in UNIT_NORMAL or tok in FORM_BREAK_TOKENS:
+            break
+        if _looks_like_measurement(tok):
+            if not collected:
+                continue
+            break
+        if not _token_is_substance(tok, allow_salts=True):
+            if collected:
+                break
+            continue
+        collected.append(tok.upper())
+    if reverse:
+        collected.reverse()
+    return collected
+
+
+def _compose_in_phrase_name(normalized_desc: str) -> Optional[str]:
+    tokens = normalized_desc.split()
+    for idx, tok in enumerate(tokens):
+        if tok != "in":
+            continue
+        left = _collect_in_phrase_tokens(tokens[:idx], reverse=True)
+        right = _collect_in_phrase_tokens(tokens[idx + 1 :], reverse=False)
+        if left and right:
+            return f"{' '.join(left)} IN {' '.join(right)}"
+    return None
+
+
+def _filter_measurement_components(
+    components: List[Tuple[str, List[str]]],
+    normalized_desc: str,
+) -> List[Tuple[str, List[str]]]:
+    if not components:
+        return components
+    lowered = normalized_desc
+    filtered: List[Tuple[str, List[str]]] = []
+    for name, salts in components:
+        key = normalize_text(name)
+        if key in {"iron", "calcium"} and f"elemental {key}" in lowered:
+            continue
+        filtered.append((name, salts))
+    return filtered
+
+
+def _normalize_component_key(name: str) -> str:
+    norm = normalize_text(name)
+    norm = re.sub(r"ic acid\b", "ate", norm)
+    norm = re.sub(r"\bacid\b", "", norm).strip()
+    tokens = [tok for tok in norm.split() if tok and tok not in SALT_TOKEN_WORDS]
+    if tokens:
+        norm = " ".join(tokens)
+    return norm
+
+
+def _dedupe_component_names(components: List[Tuple[str, List[str]]]) -> List[Tuple[str, List[str]]]:
+    seen: set[str] = set()
+    deduped: List[Tuple[str, List[str]]] = []
+    for name, salts in components:
+        key = _normalize_component_key(name)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append((name, salts))
+    return deduped
+
+
+def _maybe_merge_primary_salt(generic_name: str, salt_tokens: List[str]) -> Tuple[str, List[str]]:
+    if not salt_tokens:
+        return generic_name, salt_tokens
+    upper = generic_name.upper()
+    if any(sep in upper for sep in (" + ", " / ", " IN ", " WITH ")):
+        return generic_name, salt_tokens
+    tokens = [tok for tok in upper.split() if tok]
+    if len(tokens) > 1:
+        return generic_name, salt_tokens
+    merged = f"{upper} {' '.join(salt_tokens)}".strip()
+    return merged, salt_tokens
+
+
+def _clean_repeated_words(name: str) -> str:
+    tokens = name.split()
+    cleaned: List[str] = []
+    prev = ""
+    for tok in tokens:
+        if tok == prev and tok not in {"PH"}:
+            continue
+        cleaned.append(tok)
+        prev = tok
+    return " ".join(cleaned)
+
+
+def _apply_suffix_fixes(name: str) -> str:
+    updated = re.sub(r"\s+FOR ADULT\b", " (ADULT)", name)
+    updated = re.sub(r"\s+FOR PEDIA\b", " (PEDIA)", updated)
+    updated = re.sub(r"\s+FOR PEDIATRIC\b", " (PEDIATRIC)", updated)
+    updated = re.sub(r"\s+\+\s+PH\b", " PH", updated)
+    return updated
+
+
+def _should_use_prefix_name(candidate: str, prefix: str, match_source: str) -> bool:
+    if not prefix:
+        return False
+    prefix_norm = normalize_text(prefix)
+    if not prefix_norm:
+        return False
+    candidate_norm = normalize_text(candidate)
+    if " IN " in candidate.upper():
+        return False
+    if _is_placeholder_name(candidate):
+        return True
+    if match_source == "combo_fallback" and any(keyword in prefix_norm for keyword in PREFIX_KEYWORDS):
+        return True
+    cand_tokens = candidate_norm.split()
+    prefix_tokens = prefix_norm.split()
+    if len(cand_tokens) <= 1 and len(prefix_tokens) > 1:
+        return True
+    prefix_kw = {kw for kw in PREFIX_KEYWORDS if kw in prefix_norm}
+    candidate_kw = {kw for kw in PREFIX_KEYWORDS if kw in candidate_norm}
+    if len(prefix_tokens) > len(cand_tokens) and prefix_kw - candidate_kw:
+        return True
+    if "(" in prefix and "(" not in candidate:
+        return True
+    return False
+
+
+def _refine_generic_display(
+    raw_desc: str,
+    normalized_desc: str,
+    generic_name: str,
+    match_source: str,
+) -> str:
+    candidate = generic_name
+    in_phrase = _compose_in_phrase_name(normalized_desc)
+    if in_phrase:
+        if candidate.upper().endswith(" IN"):
+            candidate = in_phrase
+        elif _is_placeholder_name(candidate):
+            candidate = in_phrase
+    prefix_name = _raw_prefix_before_packaging(raw_desc)
+    if _should_use_prefix_name(candidate, prefix_name, match_source):
+        candidate = prefix_name
+    elif prefix_name:
+        prefix_norm = normalize_text(prefix_name)
+        cand_norm = normalize_text(candidate)
+        if "diluent" in prefix_norm and "diluent" not in cand_norm:
+            candidate = prefix_name
+        if "/" in prefix_name and "/" not in candidate:
+            candidate = prefix_name
+    candidate = _maybe_restore_parenthetical(raw_desc, candidate)
+    candidate = _restore_possessives(candidate)
+    candidate = _apply_suffix_fixes(candidate)
+    candidate = _clean_repeated_words(candidate)
+    return candidate.strip().upper()
 
 
 def _first_dose_token_index(tokens: Sequence[str]) -> int:
@@ -607,6 +937,8 @@ def _combo_fragments(raw_desc: str, normalized_desc: str) -> List[str]:
         norm = normalize_text(snippet)
         if not norm or norm in seen:
             continue
+        if norm.startswith("as "):
+            continue
         if looks_like_combination(norm, 0, 0) or _looks_like_vitamin_combo(norm):
             fragments.append(norm)
             seen.add(norm)
@@ -675,6 +1007,10 @@ def _segment_component_entries(segment: str, resolver: _ReferenceNameResolver) -
             continue
         if "+" in canonical_norm or "/" in canonical_norm or " with " in canonical_norm:
             continue
+        if any(unit in canonical_norm for unit in ("mcg", "mg", "ml", "iu", "mci")):
+            continue
+        if any(tok in FORM_BREAK_TOKENS for tok in canonical_norm.split()):
+            continue
         canonical_tokens = canonical_norm.split()
         if canonical_tokens and len(canonical_tokens) == 1 and canonical_tokens[0] in SALT_TOKEN_WORDS:
             continue
@@ -710,7 +1046,10 @@ def _segment_component_entries(segment: str, resolver: _ReferenceNameResolver) -
             components = [comp for comp in components if comp[0] != "VITAMIN"]
     if not components:
         base, salts = extract_base_and_salts(segment)
-        components = _expand_component_aliases(base, salts, segment) if base else []
+        base_check = base
+        if base_check and any(unit in base_check.lower() for unit in ("mcg", "mg", "ml", "iu", "mci")):
+            base_check = ""
+        components = _expand_component_aliases(base_check, salts, segment) if base_check else []
     return components
 
 
@@ -796,6 +1135,8 @@ def _combo_components_from_text(
     if len(components) < 2:
         return [], []
     components = _prune_combo_components(components)
+    components = _filter_measurement_components(components, normalized_desc)
+    components = _dedupe_component_names(components)
     if len(components) < 2:
         return [], []
     salt_tokens: List[str] = []
@@ -870,6 +1211,8 @@ def _derive_generic_name(
     if resolved and combo_hint and not _name_looks_combo(resolved.entry.canonical):
         if _has_unmatched_substances(normalized_desc, resolved):
             resolved = None
+    if resolved and _is_placeholder_name(resolved.entry.canonical):
+        resolved = None
     if resolved and combo_components:
         resolved_norm = normalize_text(resolved.entry.canonical)
         combo_missing = False
@@ -911,13 +1254,18 @@ def _derive_generic_name(
         if ratio_combo_collapse and "+" in generic_name:
             generic_name = generic_name.split("+", 1)[0].strip()
         salt_tokens = salts or salts_from_text
+    generic_name, salt_tokens = _maybe_merge_primary_salt(generic_name, salt_tokens)
+    generic_name = _refine_generic_display(raw_desc, normalized_desc, generic_name, match_source)
     if custom_descriptor:
-        descriptor_lower = custom_descriptor.lower()
-        if "vitamins intravenous" in normalized_desc and "vitamins intravenous" not in generic_name.lower():
-            generic_name = f"VITAMINS INTRAVENOUS ({custom_descriptor})"
-        elif descriptor_lower not in generic_name.lower():
-            generic_name = f"{generic_name} ({custom_descriptor})"
-    return generic_name.upper(), match_source, salt_tokens
+        descriptor_upper = custom_descriptor.upper()
+        lower_name = generic_name.lower()
+        if "vitamins intravenous" in normalized_desc and "vitamins intravenous" not in lower_name:
+            generic_name = f"VITAMINS INTRAVENOUS ({descriptor_upper})"
+        elif descriptor_upper not in generic_name:
+            generic_name = f"{generic_name} ({descriptor_upper})"
+    generic_name = _restore_possessives(generic_name)
+    generic_name = _clean_repeated_words(generic_name)
+    return generic_name, match_source, salt_tokens
 
 
 PACK_FREETEXT_SKIP = {
