@@ -82,6 +82,8 @@ MEASUREMENT_TOKENS = {
     "pct",
 }
 
+SPECIAL_SALT_TOKENS = {"calcium", "sodium"}
+
 BASE_GENERIC_IGNORE |= MEASUREMENT_TOKENS
 BASE_GENERIC_IGNORE |= {"%", "ratio", "per"}
 
@@ -296,18 +298,25 @@ def extract_base_and_salts(raw_text: str) -> Tuple[str, List[str]]:
         if tok_lower in {"salt", "salts"}:
             continue
         salt_tokens.append(tok.upper())
-    def _is_candidate(tok: str) -> bool:
+
+    def _should_treat_as_salt(tok_lower: str, idx: int, candidates: List[str]) -> bool:
+        if tok_lower not in SALT_TOKEN_WORDS:
+            return False
+        if tok_lower in {"salt", "salts"}:
+            return False
+        prev = candidates[idx - 1].lower() if idx > 0 else ""
+        if prev == "as":
+            return True
+        if tok_lower in SPECIAL_SALT_TOKENS:
+            return False
+        return True
+
+    def _is_candidate(tok: str, idx: int, candidates: List[str]) -> bool:
         tok_lower = tok.lower()
         tok_key = _token_core(tok)
         if tok_key in BASE_GENERIC_IGNORE:
             return False
         if _is_measurement_token(tok_key):
-            return False
-        if tok_lower in SALT_TOKEN_WORDS:
-            if base_tokens:
-                salt_tokens.append(tok.upper())
-            else:
-                pending_leading_salts.append(tok.upper())
             return False
         if tok_lower == "%":
             return False
@@ -316,13 +325,13 @@ def extract_base_and_salts(raw_text: str) -> Tuple[str, List[str]]:
         if tok_lower[0].isdigit():
             return False
         if any(ch.isdigit() for ch in tok_lower):
-            if not re.fullmatch(r"[a-z]+[0-9]+[a-z]*", tok_lower):
+            if not re.fullmatch(r"[a-z]+[0-9]+[a-z0-9]*", tok_lower):
                 return False
         return True
 
     def _truncate_tokens(tokens: List[str]) -> List[str]:
         truncated: List[str] = []
-        for tok in tokens:
+        for idx, tok in enumerate(tokens):
             tok_lower = tok.lower()
             tok_key = _token_core(tok)
             if tok in {"+", "/", "&"}:
@@ -331,6 +340,8 @@ def extract_base_and_salts(raw_text: str) -> Tuple[str, List[str]]:
                 continue
             if tok_lower in {"as"}:
                 break
+            if _should_treat_as_salt(tok_lower, idx, tokens):
+                continue
             if _is_measurement_token(tok_key):
                 continue
             if tok_key in BASE_GENERIC_IGNORE and tok_lower not in SALT_TOKEN_WORDS:
@@ -347,10 +358,16 @@ def extract_base_and_salts(raw_text: str) -> Tuple[str, List[str]]:
     for idx, tok in enumerate(base_candidates):
         tok_lower = tok.lower()
         if tok in {"+", "/", "&"}:
-            if base_tokens and any(_is_candidate(t) for t in base_candidates[idx + 1 :]):
+            if base_tokens and any(_is_candidate(t, j, base_candidates) for j, t in enumerate(base_candidates[idx + 1 :], start=idx + 1)):
                 base_tokens.append(tok)
             continue
-        if not _is_candidate(tok):
+        if _should_treat_as_salt(tok_lower, idx, base_candidates):
+            if base_tokens:
+                salt_tokens.append(tok.upper())
+            else:
+                pending_leading_salts.append(tok.upper())
+            continue
+        if not _is_candidate(tok, idx, base_candidates):
             continue
         base_tokens.append(tok.upper())
 
