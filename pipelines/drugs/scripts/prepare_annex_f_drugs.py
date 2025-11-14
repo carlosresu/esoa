@@ -29,13 +29,11 @@ from .generic_normalization import normalize_generic
 from .routes_forms_drugs import FORM_TO_ROUTE, ROUTE_ALIASES, extract_route_and_form, parse_form_from_text
 from .text_utils_drugs import (
     SPECIAL_SALT_TOKENS,
-    detect_as_boundary,
     extract_base_and_salts,
     extract_parenthetical_phrases,
     normalize_text,
     serialize_salt_list,
     slug_id,
-    strip_after_as,
 )
 from .combos_drugs import SALT_TOKENS, looks_like_combination, split_combo_segments
 
@@ -384,6 +382,41 @@ FORM_BREAK_TOKENS = {
 }
 
 MEASUREMENT_COMPONENT_HINTS = {"elemental", "equivalent", "equiv", "approximate", "radioactive"}
+
+_AS_CLAUSE_RX = re.compile(r"\bas\b", re.IGNORECASE)
+
+
+def _split_as_clause(text: str) -> tuple[str, str]:
+    if not text:
+        return "", ""
+    match = _AS_CLAUSE_RX.search(text)
+    if not match:
+        return text, ""
+    before = text[: match.start()].strip(" ,;:-")
+    after = text[match.end() :].strip(" ,;:-")
+    return before, after
+
+
+def _canonical_form_from_clause(clause: str) -> Optional[str]:
+    if not clause:
+        return None
+    normalized = normalize_text(clause)
+    if not normalized:
+        return None
+    canonical = parse_form_from_text(normalized)
+    if canonical:
+        return canonical.lower()
+    tokens = [tok for tok in normalized.split() if tok]
+    if tokens:
+        return tokens[0]
+    return None
+
+
+def _first_as_index(tokens: Sequence[str]) -> Optional[int]:
+    for idx, tok in enumerate(tokens):
+        if tok == "as":
+            return idx
+    return None
 
 @dataclass(frozen=True)
 class _NameEntry:
@@ -1523,17 +1556,18 @@ def _derive_generic_name(
     normalized_desc: str,
     resolver: _ReferenceNameResolver,
 ) -> Tuple[str, str, List[str], str, List[str]]:
+    desc = (raw_desc or "").strip()
+    desc_before_as, as_clause_raw = _split_as_clause(desc)
     custom_descriptor = _vitamin_descriptor(normalized_desc)
     tokens_full = normalized_desc.split()
     combo_hint = _combo_indicator_present(normalized_desc, tokens_full)
-    trimmed_norm = strip_after_as(normalized_desc)
-    norm_for_matching = (
-        normalized_desc
-        if combo_hint
-        else (trimmed_norm if trimmed_norm else normalized_desc)
-    )
-    as_index_full = detect_as_boundary(normalized_desc)
-    as_index_trimmed = detect_as_boundary(norm_for_matching)
+    norm_before_as = normalize_text(desc_before_as) if desc_before_as else ""
+    trimmed_norm = norm_before_as or normalized_desc
+    norm_for_matching = normalized_desc if combo_hint else trimmed_norm
+    as_index_full = _first_as_index(tokens_full)
+    as_index_trimmed = _first_as_index(norm_for_matching.split())
+    form_hint = _canonical_form_from_clause(as_clause_raw)
+    raw_for_generic = desc_before_as or desc
     base_name_from_text, salts_from_text = extract_base_and_salts(norm_for_matching)
     combo_components, combo_salts = _combo_components_from_text(raw_desc, normalized_desc, resolver)
     shared_combo_tokens = _shared_combo_tokens(combo_components) if combo_components else set()
@@ -1615,7 +1649,7 @@ def _derive_generic_name(
             if tokens:
                 sanitized_name = " ".join(tokens)
     derived_name, generic_variant, generic_synonyms = _split_generic_components(sanitized_name)
-    normalized_override = normalize_generic(raw_desc)
+    normalized_override = normalize_generic(raw_for_generic)
     canonical_name = normalized_override or derived_name
     if normalized_desc and RINGER_SOLUTION_RX.search(normalized_desc):
         if canonical_name and not canonical_name.endswith("SOLUTION"):
@@ -1699,6 +1733,7 @@ def _normalize_pack_unit(unit: Optional[str]) -> Optional[str]:
 def _deduce_route_form(
     normalized: str,
     pack_container: Optional[str],
+    form_hint: Optional[str] = None,
 ) -> Tuple[Optional[str], Optional[str], str]:
     """Combine text-derived clues with packaging hints to infer form + route."""
     form_primary = parse_form_from_text(normalized)
@@ -1712,7 +1747,12 @@ def _deduce_route_form(
         evidence_seen.add(tag)
         evidence_parts.append(tag)
 
-    form_token = form_primary or form_secondary
+    form_token: Optional[str] = None
+    if form_hint:
+        form_token = form_hint
+        _add_evidence(f"as_clause:{form_hint}")
+    if not form_token:
+        form_token = form_primary or form_secondary
     route_token = route_primary
     norm_text = normalized.lower()
 
@@ -1823,6 +1863,9 @@ def prepare_annex_f(input_csv: str, output_csv: str) -> str:
     records = []
     for raw_code, raw_desc in frame[["Drug Code", "Drug Description"]].itertuples(index=False):
         desc = (raw_desc or "").strip()
+        desc_before_as, as_clause_raw = _split_as_clause(desc)
+        norm_before_as = normalize_text(desc_before_as) if desc_before_as else ""
+        form_hint = _canonical_form_from_clause(as_clause_raw)
         norm = normalize_text(desc)
         tokens = norm.split()
         pack_qty, pack_unit, pack_container = _scan_packaging(tokens)
@@ -1845,7 +1888,12 @@ def prepare_annex_f(input_csv: str, output_csv: str) -> str:
             else None
         )
 
-        route_allowed, form_token, route_evidence = _deduce_route_form(norm, pack_container)
+        route_norm = norm_before_as or norm
+        route_allowed, form_token, route_evidence = _deduce_route_form(
+            route_norm,
+            pack_container,
+            form_hint=form_hint,
+        )
 
         (
             generic_name,
