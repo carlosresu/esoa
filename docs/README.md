@@ -5,14 +5,14 @@ This repository implements the **eSOA (electronic Statement of Account) drug mat
 
 Reference hierarchy used during matching:
 
-1. **Annex F** (normalized to `annex_f_prepared.csv`; primary identifier = Drug Code)
+1. **Annex F** (pre-normalized dataset, typically `inputs/drugs/annex_f.csv`; primary identifier = Drug Code)
 2. **Philippine National Formulary (PNF)** (dose/form/route enrichment, ATC codes when Annex has gaps)
 3. **WHO ATC classification** (international codes; still required for program reporting but no longer the primary ID)
 4. **DrugBank generics** (synonym coverage)
 5. **FDA brand map** (brand → generic swaps feeding Annex/PNF matches)
 6. **FDA Philippines food product catalog** (non-therapeutic identification and debug trail)
 
-Every normalized reference now carries a `salt_form` column so formulation salts are captured without polluting the core `generic_name`. Annex F and PNF prepared CSVs physically expose the column, while WHO, DrugBank, and FDA sources compute the same metadata in-memory for downstream use.
+Every normalized reference now carries a `salt_form` column so formulation salts are captured without polluting the core `generic_name`. The normalized Annex F dataset (`inputs/drugs/annex_f.csv`) and the PNF prepared CSV expose the column, while WHO, DrugBank, and FDA sources compute the same metadata in-memory for downstream use.
 
 It prepares raw CSVs, parses text into structured features, detects candidate generics, scores/classifies matches, and outputs a labeled dataset with a detailed distribution summary and unknown token report. The goal is to support **public health operations and oversight**, not commercial decision-making.
 
@@ -80,17 +80,15 @@ field exists and how it is consumed downstream.
 
 ```mermaid
 flowchart TD
-    A[Annex F CSV] --> B[Prepare Annex F: normalize, parse dose, infer route/form]
+    A[Annex F CSV (normalized)] --> K[Build features]
     A2[PNF CSV] --> C[Prepare PNF: normalize + parse dose/route/form]
     A3[eSOA CSV] --> D[Prepare eSOA: normalize raw_text]
-    B --> E[annex_f_prepared.csv]
     C --> F[pnf_prepared.csv]
     D --> G[esoa_prepared.csv]
 
     H[FDA Portal Export] --> I[Build FDA Brand Map]
     I --> J[fda_brand_map_YYYY-MM-DD.csv]
 
-    E --> K[Build features]
     F --> K
     G --> K
     J --> K
@@ -150,7 +148,7 @@ Supervisor input needed
 
 ---
 
-2. Route & Form Detection ([pipelines/drugs/scripts/routes_forms_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/routes_forms_drugs.py), [pipelines/drugs/scripts/prepare_annex_f_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/prepare_annex_f_drugs.py), and [pipelines/drugs/scripts/match_scoring_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_scoring_drugs.py))
+2. Route & Form Detection ([pipelines/drugs/scripts/routes_forms_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/routes_forms_drugs.py) and [pipelines/drugs/scripts/match_scoring_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_scoring_drugs.py))
 
 - Recognizes forms (tablet, cap, MDI, DPI, susp, soln, spray, supp, etc.) and maps them to canonical routes (oral, inhalation, nasal, rectal, etc.), expanding common aliases (PO, per os, SL, IM, IV, etc.). Annex F gets additional heuristics for drops, ovules, shampoos, and packaging-driven inference (ampule/vial → injectable, large-volume bottles/bags → intravenous, nebules → inhalation).
 - When an eSOA entry is missing the route but the form is present, the Annex/PNF route is imputed and logged in `route_evidence`. If only WHO metadata is available, we map WHO Adm.R/UOM codes to the same canonical routes/forms so alignment with Annex/PNF logic remains consistent.
@@ -342,8 +340,7 @@ Additional lines list the top molecules or match-quality drivers per bucket when
 `run_drugs_all_parts.py` self-bootstraps `requirements.txt`, ensures `inputs/drugs/` and `outputs/drugs/` exist, concatenates partitioned `inputs/drugs/esoa_pt_*.csv` files into a temporary `esoa_combined.csv`, and shows live spinners plus grouped timing totals for every major stage. R remains optional and is only required when you want to refresh the WHO ATC exports. You can also run individual stages explicitly:
 
 - `run_drugs_pt_0_drugbank_onetime.py` — refreshes the DrugBank generics/brands exports whenever the upstream dataset changes.
-- `run_drugs_pt_1_annex_f.py` — prepares `annex_f_prepared.csv` and prints a short preview so you can validate the normalization before matching.
-- `run_drugs_pt_2_esoa_matching.py` — runs the full matcher assuming the prepared Annex F already exists (accepts an explicit `--annex-prepared` path).
+- `run_drugs_pt_2_esoa_matching.py` — convenience entrypoint that ensures a normalized Annex F CSV is provided before invoking `run_drugs_all_parts.py`.
 - `run_drugs_pt_2_esoa_matching_minimal.py` — same as above but automatically passes `--skip-r --skip-brandmap --skip-excel` for a lighter-weight iteration loop.
 
 ```bash
@@ -357,6 +354,8 @@ python run_drugs_all_parts.py \
   --esoa inputs/drugs/esoa_combined.csv \
   --out esoa_matched.csv
 ```
+
+Ensure `inputs/drugs/annex_f.csv` already contains the normalized routes/forms/dose metadata expected by the matcher; the pipeline no longer generates this file automatically.
 
 **DrugBank prerequisite**  
 Run `python run_drugs_pt_0_drugbank_onetime.py` whenever the upstream DrugBank dataset changes. The helper wraps `python -m pipelines.drugs.scripts.run_drugbank_drugs`, streams the R output, and copies the resulting CSVs into `dependencies/drugbank_generics/output/` plus `inputs/drugs/` so downstream stages pick up the fresh exports automatically.

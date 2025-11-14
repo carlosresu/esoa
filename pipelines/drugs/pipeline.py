@@ -24,7 +24,6 @@ from ..base import (
 )
 from ..registry import register_pipeline
 from .scripts.prepare_drugs import prepare
-from .scripts.prepare_annex_f_drugs import prepare_annex_f
 from .scripts.match_drugs import match
 
 THIS_DIR = Path(__file__).resolve().parents[2]
@@ -88,18 +87,12 @@ class DrugsAndMedicinePipeline(BasePipeline):
         prepared_paths: Dict[str, Path] = {}
 
         def _prepare() -> None:
-            annex_override = None
-            if options and options.extra:
-                annex_override = options.extra.get("annex_prepared_path")
-            if annex_override:
-                prepared_paths["annex"] = Path(annex_override).resolve()
-            else:
-                prepared_paths["annex"] = Path(
-                    prepare_annex_f(
-                        str(params.annex_csv),
-                        str(context.inputs_dir / "annex_f_prepared.csv"),
-                    )
-                ).resolve()
+            annex_path = Path(params.annex_csv)
+            if not annex_path.is_file():
+                raise FileNotFoundError(
+                    f"Annex CSV not found: {annex_path} (expected a prepared Annex F dataset)."
+                )
+            prepared_paths["annex"] = annex_path.resolve()
             pnf_prep, esoa_prep = prepare(str(params.pnf_csv), str(params.esoa_csv), str(context.inputs_dir))
             prepared_paths["pnf"] = Path(pnf_prep).resolve()
             prepared_paths["esoa"] = Path(esoa_prep).resolve()
