@@ -185,24 +185,20 @@ def _split_generic_components(generic_name: str) -> List[str]:
 
 
 def _tokens_match(tokens: Sequence[str], available: Set[str]) -> bool:
-    if not tokens:
+    filtered = [tok for tok in tokens if tok]
+    if not filtered:
         return False
-    tokens_all_salt = all(tok in _SALT_TOKEN_LOOKUP for tok in tokens)
-    if tokens_all_salt and len(tokens) == 1:
+    non_salt_tokens = [tok for tok in filtered if tok not in _SALT_TOKEN_LOOKUP]
+    if non_salt_tokens:
+        strong = [tok for tok in non_salt_tokens if len(tok) >= 4]
+        if strong and all(tok in available for tok in strong):
+            return True
+        if len(non_salt_tokens) == 1 and non_salt_tokens[0] in available:
+            return True
+        if all(tok in available for tok in non_salt_tokens):
+            return True
         return False
-    strong = [tok for tok in tokens if len(tok) >= 4]
-    if tokens_all_salt:
-        return all(tok in available for tok in tokens)
-    if strong and all(tok in available for tok in strong):
-        return True
-    hits = sum(1 for tok in tokens if tok in available)
-    if hits == len(tokens):
-        return True
-    if len(tokens) >= 2 and hits >= len(tokens) - 1 and hits > 0:
-        return True
-    if len(tokens) == 1 and hits == 1:
-        return True
-    return False
+    return all(tok in available for tok in filtered)
 
 
 def _component_alias_candidates(component: str) -> List[Tuple[str, List[str]]]:
@@ -230,6 +226,8 @@ def _component_alias_candidates(component: str) -> List[Tuple[str, List[str]]]:
             tokens = alias_norm.split()
         tokens = [tok for tok in tokens if tok]
         if not tokens:
+            continue
+        if all(tok in _SALT_TOKEN_LOOKUP for tok in tokens) and len(tokens) == 1:
             continue
         processed.append((alias_norm, tokens))
     return processed
@@ -557,9 +555,13 @@ def _prepare_record(
         if raw_upper:
             fallback_candidates.append(raw_upper)
         final_candidates = [name for name in fallback_candidates if name]
-        if not final_candidates and reference_names:
-            final_candidates = [name for name in reference_names if name]
-
+        if not final_candidates:
+            fallback_from_reference = next(
+                (name for name in reference_names if _generic_agrees_with_description(name, raw_description, normalized_description)),
+                None,
+            )
+            if fallback_from_reference:
+                final_candidates = [fallback_from_reference]
     if not final_candidates:
         final_candidates = [raw_description.strip().upper()]
 
