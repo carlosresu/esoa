@@ -270,6 +270,49 @@ _GENERIC_NOISE_PHRASES = {
     "PREFILLED",
 }
 
+_STRENGTH_BREAK_RX = re.compile(
+    r"\b\d+(?:\.\d+)?\s*(?:mg|mcg|g|iu|units?|unit|%|ml|l|mg/ml|mcg/ml|mg/l|mcg/l|iu/ml|iu/l|"
+    r"gallon|gal|liter|litre|capsule|tablet|vial|ampule|drum|bottle|sachet|pack|dose|doses)\b",
+    flags=re.IGNORECASE,
+)
+
+_FORM_PACK_TOKENS: Set[str] = _GENERIC_FORM_TOKENS | _GENERIC_PACKAGING_TOKENS | {
+    "BAG",
+    "CAN",
+    "JAR",
+    "GALLON",
+    "LITRE",
+    "LITER",
+    "DOSE",
+    "DOSES",
+    "PATCH",
+    "INHALER",
+    "SUPPOSITORY",
+    "OVULE",
+}
+
+_FORM_PACK_PATTERN = re.compile(
+    r"\b(" + "|".join(sorted(_FORM_PACK_TOKENS, key=len, reverse=True)) + r")\b",
+    flags=re.IGNORECASE,
+)
+
+_INGREDIENT_KEY_NOISE: Set[str] = {
+    "AS",
+    "AND",
+    "PLUS",
+    "THE",
+    "OF",
+    "IN",
+    "WITH",
+    "SODIUM",
+    "CALCIUM",
+    "MAGNESIUM",
+    "POTASSIUM",
+    "CHLORIDE",
+    "SALT",
+    "HYDROCHLORIDE",
+}
+
 
 
 def _split_generic_components(generic_name: str) -> List[str]:
@@ -281,6 +324,68 @@ def _split_generic_components(generic_name: str) -> List[str]:
     if not parts and generic_name.strip():
         parts = [generic_name.strip()]
     return parts
+
+
+def _simplify_for_key(name: str) -> str:
+    tokens = [tok for tok in name.split() if tok and tok not in _INGREDIENT_KEY_NOISE]
+    if not tokens:
+        return name.strip()
+    return " ".join(tokens)
+
+
+def _dedupe_ingredients(ingredients: List[str]) -> List[str]:
+    seen: Set[str] = set()
+    ordered: List[str] = []
+    for ingredient in ingredients:
+        cleaned = ingredient.strip()
+        if not cleaned:
+            continue
+        key = _simplify_for_key(cleaned)
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(cleaned)
+    return ordered
+
+
+def _strip_form_pack_words(text: str) -> str:
+    if not isinstance(text, str):
+        return ""
+    return _FORM_PACK_PATTERN.sub(" ", text)
+
+
+def _extract_candidate_segment(raw_description: str) -> str:
+    if not isinstance(raw_description, str):
+        return ""
+    match = _STRENGTH_BREAK_RX.search(raw_description)
+    end = match.start() if match else len(raw_description)
+    return raw_description[:end].strip()
+
+
+def _normalize_ingredient_block(text: str) -> str:
+    if not text:
+        return ""
+    normalized = text.upper()
+    normalized = re.sub(r"\(VIT(?:AMIN)?\.?[^)]*\)", " ", normalized)
+    normalized = re.sub(r"\(AS[^)]*\)", " ", normalized)
+    normalized = re.sub(r"\([^)]*\)", " ", normalized)
+    normalized = normalized.replace("&", " + ").replace("/", " + ")
+    normalized = re.sub(r"[^A-Z0-9\+\s]", " ", normalized)
+    normalized = re.sub(r"\s*\+\s*", " + ", normalized)
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def _build_candidate_from_raw_description(raw_description: str) -> str:
+    segment = _extract_candidate_segment(raw_description)
+    if not segment:
+        return ""
+    stripped = _strip_form_pack_words(segment)
+    normalized = _normalize_ingredient_block(stripped)
+    if not normalized:
+        return ""
+    components = [component.strip() for component in normalized.split("+") if component.strip()]
+    deduped = _dedupe_ingredients(components)
+    return " + ".join(deduped)
 
 
 def _normalize_candidate_key(candidate: str) -> str:
@@ -725,6 +830,10 @@ def _prepare_record(
             )
             if fallback_from_reference:
                 final_candidates = [fallback_from_reference]
+    raw_candidate = _build_candidate_from_raw_description(raw_description)
+    if raw_candidate:
+        final_candidates.append(raw_candidate)
+
     if not final_candidates:
         final_candidates = [raw_description.strip().upper()]
 

@@ -2,7 +2,11 @@
 # -*- coding: utf-8 -*-
 """Tests for Annex F generic candidate cleaning and selection heuristics."""
 
-from run_drugs_pt_1_parse_annex_f import _clean_generic_candidates, _select_generic
+from run_drugs_pt_1_parse_annex_f import (
+    _build_candidate_from_raw_description,
+    _clean_generic_candidates,
+    _select_generic,
+)
 from pipelines.drugs.scripts.generic_normalization import normalize_generic
 
 
@@ -48,3 +52,15 @@ def test_deduplicate_overlapping_combo_candidates() -> None:
     cleaned = _clean_generic_candidates(candidates)
     joined = _select_generic(cleaned)
     assert joined == "ALENDRONATE + CHOLECALCIFEROL"
+
+
+def test_build_candidate_from_raw_description_combination() -> None:
+    raw = "ALUMINUM HYDROXIDE + MAGNESIUM HYDROXIDE 225 mg + 200 mg/5 mL SUSPENSION 250 mL BOTTLE"
+    candidate = _build_candidate_from_raw_description(raw)
+    assert candidate == "ALUMINUM HYDROXIDE + MAGNESIUM HYDROXIDE"
+
+
+def test_build_candidate_from_raw_description_strips_forms() -> None:
+    raw = "ALENDRONATE + CHOLECALCIFEROL (VIT. D3) ( as SODIUM SALT) 70 mg + 2800 IU TABLET"
+    candidate = _build_candidate_from_raw_description(raw)
+    assert candidate == "ALENDRONATE + CHOLECALCIFEROL"
