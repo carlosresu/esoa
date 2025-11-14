@@ -25,6 +25,7 @@ import pandas as pd
 
 from ..constants import PIPELINE_INPUTS_DIR, PROJECT_ROOT
 from .dose_drugs import parse_dose_struct_from_text, safe_ratio_mg_per_ml, to_mg
+from .generic_normalization import normalize_generic
 from .routes_forms_drugs import FORM_TO_ROUTE, ROUTE_ALIASES, extract_route_and_form, parse_form_from_text
 from .text_utils_drugs import (
     SPECIAL_SALT_TOKENS,
@@ -1614,10 +1615,12 @@ def _derive_generic_name(
             if tokens:
                 sanitized_name = " ".join(tokens)
     derived_name, generic_variant, generic_synonyms = _split_generic_components(sanitized_name)
+    normalized_override = normalize_generic(raw_desc)
+    canonical_name = normalized_override or derived_name
     if normalized_desc and RINGER_SOLUTION_RX.search(normalized_desc):
-        if derived_name and not derived_name.endswith("SOLUTION"):
-            derived_name = f"{derived_name} SOLUTION"
-    final_name = derived_name or sanitized_name
+        if canonical_name and not canonical_name.endswith("SOLUTION"):
+            canonical_name = f"{canonical_name} SOLUTION"
+    final_name = canonical_name or sanitized_name
     final_name, generic_synonyms = _apply_special_name_overrides(
         final_name,
         normalized_desc,
