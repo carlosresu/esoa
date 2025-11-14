@@ -6,7 +6,7 @@
 main.py — Category-aware pipeline loader around the eSOA matching workflows.
 
 Exports:
-- prepare, match, prepare_annex_f (compatibility re-export from scripts/)
+- prepare, match (compatibility re-exports from scripts/)
 - run_all(annex_csv, pnf_csv, esoa_csv, outdir, out_csv, item_ref_code) -> out_csv
 """
 
@@ -26,7 +26,6 @@ from pipelines import (
 )
 from pipelines.drugs.scripts.prepare_drugs import prepare  # re-exported for backward compatibility
 from pipelines.drugs.scripts.match_drugs import match  # re-exported for backward compatibility
-from pipelines.drugs.scripts.prepare_annex_f_drugs import prepare_annex_f  # re-exported for backward compatibility
 
 
 def _resolve_path(
