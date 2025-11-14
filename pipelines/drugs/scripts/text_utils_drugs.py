@@ -87,6 +87,14 @@ SPECIAL_SALT_TOKENS = {"calcium", "sodium"}
 BASE_GENERIC_IGNORE |= MEASUREMENT_TOKENS
 BASE_GENERIC_IGNORE |= {"%", "ratio", "per"}
 
+_GM_TOKEN_RX = re.compile(r"(?<![a-z])gms?(?![a-z])")
+
+
+def _normalize_unit_tokens(text: str) -> str:
+    """Restrict gm/gms collapsing to standalone unit tokens (avoids STIGMINE -> STIGINE)."""
+    return _GM_TOKEN_RX.sub("g", text)
+
+
 def _token_core(token: str) -> str:
     """Return a normalized token key for comparisons."""
     return token.lower().strip(".,;:'\"()[]{}")
@@ -116,7 +124,8 @@ def normalize_text(s: str) -> str:
     s = re.sub(r"[^\w%/+\.\- ]+", " ", s)
     s = s.replace("microgram", "mcg").replace("μg", "mcg").replace("µg", "mcg")
     s = re.sub(r"(?<![a-z])cc(?![a-z])", "ml", s).replace("milli litre", "ml").replace("milliliter", "ml")
-    s = s.replace("gm", "g").replace("gms", "g").replace("milligram", "mg")
+    s = _normalize_unit_tokens(s)
+    s = s.replace("milligram", "mg")
     s = s.replace("polymixin", "polymyxin")
     s = s.replace("hydrochlorde", "hydrochloride")
     s = re.sub(r"\s+", " ", s).strip()
