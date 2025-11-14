@@ -1,11 +1,141 @@
 from __future__ import annotations
 
+import csv
 import re
+import subprocess
+import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
+from pipelines.drugs.pipeline import DrugsAndMedicinePipeline
+from pipelines.drugs.scripts.prepare_drugs import prepare
+
+
+def _run_subprocess(cmd: List[str], cwd: Path) -> None:
+    subprocess.check_call(cmd, cwd=str(cwd))
+
+
+def _natural_esoa_part_order(path: Path) -> tuple[int, str]:
+    match = re.search(r"(\d+)", path.stem)
+    index = int(match.group(1)) if match else sys.maxsize
+    return index, path.name
+
+
+def _concatenate_csv(parts: List[Path], dest: Path) -> None:
+    header: List[str] | None = None
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with dest.open("w", newline="", encoding="utf-8") as out_handle:
+        writer: csv.writer | None = None
+        for part in parts:
+            if not part.is_file():
+                continue
+            with part.open("r", newline="", encoding="utf-8-sig") as in_handle:
+                reader = csv.reader(in_handle)
+                try:
+                    file_header = next(reader)
+                except StopIteration:
+                    continue
+                if header is None:
+                    header = file_header
+                    writer = csv.writer(out_handle)
+                    writer.writerow(header)
+                elif file_header != header:
+                    raise ValueError(
+                        f"Header mismatch while concatenating {part.name}; expected {header} but found {file_header}."
+                    )
+                assert writer is not None
+                for row in reader:
+                    writer.writerow(row)
+
+
+def _resolve_esoa_source(inputs_dir: Path) -> Path:
+    part_files = sorted(inputs_dir.glob("esoa_pt_*.csv"), key=_natural_esoa_part_order)
+    if part_files:
+        combined = inputs_dir / "esoa_combined.csv"
+        _concatenate_csv(part_files, combined)
+        return combined
+    for candidate in ("esoa_combined.csv", "esoa.csv", "esoa_prepared.csv"):
+        path = inputs_dir / candidate
+        if path.is_file():
+            return path
+    raise FileNotFoundError(
+        "Unable to resolve an eSOA input. Provide esoa_combined.csv or esoa_pt_*.csv under inputs/drugs."
+    )
+
+
+def _ensure_path(path: Path, description: str) -> Path:
+    if not path.is_file():
+        raise FileNotFoundError(f"Expected {description} at {path} but it was not found.")
+    return path
+
+
+def _refresh_pnf_prepared(inputs_dir: Path) -> Path:
+    pnf_raw = _ensure_path(inputs_dir / "pnf.csv", "PNF source CSV")
+    esoa_source = _resolve_esoa_source(inputs_dir)
+    prepare(str(pnf_raw), str(esoa_source), str(inputs_dir))
+    return _ensure_path(inputs_dir / "pnf_prepared.csv", "pnf_prepared.csv output")
+
+
+def _refresh_drugbank_exports(root: Path, inputs_dir: Path) -> tuple[Path, Path]:
+    cmd = [sys.executable, "-m", "pipelines.drugs.scripts.run_drugbank_drugs"]
+    _run_subprocess(cmd, root)
+    generics = _ensure_path(inputs_dir / "drugbank_generics.csv", "drugbank_generics.csv")
+    brands = _ensure_path(inputs_dir / "drugbank_brands.csv", "drugbank_brands.csv")
+    return generics, brands
+
+
+def _find_latest_timestamped_file(directory: Path, pattern: str) -> Path:
+    candidates = sorted(directory.glob(pattern))
+    if not candidates:
+        raise FileNotFoundError(f"No files matched pattern '{pattern}' under {directory}")
+
+    def _key(path: Path) -> tuple[datetime, str]:
+        match = re.search(r"(\d{4}-\d{2}-\d{2})", path.name)
+        if match:
+            try:
+                stamp = datetime.strptime(match.group(1), "%Y-%m-%d")
+            except ValueError:
+                stamp = datetime.min
+        else:
+            stamp = datetime.min
+        return stamp, path.name
+
+    candidates.sort(key=_key)
+    return candidates[-1]
+
+
+def _refresh_who_atc(root: Path, inputs_dir: Path) -> Path:
+    DrugsAndMedicinePipeline._run_r_scripts(root, inputs_dir)
+    return _find_latest_timestamped_file(inputs_dir, "who_atc_*_molecules.csv")
+
+
+def _refresh_fda_brand_map(inputs_dir: Path) -> Path:
+    DrugsAndMedicinePipeline._build_brand_map(inputs_dir)
+    return _find_latest_timestamped_file(inputs_dir, "fda_brand_map_*.csv")
+
+
+def _refresh_source_datasets(root: Path) -> Dict[str, Path]:
+    inputs_dir = root / "inputs" / "drugs"
+    datasets: Dict[str, Path] = {}
+
+    print("  - Refreshing PNF prepared CSV via pipelines.drugs.scripts.prepare_drugs...")
+    datasets["pnf"] = _refresh_pnf_prepared(inputs_dir)
+
+    print("  - Refreshing WHO ATC extracts via ATCD R scripts...")
+    datasets["who"] = _refresh_who_atc(root, inputs_dir)
+
+    print("  - Building latest FDA brand map export...")
+    datasets["fda_brand"] = _refresh_fda_brand_map(inputs_dir)
+
+    print("  - Refreshing DrugBank generics/brands exports via R helper...")
+    generics, brands = _refresh_drugbank_exports(root, inputs_dir)
+    datasets["drugbank_generics"] = generics
+    datasets["drugbank_brands"] = brands
+
+    return datasets
 
 
 def _as_str(value: Any) -> str:
@@ -1267,13 +1397,18 @@ def main() -> None:
     output_dir = root / "outputs" / "drugs" / "master"
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    print("[STEP 0] Refreshing source datasets...")
+    dataset_paths = _refresh_source_datasets(root)
+    pnf_path = dataset_paths["pnf"]
+    who_path = dataset_paths["who"]
+    fda_brands_path = dataset_paths["fda_brand"]
+    db_generics_path = dataset_paths["drugbank_generics"]
+    db_brands_path = dataset_paths["drugbank_brands"]
+    fda_foods_path = _ensure_path(
+        root / "inputs" / "drugs" / "fda_food_products.csv", "fda_food_products.csv"
+    )
+
     print("[STEP 1] Loading input CSVs...")
-    pnf_path = root / "inputs" / "drugs" / "pnf_prepared.csv"
-    who_path = root / "inputs" / "drugs" / "who_atc_2025-11-10_molecules.csv"
-    db_generics_path = root / "inputs" / "drugs" / "drugbank_generics.csv"
-    fda_brands_path = root / "inputs" / "drugs" / "fda_brand_map_2025-11-10.csv"
-    db_brands_path = root / "inputs" / "drugs" / "drugbank_brands.csv"
-    fda_foods_path = root / "inputs" / "drugs" / "fda_food_products.csv"
 
     df_pnf = load_pnf(pnf_path)
     df_who = load_who_atc(who_path)
