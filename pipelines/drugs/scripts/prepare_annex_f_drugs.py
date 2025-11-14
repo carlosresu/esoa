@@ -123,6 +123,7 @@ GENERIC_STOPWORDS |= {  # forms/vehicles that do not affect the molecule identit
     "gel",
     "lotion",
     "spray",
+    "patch",
     "drops",
     "drop",
     "gas",
@@ -163,6 +164,7 @@ GENERIC_STOPWORDS |= {  # forms/vehicles that do not affect the molecule identit
     "parenteral",
     "oral",
     "topical",
+    "vaginal",
     "dermal",
     "cutaneous",
     "ophthalmic",
@@ -1637,20 +1639,11 @@ def _derive_generic_name(
     generic_name = _restore_possessives(generic_name)
     generic_name = _clean_repeated_words(generic_name)
     sanitized_name = _strip_generic_name_extras(generic_name)
-    if salt_tokens:
-        salt_set = {tok.upper() for tok in salt_tokens if tok}
-        if salt_set:
-            tokens: List[str] = []
-            for tok in sanitized_name.split():
-                cleaned = tok.strip(".,;:-)")
-                if cleaned and cleaned.upper() in salt_set:
-                    continue
-                tokens.append(tok)
-            if tokens:
-                sanitized_name = " ".join(tokens)
-    derived_name, generic_variant, generic_synonyms = _split_generic_components(sanitized_name)
     normalized_override = normalize_generic(raw_for_generic)
-    canonical_name = normalized_override or derived_name
+    candidate_source = normalized_override or sanitized_name
+    candidate = _strip_generic_name_extras(candidate_source)
+    derived_name, generic_variant, generic_synonyms = _split_generic_components(candidate)
+    canonical_name = derived_name
     if normalized_desc and RINGER_SOLUTION_RX.search(normalized_desc):
         if canonical_name and not canonical_name.endswith("SOLUTION"):
             canonical_name = f"{canonical_name} SOLUTION"
