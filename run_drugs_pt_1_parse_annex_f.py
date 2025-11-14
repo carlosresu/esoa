@@ -33,6 +33,7 @@ from pipelines.drugs.scripts.text_utils_drugs import (
     normalize_text,
     serialize_salt_list,
     slug_id,
+    BASE_GENERIC_IGNORE,
 )
 from pipelines.drugs.scripts.who_molecules_drugs import detect_all_who_molecules, load_who_molecules
 
@@ -168,7 +169,106 @@ def _build_drugbank_context(project_root: Optional[Path] = None) -> Dict[str, An
     }
 
 
-def _detect_pnf(norm_text: str, compact_text: str, ctx: Dict[str, Any]) -> Dict[str, Any]:
+_GENERIC_IGNORE_TOKENS: Set[str] = {tok.lower() for tok in BASE_GENERIC_IGNORE}
+_SALT_TOKEN_LOOKUP: Set[str] = {tok.lower() for tok in SALT_TOKENS}
+
+
+def _split_generic_components(generic_name: str) -> List[str]:
+    if not isinstance(generic_name, str):
+        return []
+    working = generic_name.replace("/", " + ").replace("&", " + ")
+    working = re.sub(r"\s+(?:and|with)\s+", " + ", working, flags=re.IGNORECASE)
+    parts = [part.strip() for part in working.split("+") if part.strip()]
+    if not parts and generic_name.strip():
+        parts = [generic_name.strip()]
+    return parts
+
+
+def _tokens_match(tokens: Sequence[str], available: Set[str]) -> bool:
+    if not tokens:
+        return False
+    tokens_all_salt = all(tok in _SALT_TOKEN_LOOKUP for tok in tokens)
+    if tokens_all_salt and len(tokens) == 1:
+        return False
+    strong = [tok for tok in tokens if len(tok) >= 4]
+    if tokens_all_salt:
+        return all(tok in available for tok in tokens)
+    if strong and all(tok in available for tok in strong):
+        return True
+    hits = sum(1 for tok in tokens if tok in available)
+    if hits == len(tokens):
+        return True
+    if len(tokens) >= 2 and hits >= len(tokens) - 1 and hits > 0:
+        return True
+    if len(tokens) == 1 and hits == 1:
+        return True
+    return False
+
+
+def _component_alias_candidates(component: str) -> List[Tuple[str, List[str]]]:
+    if not isinstance(component, str):
+        return []
+    variants: Set[str] = set()
+    variants.add(component)
+    base, _ = extract_base_and_salts(component)
+    if base:
+        variants.add(base)
+    variants.add(_base_name(component))
+    variants |= expand_generic_aliases(component)
+    processed: List[Tuple[str, List[str]]] = []
+    for variant in variants:
+        if not isinstance(variant, str):
+            continue
+        trimmed = variant.strip()
+        if not trimmed:
+            continue
+        alias_norm = _normalize_text_basic(trimmed)
+        if not alias_norm:
+            continue
+        tokens = [tok for tok in alias_norm.split() if tok not in _GENERIC_IGNORE_TOKENS]
+        if not tokens:
+            tokens = alias_norm.split()
+        tokens = [tok for tok in tokens if tok]
+        if not tokens:
+            continue
+        processed.append((alias_norm, tokens))
+    return processed
+
+
+def _component_present(component: str, desc_norm: str, desc_tokens: Set[str]) -> bool:
+    padded = f" {desc_norm} "
+    for alias_norm, tokens in _component_alias_candidates(component):
+        tokens_all_salt = tokens and all(tok in _SALT_TOKEN_LOOKUP for tok in tokens)
+        if alias_norm and not tokens_all_salt and f" {alias_norm} " in padded:
+            return True
+        if _tokens_match(tokens, desc_tokens):
+            return True
+    return False
+
+
+def _generic_agrees_with_description(
+    generic_name: str,
+    raw_description: str,
+    normalized_description: str,
+) -> bool:
+    if not isinstance(generic_name, str) or not generic_name.strip():
+        return False
+    desc_norm = _normalize_text_basic(normalized_description or "")
+    raw_norm = _normalize_text_basic(raw_description or "")
+    combined = " ".join(part for part in (desc_norm, raw_norm) if part).strip()
+    if not combined:
+        return False
+    desc_tokens = set(combined.split())
+    components = _split_generic_components(generic_name)
+    if not components:
+        return False
+    for component in components:
+        if not _component_present(component, combined, desc_tokens):
+            return False
+    return True
+
+
+def _detect_pnf(raw_text: str, norm_text: str, compact_text: str, ctx: Dict[str, Any]) -> Dict[str, Any]:
     gids: List[str] = []
     tokens: List[str] = []
     if norm_text:
@@ -182,24 +282,36 @@ def _detect_pnf(norm_text: str, compact_text: str, ctx: Dict[str, Any]) -> Dict[
                 gids.append(gid)
                 tokens.append(token)
 
-    if not gids:
+    valid_gids: List[str] = []
+    if gids:
+        for gid, token in zip(gids, tokens):
+            name = ctx["name_by_gid"].get(gid, "").strip().upper()
+            if not name:
+                continue
+            if not _generic_agrees_with_description(name, raw_text, norm_text):
+                continue
+            valid_gids.append(gid)
+
+    if not valid_gids and norm_text:
         partial = ctx["partial_index"].best_partial_in_text(norm_text)
         if partial:
             gid, _matched = partial
-            gids = [gid]
+            name = ctx["name_by_gid"].get(gid, "").strip().upper()
+            if name and _generic_agrees_with_description(name, raw_text, norm_text):
+                valid_gids = [gid]
 
-    names = [ctx["name_by_gid"].get(gid, "").strip().upper() for gid in gids if ctx["name_by_gid"].get(gid)]
+    names = [ctx["name_by_gid"].get(gid, "").strip().upper() for gid in valid_gids if ctx["name_by_gid"].get(gid)]
     routes = _dedupe_preserve(
-        route for gid in gids for route in ctx["routes_by_gid"].get(gid, []) if route
+        route for gid in valid_gids for route in ctx["routes_by_gid"].get(gid, []) if route
     )
     forms = _dedupe_preserve(
-        form for gid in gids for form in ctx["form_by_gid"].get(gid, []) if form
+        form for gid in valid_gids for form in ctx["form_by_gid"].get(gid, []) if form
     )
     salt_forms = _dedupe_preserve(
-        ctx["salt_by_gid"].get(gid, "").strip().upper() for gid in gids if ctx["salt_by_gid"].get(gid)
+        ctx["salt_by_gid"].get(gid, "").strip().upper() for gid in valid_gids if ctx["salt_by_gid"].get(gid)
     )
     return {
-        "gids": gids,
+        "gids": valid_gids,
         "names": names,
         "routes": routes,
         "forms": forms,
@@ -414,7 +526,7 @@ def _prepare_record(
     if route_evidence_text:
         evidence_parts.append(route_evidence_text)
 
-    pnf_matches = _detect_pnf(normalized_description, norm_compact, ctx["pnf"])
+    pnf_matches = _detect_pnf(raw_description, normalized_description, norm_compact, ctx["pnf"])
     who_result = _detect_who(raw_description, normalized_description, ctx["who"])
     drugbank_hits = _detect_drugbank(normalized_description, ctx["drugbank"])
 
@@ -425,16 +537,33 @@ def _prepare_record(
         reference_names.extend(who_result["names"])
     if not reference_names:
         reference_names.extend(drugbank_hits)
-    if not reference_names:
+    valid_reference_names = [
+        name
+        for name in reference_names
+        if _generic_agrees_with_description(name, raw_description, normalized_description)
+    ]
+
+    final_candidates: List[str] = []
+    if valid_reference_names:
+        final_candidates = valid_reference_names
+    else:
+        fallback_candidates: List[str] = []
         norm_generic = normalize_generic(raw_description).strip().upper()
         if norm_generic:
-            reference_names.append(norm_generic)
-        elif base_text:
-            reference_names.append(base_text.strip().upper())
-        else:
-            reference_names.append(raw_description.strip().upper())
+            fallback_candidates.append(norm_generic)
+        if base_text:
+            fallback_candidates.append(base_text.strip().upper())
+        raw_upper = raw_description.strip().upper()
+        if raw_upper:
+            fallback_candidates.append(raw_upper)
+        final_candidates = [name for name in fallback_candidates if name]
+        if not final_candidates and reference_names:
+            final_candidates = [name for name in reference_names if name]
 
-    generic_name = _select_generic(reference_names)
+    if not final_candidates:
+        final_candidates = [raw_description.strip().upper()]
+
+    generic_name = _select_generic(final_candidates)
     generic_id = _choose_generic_id(generic_name, pnf_matches, ctx["pnf"]["alias_lookup"])
 
     salt_form = _final_salt_form(
