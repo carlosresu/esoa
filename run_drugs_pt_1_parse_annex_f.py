@@ -172,6 +172,105 @@ def _build_drugbank_context(project_root: Optional[Path] = None) -> Dict[str, An
 _GENERIC_IGNORE_TOKENS: Set[str] = {tok.lower() for tok in BASE_GENERIC_IGNORE}
 _SALT_TOKEN_LOOKUP: Set[str] = {tok.lower() for tok in SALT_TOKENS}
 
+_GENERIC_FORM_TOKENS: Set[str] = {
+    "SOLUTION",
+    "SOLUTIONS",
+    "SUSPENSION",
+    "SYRUP",
+    "SHAMPOO",
+    "LOTION",
+    "CREAM",
+    "OINTMENT",
+    "POWDER",
+    "GEL",
+    "INJECTION",
+    "INJECTIONS",
+    "TABLET",
+    "TABLETS",
+    "CAPSULE",
+    "CAPSULES",
+    "AMPUL",
+    "AMPULE",
+    "VIAL",
+    "VIALS",
+    "BOTTLE",
+    "BOTTLES",
+    "DRUM",
+    "TUBE",
+    "SACHET",
+    "BAG",
+    "BAGS",
+    "GLASS",
+    "PREFILLED",
+    "PREFILLED",
+    "PRE-FILLED",
+    "EYE",
+    "DROPS",
+    "NEBULE",
+    "DPI",
+    "INTRAVENOUS",
+    "ORAL",
+    "TOPICAL",
+    "NASAL",
+    "OPHTHALMIC",
+    "PARENTERAL",
+    "PARENTERALS",
+    "INTRAMUSCULAR",
+    "SUBCUTANEOUS",
+}
+
+_GENERIC_PACKAGING_TOKENS: Set[str] = {
+    "BOTTLE",
+    "BOTTLES",
+    "VIAL",
+    "VIALS",
+    "AMPULE",
+    "AMPULES",
+    "DRUM",
+    "TUBE",
+    "TUBES",
+    "BAG",
+    "BAGS",
+    "SACHET",
+    "SACHETS",
+    "GLASS",
+    "BOX",
+    "PACK",
+    "CARD",
+    "CONTAINER",
+    "CARTRIDGE",
+    "PREFILLED",
+    "PREFILL",
+    "PRE-FILLED",
+}
+
+_GENERIC_UNIT_TOKENS: Set[str] = {
+    "%",
+    "MG",
+    "MCG",
+    "G",
+    "IU",
+    "ML",
+    "L",
+    "UL",
+    "DOSE",
+    "DOSES",
+    "UNIT",
+    "UNITS",
+    "MMOL",
+    "MM",
+}
+
+_GENERIC_ALWAYS_NOISE_TOKENS: Set[str] = {"VIT"}
+
+_GENERIC_NOISE_PHRASES = {
+    "EYE DROPS",
+    "PRE FILLED",
+    "PRE-FILLED",
+    "PREFILLED",
+}
+
+
 
 def _split_generic_components(generic_name: str) -> List[str]:
     if not isinstance(generic_name, str):
@@ -182,6 +281,56 @@ def _split_generic_components(generic_name: str) -> List[str]:
     if not parts and generic_name.strip():
         parts = [generic_name.strip()]
     return parts
+
+
+def _normalize_candidate_key(candidate: str) -> str:
+    if not isinstance(candidate, str):
+        return ""
+    key = candidate.upper()
+    key = key.replace("&", " + ").replace("/", " + ")
+    key = re.sub(r"[^\w+\s]", " ", key)
+    key = re.sub(r"\s*\+\s*", " + ", key)
+    key = re.sub(r"\s+", " ", key)
+    return key.strip()
+
+
+def _is_candidate_noisy(candidate_key: str) -> bool:
+    if not candidate_key:
+        return False
+    tokens = [tok for tok in re.split(r"[+\s]+", candidate_key) if tok]
+    if any(re.search(r"\d", tok) for tok in tokens):
+        return True
+    if any(tok in _GENERIC_PACKAGING_TOKENS for tok in tokens):
+        return True
+    if any(tok in _GENERIC_UNIT_TOKENS for tok in tokens):
+        return True
+    if any(tok in _GENERIC_FORM_TOKENS for tok in tokens):
+        return True
+    if any(tok in _GENERIC_ALWAYS_NOISE_TOKENS for tok in tokens):
+        return True
+    upper = candidate_key.upper()
+    if any(phrase in upper for phrase in _GENERIC_NOISE_PHRASES):
+        return True
+    return False
+
+
+def _clean_generic_candidates(candidates: Iterable[str]) -> List[str]:
+    normalized: List[str] = []
+    seen: Set[str] = set()
+    for candidate in candidates:
+        key = _normalize_candidate_key(candidate)
+        if not key:
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(key)
+    if not normalized:
+        return []
+    clean = [key for key in normalized if not _is_candidate_noisy(key)]
+    if clean:
+        return clean
+    return normalized
 
 
 def _tokens_match(tokens: Sequence[str], available: Set[str]) -> bool:
@@ -416,9 +565,23 @@ def _normalize_description(raw: str) -> str:
 
 def _select_generic(generated: List[str]) -> str:
     ordered = _dedupe_preserve(name.strip().upper() for name in generated if name)
-    if ordered:
-        return " + ".join(ordered)
-    return ""
+    if not ordered:
+        return ""
+    components: List[str] = []
+    seen_components: Set[str] = set()
+    for candidate in ordered:
+        for component in _split_generic_components(candidate):
+            cleaned = component.strip().upper()
+            if not cleaned:
+                continue
+            key = _normalize_text_basic(cleaned)
+            if not key or key in seen_components:
+                continue
+            seen_components.add(key)
+            components.append(cleaned)
+    if components:
+        return " + ".join(components)
+    return " + ".join(ordered)
 
 
 def _choose_generic_id(
@@ -564,6 +727,10 @@ def _prepare_record(
                 final_candidates = [fallback_from_reference]
     if not final_candidates:
         final_candidates = [raw_description.strip().upper()]
+
+    cleaned_candidates = _clean_generic_candidates(final_candidates)
+    if cleaned_candidates:
+        final_candidates = cleaned_candidates
 
     generic_name = _select_generic(final_candidates)
     generic_id = _choose_generic_id(generic_name, pnf_matches, ctx["pnf"]["alias_lookup"])

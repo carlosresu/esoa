@@ -13,7 +13,10 @@ All helper functions referenced within the spec are provided explicitly.
 from __future__ import annotations
 
 import unicodedata
+import re
 from typing import List, Tuple
+
+from pipelines.drugs.scripts.text_utils_drugs import extract_base_and_salts
 
 # Token classification constants
 UPPERCASE_WORD = "UPPERCASE_WORD"
@@ -83,6 +86,56 @@ SALT_UNIT_SET = {
 
 DELIMITERS = {" ", "\t", "\n", "\r", ",", "(", ")", "/"}
 PUNCTUATION_BREAKS = {":", ";", "!", "?"}
+
+GENERIC_BAD_SINGLE_TOKENS = {
+    "ACID",
+    "SOLUTION",
+    "SOLUTIONS",
+    "VITAMIN",
+    "VITAMINS",
+    "ELEMENT",
+    "ELEMENTS",
+    "TRACE",
+    "MIXTURE",
+    "PREPARATION",
+    "FORMULA",
+    "FORMULATION",
+}
+
+_PREFIX_UNIT_TOKENS = {
+    "%",
+    "MG",
+    "MCG",
+    "G",
+    "IU",
+    "ML",
+    "L",
+    "MMOL",
+}
+
+_PREFIX_PACKAGING_TOKENS = {
+    "BOTTLE",
+    "BOTTLES",
+    "VIAL",
+    "VIALS",
+    "AMPULE",
+    "AMPULLA",
+    "DRUM",
+    "TUBE",
+    "TUBES",
+    "SACHET",
+    "SACHETS",
+    "BAG",
+    "BAGS",
+    "GLASS",
+    "TABLET",
+    "TABLETS",
+    "CAPSULE",
+    "CAPSULES",
+    "PACK",
+    "BOX",
+    "CARTRIDGE",
+}
 
 
 def tokenize_raw(raw_description: str) -> List[str]:
@@ -258,6 +311,49 @@ def join_molecules(molecules: List[List[str]]) -> str:
     return " + ".join(output)
 
 
+def _extract_descriptive_prefix(raw_description: str) -> str:
+    if not raw_description:
+        return ""
+    tokens = raw_description.upper().split()
+    kept: List[str] = []
+    for token in tokens:
+        clean = token.strip(",.")
+        if not clean:
+            continue
+        if any(ch.isdigit() for ch in clean):
+            break
+        if clean in _PREFIX_PACKAGING_TOKENS or clean in _PREFIX_UNIT_TOKENS:
+            break
+        kept.append(clean)
+    return " ".join(kept).strip()
+
+
+def _prefer_descriptive_generic(raw_description: str, candidate: str) -> str:
+    if not candidate:
+        return ""
+    candidate_norm = candidate.strip().upper()
+    if not candidate_norm:
+        return ""
+    candidate_tokens = [tok for tok in re.split(r"\s+", candidate_norm) if tok and tok != "+"]
+    prefix = _extract_descriptive_prefix(raw_description)
+    has_bad_token = any(tok in GENERIC_BAD_SINGLE_TOKENS for tok in candidate_tokens)
+    should_expand = prefix and prefix != candidate_norm and (
+        candidate_norm in GENERIC_BAD_SINGLE_TOKENS or (len(candidate_tokens) <= 2 and has_bad_token)
+    )
+    if should_expand and (prefix.startswith(candidate_norm) or candidate_norm in prefix.split()):
+        return prefix
+    if candidate_norm in GENERIC_BAD_SINGLE_TOKENS:
+        fallback, _ = extract_base_and_salts(raw_description)
+        fallback_clean = fallback.strip().upper()
+        if fallback_clean and fallback_clean != candidate_norm:
+            return fallback_clean
+        fallback, _ = extract_base_and_salts(raw_description)
+        fallback_clean = fallback.strip().upper()
+        if fallback_clean and fallback_clean != candidate_norm:
+            return fallback_clean
+    return candidate_norm
+
+
 def normalize_generic(raw_description: str) -> str:
     """Normalize the raw_description field into the canonical generic_name (Section 10)."""
     tokens = tokenize_raw(raw_description)
@@ -270,7 +366,8 @@ def normalize_generic(raw_description: str) -> str:
     block_tokens, block_classes = extract_molecule_block(tokens, classifications)
     molecules = split_molecules(block_tokens, block_classes)
     filtered = filter_formulation_tokens(molecules)
-    return join_molecules(filtered)
+    candidate = join_molecules(filtered)
+    return _prefer_descriptive_generic(raw_description, candidate)
 
 __all__ = [
     "tokenize_raw",
