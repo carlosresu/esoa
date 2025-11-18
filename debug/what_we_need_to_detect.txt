@@ -1,0 +1,1 @@
+molecule(s), synonym(s), brand(s), dose(s), form(s), route(s), salt_form(s)
