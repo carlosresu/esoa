@@ -6,7 +6,7 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -79,12 +79,11 @@ def _refresh_pnf_prepared(inputs_dir: Path) -> Path:
     return _ensure_path(inputs_dir / "pnf_prepared.csv", "pnf_prepared.csv output")
 
 
-def _refresh_drugbank_exports(root: Path, inputs_dir: Path) -> tuple[Path, Path]:
+def _refresh_drugbank_exports(root: Path, inputs_dir: Path) -> Path:
     cmd = [sys.executable, "-m", "pipelines.drugs.scripts.run_drugbank_drugs"]
     _run_subprocess(cmd, root)
     generics = _ensure_path(inputs_dir / "drugbank_generics.csv", "drugbank_generics.csv")
-    brands = _ensure_path(inputs_dir / "drugbank_brands.csv", "drugbank_brands.csv")
-    return generics, brands
+    return generics
 
 
 def _find_latest_timestamped_file(directory: Path, pattern: str) -> Path:
@@ -130,10 +129,8 @@ def _refresh_source_datasets(root: Path) -> Dict[str, Path]:
     print("  - Building latest FDA brand map export...")
     datasets["fda_brand"] = _refresh_fda_brand_map(inputs_dir)
 
-    print("  - Refreshing DrugBank generics/brands exports via R helper...")
-    generics, brands = _refresh_drugbank_exports(root, inputs_dir)
-    datasets["drugbank_generics"] = generics
-    datasets["drugbank_brands"] = brands
+    print("  - Refreshing DrugBank generics export via R helper...")
+    datasets["drugbank_generics"] = _refresh_drugbank_exports(root, inputs_dir)
 
     return datasets
 
@@ -436,15 +433,7 @@ def load_db_generics(path: Path) -> pd.DataFrame:
     return load_csv(path)
 
 
-def load_db_brands(path: Path) -> pd.DataFrame:
-    return load_csv(path)
-
-
 def load_fda_brands(path: Path) -> pd.DataFrame:
-    return load_csv(path)
-
-
-def load_fda_foods(path: Path) -> pd.DataFrame:
     return load_csv(path)
 
 
@@ -469,7 +458,6 @@ def _collect_molecule_sources(
     df_db_generics: pd.DataFrame,
     df_fda_brands: pd.DataFrame,
     df_who: pd.DataFrame,
-    df_db_brands: pd.DataFrame,
 ) -> pd.DataFrame:
     records: List[Dict[str, str]] = []
 
@@ -518,16 +506,6 @@ def _collect_molecule_sources(
         source_key = f"WHO:{_as_str(who_code_series.loc[idx]).strip() or idx}"
         records.append({"source_system": "WHO_ATC", "source_key": source_key, "raw_generic": value})
 
-    db_brand_generic = get_column(df_db_brands, "generic", ["generic", "generic_name"], required=False)
-    db_brand_name = get_column(df_db_brands, "brand", ["brand", "brand_name"], required=False)
-    for idx, raw in db_brand_generic.items():
-        value = _as_str(raw).strip()
-        if not value:
-            continue
-        brand = _as_str(db_brand_name.loc[idx]).strip()
-        source_key = f"DB_BRAND:{brand or idx}"
-        records.append({"source_system": "DB_BRAND", "source_key": source_key, "raw_generic": value})
-
     return pd.DataFrame(records)
 
 
@@ -536,10 +514,9 @@ def build_molecule_dimensions(
     df_db_generics: pd.DataFrame,
     df_fda_brands: pd.DataFrame,
     df_who: pd.DataFrame,
-    df_db_brands: pd.DataFrame,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, Dict[str, int]]:
     molecule_source_rows = _collect_molecule_sources(
-        df_pnf, df_db_generics, df_fda_brands, df_who, df_db_brands
+        df_pnf, df_db_generics, df_fda_brands, df_who
     )
 
     molecule_map: Dict[str, str] = {}
@@ -701,303 +678,12 @@ def build_dim_drugbank_generic(
     return dim_db_generic
 
 
-def build_dim_drugbank_brand(
-    df_db_brands: pd.DataFrame, molecule_set_lookup: Dict[str, int]
-) -> pd.DataFrame:
-    drugbank_id = get_column(df_db_brands, "drugbank_id", ["drugbank_id", "drugbank ids"], required=False)
-    brand = get_column(df_db_brands, "brand", ["brand", "brand_name"], required=False)
-    generic = get_column(df_db_brands, "generic", ["generic", "generic_name"], required=False)
-
-    records: List[Dict[str, Any]] = []
-    seen_keys: set[Tuple[str, str]] = set()
-    for idx in df_db_brands.index:
-        brand_name = _as_str(brand.loc[idx]).strip()
-        generic_name = _as_str(generic.loc[idx]).strip()
-        if not brand_name:
-            continue
-        name_key = normalize_text(brand_name)
-        if not generic_name:
-            continue
-        key = molecule_set_key(generic_name)
-        set_id = molecule_set_lookup.get(key)
-        dedup_key = (name_key, generic_name.lower())
-        if dedup_key in seen_keys:
-            continue
-        seen_keys.add(dedup_key)
-        records.append(
-            {
-                "drugbank_id": _as_str(drugbank_id.loc[idx]).strip(),
-                "brand": brand_name,
-                "generic": generic_name,
-                "molecule_set_id": set_id,
-                "brand_name_key": name_key,
-            }
-        )
-
-    if not records:
-        return pd.DataFrame(
-            columns=
-            [
-                "drugbank_brand_id",
-                "drugbank_id",
-                "brand",
-                "generic",
-                "molecule_set_id",
-                "brand_name_key",
-                "brand_id",
-            ]
-        )
-
-    dim_db_brand = pd.DataFrame(records)
-    dim_db_brand.insert(0, "drugbank_brand_id", np.arange(1, len(dim_db_brand) + 1))
-    dim_db_brand["brand_id"] = pd.Series(pd.array([None] * len(dim_db_brand), dtype="Int64"))
-    return dim_db_brand
-
-
-def _first_non_empty(series: Iterable[Any]) -> str:
-    for value in series:
-        text = _as_str(value).strip()
-        if text:
-            return text
-    return ""
-
-
-def build_dim_fda_registration(
-    df_fda_brands: pd.DataFrame, df_fda_foods: pd.DataFrame
-) -> pd.DataFrame:
-    brand_regs = pd.DataFrame(
-        {
-            "registration_number": get_column(
-                df_fda_brands,
-                "registration_number",
-                ["registration_number", "registration"],
-                required=False,
-            ),
-            "company_name": ["" for _ in range(len(df_fda_brands))],
-            "product_name": ["" for _ in range(len(df_fda_brands))],
-            "is_food": [False] * len(df_fda_brands),
-            "is_drug": [True] * len(df_fda_brands),
-        }
-    )
-
-    food_regs = pd.DataFrame(
-        {
-            "registration_number": get_column(
-                df_fda_foods, "registration_number", ["registration_number", "registration"], required=False
-            ),
-            "company_name": get_column(df_fda_foods, "company_name", ["company_name", "company"], required=False),
-            "product_name": get_column(df_fda_foods, "product_name", ["product_name"], required=False),
-            "is_food": [True] * len(df_fda_foods),
-            "is_drug": [False] * len(df_fda_foods),
-        }
-    )
-
-    combined = pd.concat([brand_regs, food_regs], ignore_index=True)
-    combined["registration_number"] = combined["registration_number"].astype(str).str.strip()
-    combined = combined[combined["registration_number"] != ""]
-    if combined.empty:
-        return pd.DataFrame(
-            columns=["registration_number", "company_name", "product_name", "is_food", "is_drug", "notes"]
-        )
-
-    grouped = (
-        combined.groupby("registration_number", dropna=False)
-        .agg(
-            {
-                "company_name": _first_non_empty,
-                "product_name": _first_non_empty,
-                "is_food": "max",
-                "is_drug": "max",
-            }
-        )
-        .reset_index()
-    )
-    grouped["notes"] = ""
-    return grouped
-
-
-def build_dim_fda_brand(
-    df_fda_brands: pd.DataFrame, molecule_set_lookup: Dict[str, int]
-) -> Tuple[pd.DataFrame, Dict[Tuple[str, str], int]]:
-    brand_name = get_column(df_fda_brands, "brand_name", ["brand_name", "brand"], required=False)
-    generic_name = get_column(
-        df_fda_brands, "generic_name", ["generic_name", "generic"], required=False
-    )
-    registration = get_column(
-        df_fda_brands, "registration_number", ["registration_number", "registration"], required=False
-    )
-
-    records: List[Dict[str, Any]] = []
-    pair_to_id: Dict[Tuple[str, str], int] = {}
-    for idx in df_fda_brands.index:
-        brand = _as_str(brand_name.loc[idx]).strip()
-        reg = _as_str(registration.loc[idx]).strip()
-        if not brand or not reg:
-            continue
-        brand_key = normalize_text(brand)
-        key_pair = (reg, brand_key)
-        if key_pair in pair_to_id:
-            continue
-        generic = _as_str(generic_name.loc[idx]).strip()
-        set_id = molecule_set_lookup.get(molecule_set_key(generic))
-        records.append(
-            {
-                "registration_number": reg,
-                "brand_name": brand,
-                "generic_name": generic,
-                "molecule_set_id": set_id,
-                "brand_name_key": brand_key,
-            }
-        )
-
-    if not records:
-        empty_df = pd.DataFrame(
-            columns=
-            [
-                "fda_brand_id",
-                "registration_number",
-                "brand_name",
-                "generic_name",
-                "molecule_set_id",
-                "brand_name_key",
-                "brand_id",
-            ]
-        )
-        return empty_df, {}
-
-    dim_fda_brand = pd.DataFrame(records)
-    dim_fda_brand = dim_fda_brand.sort_values(["registration_number", "brand_name"]).reset_index(drop=True)
-    dim_fda_brand.insert(0, "fda_brand_id", np.arange(1, len(dim_fda_brand) + 1))
-    dim_fda_brand["brand_id"] = pd.Series(pd.array([None] * len(dim_fda_brand), dtype="Int64"))
-    pair_to_id = {
-        (row["registration_number"], row["brand_name_key"]): int(row["fda_brand_id"])
-        for _, row in dim_fda_brand.iterrows()
-    }
-    return dim_fda_brand, pair_to_id
-
-
-def build_bridge_fda_dose_form(
-    df_fda_brands: pd.DataFrame, fda_brand_lookup: Dict[Tuple[str, str], int]
-) -> pd.DataFrame:
-    registration = get_column(
-        df_fda_brands, "registration_number", ["registration_number", "registration"], required=False
-    )
-    brand_name = get_column(df_fda_brands, "brand_name", ["brand_name", "brand"], required=False)
-    dosage_form = get_column(df_fda_brands, "dosage_form", ["dosage_form", "form"], required=False)
-    route = get_column(df_fda_brands, "route", ["route"], required=False)
-    dosage_strength = get_column(
-        df_fda_brands, "dosage_strength", ["dosage_strength", "strength"], required=False
-    )
-
-    records: List[Dict[str, Any]] = []
-    for idx in df_fda_brands.index:
-        reg = _as_str(registration.loc[idx]).strip()
-        brand = normalize_text(brand_name.loc[idx])
-        if not reg or not brand:
-            continue
-        fda_brand_id = fda_brand_lookup.get((reg, brand))
-        if not fda_brand_id:
-            continue
-        records.append(
-            {
-                "fda_brand_id": fda_brand_id,
-                "dosage_form": _as_str(dosage_form.loc[idx]).strip(),
-                "route": _as_str(route.loc[idx]).strip(),
-                "dosage_strength": _as_str(dosage_strength.loc[idx]).strip(),
-                "registration_number": reg,
-            }
-        )
-
-    columns = ["fda_brand_id", "dosage_form", "route", "dosage_strength", "registration_number"]
-    if not records:
-        return pd.DataFrame(columns=["fda_df_id", *columns])
-    bridge = pd.DataFrame(records, columns=columns)
-    bridge.insert(0, "fda_df_id", np.arange(1, len(bridge) + 1))
-    return bridge
-
-
-def build_dim_brand(
-    dim_drugbank_brand: pd.DataFrame,
-    dim_fda_brand: pd.DataFrame,
-    df_fda_foods: pd.DataFrame,
-) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    brand_sources: Dict[str, Dict[str, Any]] = {}
-
-    def _add_brand(name: str, source: str) -> None:
-        normalized = normalize_text(name)
-        if not normalized:
-            return
-        entry = brand_sources.setdefault(
-            normalized,
-            {"brand_name_canonical": name.strip() or normalized, "sources": set()},
-        )
-        if not entry["brand_name_canonical"]:
-            entry["brand_name_canonical"] = name.strip()
-        entry["sources"].add(source)
-
-    if "brand" in dim_drugbank_brand.columns:
-        for brand in dim_drugbank_brand["brand"]:
-            _add_brand(_as_str(brand), "db")
-
-    if "brand_name" in dim_fda_brand.columns:
-        for brand in dim_fda_brand["brand_name"]:
-            _add_brand(_as_str(brand), "fda")
-
-    food_brand = get_column(
-        df_fda_foods, "brand_name", ["brand_name", "brand"], required=False
-    )
-    product_name = get_column(df_fda_foods, "product_name", ["product_name"], required=False)
-    for idx in df_fda_foods.index:
-        brand_value = _as_str(food_brand.loc[idx]).strip() or _as_str(product_name.loc[idx]).strip()
-        if not brand_value:
-            continue
-        _add_brand(brand_value, "food")
-
-    brand_items = []
-    for idx, (key, entry) in enumerate(sorted(brand_sources.items(), key=lambda item: item[0]), start=1):
-        display = entry["brand_name_canonical"]
-        brand_items.append(
-            {
-                "brand_id": idx,
-                "brand_name_canonical": display,
-                "brand_name_display": display,
-                "source_flags": "+".join(sorted(entry["sources"])),
-                "brand_name_key": key,
-            }
-        )
-
-    if brand_items:
-        dim_brand = pd.DataFrame(brand_items)
-    else:
-        dim_brand = pd.DataFrame(
-            columns=["brand_id", "brand_name_canonical", "brand_name_display", "source_flags", "brand_name_key"]
-        )
-
-    brand_lookup = (
-        dict(zip(dim_brand["brand_name_key"], dim_brand["brand_id"])) if not dim_brand.empty else {}
-    )
-
-    if not dim_drugbank_brand.empty:
-        dim_drugbank_brand = dim_drugbank_brand.copy()
-        dim_drugbank_brand["brand_id"] = pd.Series(
-            pd.array([brand_lookup.get(key) for key in dim_drugbank_brand["brand_name_key"]], dtype="Int64")
-        )
-
-    if not dim_fda_brand.empty:
-        dim_fda_brand = dim_fda_brand.copy()
-        dim_fda_brand["brand_id"] = pd.Series(
-            pd.array([brand_lookup.get(key) for key in dim_fda_brand["brand_name_key"]], dtype="Int64")
-        )
-
-    dim_brand = dim_brand.drop(columns=["brand_name_key"], errors="ignore")
-    return dim_brand, dim_drugbank_brand, dim_fda_brand
 
 
 def build_dim_route(
     dim_pnf_generic: pd.DataFrame,
     dim_drugbank_generic: pd.DataFrame,
     df_fda_brands: pd.DataFrame,
-    bridge_fda_dose_form: pd.DataFrame,
 ) -> pd.DataFrame:
     routes: set[str] = set()
 
@@ -1021,12 +707,6 @@ def build_dim_route(
         if canonical:
             routes.add(canonical)
 
-    if "route" in bridge_fda_dose_form.columns:
-        for value in bridge_fda_dose_form["route"]:
-            canonical = canonical_route(value)
-            if canonical:
-                routes.add(canonical)
-
     route_list = sorted(routes)
     dim_route = pd.DataFrame(
         {
@@ -1042,7 +722,6 @@ def build_dim_form(
     dim_pnf_generic: pd.DataFrame,
     dim_drugbank_generic: pd.DataFrame,
     df_fda_brands: pd.DataFrame,
-    bridge_fda_dose_form: pd.DataFrame,
 ) -> pd.DataFrame:
     forms: set[str] = set()
 
@@ -1065,12 +744,6 @@ def build_dim_form(
         canonical = canonical_form(value)
         if canonical:
             forms.add(canonical)
-
-    if "dosage_form" in bridge_fda_dose_form.columns:
-        for value in bridge_fda_dose_form["dosage_form"]:
-            canonical = canonical_form(value)
-            if canonical:
-                forms.add(canonical)
 
     form_list = sorted(forms)
     dim_form = pd.DataFrame(
@@ -1322,72 +995,6 @@ def build_master_variant(
     return master
 
 
-def build_bridge_variant_brand(
-    master_variant: pd.DataFrame,
-    dim_drugbank_brand: pd.DataFrame,
-    dim_fda_brand: pd.DataFrame,
-) -> pd.DataFrame:
-    records: List[Dict[str, Any]] = []
-
-    if not master_variant.empty and not dim_drugbank_brand.empty:
-        merge_db = master_variant[["variant_id", "molecule_set_id"]].merge(
-            dim_drugbank_brand[["brand_id", "molecule_set_id", "drugbank_id", "brand_name_key"]],
-            on="molecule_set_id",
-            how="inner",
-        )
-        for _, row in merge_db.iterrows():
-            brand_id = row["brand_id"]
-            if pd.isna(brand_id):
-                continue
-            source_key = _as_str(row["drugbank_id"]).strip() or _as_str(row["brand_name_key"]).strip()
-            records.append(
-                {
-                    "variant_id": row["variant_id"],
-                    "brand_id": int(brand_id),
-                    "source_system": "DB",
-                    "source_brand_key": source_key,
-                    "primary_flag": False,
-                }
-            )
-
-    if not master_variant.empty and not dim_fda_brand.empty:
-        merge_fda = master_variant[
-            ["variant_id", "molecule_set_id", "fda_registration_numbers"]
-        ].merge(
-            dim_fda_brand[
-                ["brand_id", "molecule_set_id", "registration_number", "brand_name_key"]
-            ],
-            on="molecule_set_id",
-            how="inner",
-        )
-        for _, row in merge_fda.iterrows():
-            brand_id = row["brand_id"]
-            if pd.isna(brand_id):
-                continue
-            registration = _as_str(row["registration_number"]).strip()
-            variant_regs = _as_str(row["fda_registration_numbers"]).strip()
-            if registration and variant_regs:
-                registration_set = {token for token in variant_regs.split("|") if token}
-                if registration_set and registration not in registration_set:
-                    continue
-            records.append(
-                {
-                    "variant_id": row["variant_id"],
-                    "brand_id": int(brand_id),
-                    "source_system": "FDA",
-                    "source_brand_key": registration,
-                    "primary_flag": False,
-                }
-            )
-
-    columns = ["variant_id", "brand_id", "source_system", "source_brand_key", "primary_flag"]
-    bridge = pd.DataFrame(records, columns=columns) if records else pd.DataFrame(columns=columns)
-    if bridge.empty:
-        return bridge
-    bridge = bridge.drop_duplicates().reset_index(drop=True)
-    return bridge
-
-
 def write_csv(df: pd.DataFrame, path: Path) -> None:
     df.to_csv(path, index=False)
 
@@ -1403,10 +1010,6 @@ def main() -> None:
     who_path = dataset_paths["who"]
     fda_brands_path = dataset_paths["fda_brand"]
     db_generics_path = dataset_paths["drugbank_generics"]
-    db_brands_path = dataset_paths["drugbank_brands"]
-    fda_foods_path = _ensure_path(
-        root / "inputs" / "drugs" / "fda_food_products.csv", "fda_food_products.csv"
-    )
 
     print("[STEP 1] Loading input CSVs...")
 
@@ -1414,15 +1017,11 @@ def main() -> None:
     df_who = load_who_atc(who_path)
     df_db_generics = load_db_generics(db_generics_path)
     df_fda_brands = load_fda_brands(fda_brands_path)
-    df_db_brands = load_db_brands(db_brands_path)
-    df_fda_foods = load_fda_foods(fda_foods_path)
 
     print(f"Loaded PNF rows: {len(df_pnf)}")
     print(f"Loaded WHO ATC rows: {len(df_who)}")
     print(f"Loaded DrugBank generics rows: {len(df_db_generics)}")
     print(f"Loaded FDA brand map rows: {len(df_fda_brands)}")
-    print(f"Loaded DrugBank brand rows: {len(df_db_brands)}")
-    print(f"Loaded FDA food rows: {len(df_fda_foods)}")
 
     print("[STEP 2] Building dim_atc...")
     dim_atc = build_dim_atc(df_who)
@@ -1430,7 +1029,7 @@ def main() -> None:
 
     print("[STEP 3] Building dim_molecule and dim_molecule_set...")
     dim_molecule, dim_molecule_set, bridge_molecule_set_member, molecule_set_lookup = build_molecule_dimensions(
-        df_pnf, df_db_generics, df_fda_brands, df_who, df_db_brands
+        df_pnf, df_db_generics, df_fda_brands, df_who
     )
     write_csv(dim_molecule, output_dir / "dim_molecule.csv")
     write_csv(dim_molecule_set, output_dir / "dim_molecule_set.csv")
@@ -1444,42 +1043,18 @@ def main() -> None:
     dim_drugbank_generic = build_dim_drugbank_generic(df_db_generics, molecule_set_lookup)
     write_csv(dim_drugbank_generic, output_dir / "dim_drugbank_generic.csv")
 
-    print("[STEP 6] Building dim_drugbank_brand and dim_fda_brand...")
-    dim_drugbank_brand = build_dim_drugbank_brand(df_db_brands, molecule_set_lookup)
-    dim_fda_brand, fda_brand_lookup = build_dim_fda_brand(df_fda_brands, molecule_set_lookup)
-    write_csv(dim_drugbank_brand, output_dir / "dim_drugbank_brand.csv")
-    write_csv(dim_fda_brand, output_dir / "dim_fda_brand.csv")
-
-    print("[STEP 7] Building dim_fda_registration and bridge_fda_dose_form...")
-    dim_fda_registration = build_dim_fda_registration(df_fda_brands, df_fda_foods)
-    bridge_fda_dose_form = build_bridge_fda_dose_form(df_fda_brands, fda_brand_lookup)
-    write_csv(dim_fda_registration, output_dir / "dim_fda_registration.csv")
-    write_csv(bridge_fda_dose_form, output_dir / "bridge_fda_dose_form.csv")
-
-    print("[STEP 8] Building dim_brand and updating brand references...")
-    dim_brand, dim_drugbank_brand, dim_fda_brand = build_dim_brand(
-        dim_drugbank_brand, dim_fda_brand, df_fda_foods
-    )
-    write_csv(dim_brand, output_dir / "dim_brand.csv")
-    write_csv(dim_drugbank_brand, output_dir / "dim_drugbank_brand.csv")
-    write_csv(dim_fda_brand, output_dir / "dim_fda_brand.csv")
-
-    print("[STEP 9] Building dim_route, dim_form, and dim_salt_form...")
-    dim_route = build_dim_route(dim_pnf_generic, dim_drugbank_generic, df_fda_brands, bridge_fda_dose_form)
-    dim_form = build_dim_form(dim_pnf_generic, dim_drugbank_generic, df_fda_brands, bridge_fda_dose_form)
+    print("[STEP 6] Building dim_route, dim_form, and dim_salt_form...")
+    dim_route = build_dim_route(dim_pnf_generic, dim_drugbank_generic, df_fda_brands)
+    dim_form = build_dim_form(dim_pnf_generic, dim_drugbank_generic, df_fda_brands)
     dim_salt_form = build_dim_salt_form(dim_pnf_generic)
     write_csv(dim_route, output_dir / "dim_route.csv")
     write_csv(dim_form, output_dir / "dim_form.csv")
     write_csv(dim_salt_form, output_dir / "dim_salt_form.csv")
 
-    print("[STEP 10] Building staging variants and master_variant...")
+    print("[STEP 7] Building staging variants and master_variant...")
     staging_variants = build_staging_variants(dim_pnf_generic, dim_drugbank_generic, df_fda_brands, molecule_set_lookup)
     master_variant = build_master_variant(staging_variants, dim_form, dim_route, dim_salt_form)
     write_csv(master_variant, output_dir / "master_variant.csv")
-
-    print("[STEP 11] Building bridge_variant_brand...")
-    bridge_variant_brand = build_bridge_variant_brand(master_variant, dim_drugbank_brand, dim_fda_brand)
-    write_csv(bridge_variant_brand, output_dir / "bridge_variant_brand.csv")
 
     print("[DONE] Master dataset created in ./outputs/drugs/master/")
 
