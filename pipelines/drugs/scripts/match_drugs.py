@@ -7,6 +7,8 @@ import sys, time
 import os, pandas as pd
 from typing import Callable
 
+from .concurrency_drugs import maybe_parallel_map
+
 # Local lightweight spinner so this module is self-contained
 def _run_with_spinner(label: str, func: Callable[[], None]) -> float:
     """Wrap a callable with a lightweight spinner to show progress inside module-level scripts."""
@@ -44,32 +46,39 @@ from .match_scoring_drugs import score_and_classify
 from .match_outputs_drugs import write_outputs
 
 
+def _prep_annex_synonyms(values: tuple[object, object, object]) -> str:
+    """Build the ordered Annex synonym payload while deduplicating entries."""
+    raw_description, normalized_description, generic_name = values
+    candidates = []
+    for value in (raw_description, normalized_description, generic_name):
+        if isinstance(value, str):
+            trimmed = value.strip()
+            if trimmed:
+                candidates.append(trimmed)
+    seen = set()
+    ordered = []
+    for cand in candidates:
+        if cand not in seen:
+            seen.add(cand)
+            ordered.append(cand)
+    return "|".join(ordered)
+
+
 def _assemble_reference_catalogue(annex_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.DataFrame:
     """Merge Annex F and PNF catalogues into a single reference frame with priority metadata."""
     annex = annex_df.copy()
     pnf = pnf_df.copy()
 
-    def _prep_annex_synonyms(row: pd.Series) -> str:
-        candidates = []
-        for field in ("raw_description", "normalized_description", "generic_name"):
-            value = row.get(field)
-            if isinstance(value, str):
-                value = value.strip()
-                if value:
-                    candidates.append(value)
-        seen = set()
-        ordered = []
-        for cand in candidates:
-            if cand not in seen:
-                seen.add(cand)
-                ordered.append(cand)
-        return "|".join(ordered)
+    annex_synonym_payloads = list(
+        zip(annex.get("raw_description"), annex.get("normalized_description"), annex.get("generic_name"))
+    )
+    annex_synonyms = maybe_parallel_map(annex_synonym_payloads, _prep_annex_synonyms)
 
     annex_ref = pd.DataFrame(
         {
             "generic_id": annex["drug_code"].astype(str),
             "generic_name": annex["generic_name"].astype(str),
-            "synonyms": annex.apply(_prep_annex_synonyms, axis=1),
+            "synonyms": annex_synonyms,
             "atc_code": [""] * len(annex),
             "route_allowed": annex["route_allowed"].fillna("").astype(str),
             "form_token": annex["form_token"].fillna("").astype(str),

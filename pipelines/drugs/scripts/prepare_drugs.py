@@ -21,6 +21,23 @@ from .text_utils_drugs import (
     serialize_salt_list,
     slug_id,
 )
+from .concurrency_drugs import maybe_parallel_map
+
+
+def _calc_strength_mg(payload: tuple[object, object]) -> float | None:
+    """Convert arbitrary (strength, unit) payloads into canonical mg where possible."""
+    strength, unit = payload
+    if pd.notna(strength) and isinstance(unit, str) and unit:
+        return to_mg(strength, unit)
+    return None
+
+
+def _calc_ratio_mg_per_ml(payload: tuple[object, object, object, object, object]) -> float | None:
+    """Derive mg/mL ratios only when the payload describes a ratio with ml denominator."""
+    dose_kind, strength, unit, per_val, per_unit = payload
+    if dose_kind == "ratio" and isinstance(per_unit, str) and per_unit.lower() == "ml":
+        return safe_ratio_mg_per_ml(strength, unit, per_val)
+    return None
 
 
 def prepare(pnf_csv: str, esoa_csv: str, outdir: str = ".") -> tuple[str, str]:
@@ -36,47 +53,48 @@ def prepare(pnf_csv: str, esoa_csv: str, outdir: str = ".") -> tuple[str, str]:
 
     # Canonicalize the identifying columns that later stages depend on.  These
     # are split out early so failures surface before any heavy parsing work.
-    pnf["generic_name"] = pnf["Molecule"].fillna("").astype(str)
-    split_values = pnf["generic_name"].map(extract_base_and_salts)
-    pnf["generic_name"] = [base or original.strip().upper() for (base, _), original in zip(split_values, pnf["Molecule"].fillna("").astype(str))]
+    molecule_values = pnf["Molecule"].fillna("").astype(str)
+    molecule_list = molecule_values.tolist()
+    split_values = maybe_parallel_map(molecule_list, extract_base_and_salts)
+    pnf["generic_name"] = [
+        base or original.strip().upper()
+        for (base, _), original in zip(split_values, molecule_list)
+    ]
     pnf["salt_form"] = [serialize_salt_list(salts) for _, salts in split_values]
-    pnf["generic_id"] = pnf["generic_name"].map(slug_id)
+    generic_names = pnf["generic_name"].astype(str).tolist()
+    pnf["generic_id"] = maybe_parallel_map(generic_names, slug_id)
     pnf["synonyms"] = ""
-    pnf["route_tokens"] = pnf["Route"].map(map_route_token)
-    pnf["atc_code"] = pnf["ATC Code"].map(clean_atc)
+    route_values = pnf["Route"].fillna("").astype(str).tolist()
+    pnf["route_tokens"] = maybe_parallel_map(route_values, map_route_token)
+    atc_values = pnf["ATC Code"].fillna("").astype(str).tolist()
+    pnf["atc_code"] = maybe_parallel_map(atc_values, clean_atc)
 
     # Consolidate all textual dose evidence into a single normalized field that
     # the dose parser can read once.  The parser expects clean text, hence the
     # normalization step.
     text_cols = [c for c in ["Technical Specifications", "Specs", "Specification"] if c in pnf.columns]
     pnf["_tech"] = pnf[text_cols[0]].fillna("") if text_cols else ""
-    pnf["_parse_src"] = (pnf["generic_name"].astype(str) + " " + pnf["_tech"].astype(str)).str.strip().map(normalize_text)
+    parse_src_raw = (pnf["generic_name"].astype(str) + " " + pnf["_tech"].astype(str)).str.strip()
+    parse_src_list = parse_src_raw.tolist()
+    pnf["_parse_src"] = maybe_parallel_map(parse_src_list, normalize_text)
 
     # Break the parsed dose payload into explicit columns so the matching stage
     # can work with scalars instead of repeatedly walking nested dictionaries.
-    parsed = pnf["_parse_src"].map(parse_dose_struct_from_text)
-    pnf["dose_kind"] = parsed.map(lambda d: d.get("dose_kind"))
-    pnf["strength"] = parsed.map(lambda d: d.get("strength"))
-    pnf["unit"] = parsed.map(lambda d: d.get("unit"))
-    pnf["per_val"] = parsed.map(lambda d: d.get("per_val"))
-    pnf["per_unit"] = parsed.map(lambda d: d.get("per_unit"))
-    pnf["pct"] = parsed.map(lambda d: d.get("pct"))
-    pnf["form_token"] = pnf["_parse_src"].map(parse_form_from_text)
+    parsed = maybe_parallel_map(pnf["_parse_src"], parse_dose_struct_from_text)
+    pnf["dose_kind"] = [d.get("dose_kind") if isinstance(d, dict) else None for d in parsed]
+    pnf["strength"] = [d.get("strength") if isinstance(d, dict) else None for d in parsed]
+    pnf["unit"] = [d.get("unit") if isinstance(d, dict) else None for d in parsed]
+    pnf["per_val"] = [d.get("per_val") if isinstance(d, dict) else None for d in parsed]
+    pnf["per_unit"] = [d.get("per_unit") if isinstance(d, dict) else None for d in parsed]
+    pnf["pct"] = [d.get("pct") if isinstance(d, dict) else None for d in parsed]
+    pnf["form_token"] = maybe_parallel_map(pnf["_parse_src"], parse_form_from_text)
 
     # Derive canonical strength units for quick equality checks (e.g., mg vs g
     # conversions) and compute ratio helpers where enough information exists.
-    pnf["strength_mg"] = pnf.apply(
-        lambda r: to_mg(r.get("strength"), r.get("unit"))
-        if (pd.notna(r.get("strength")) and isinstance(r.get("unit"), str) and r.get("unit"))
-        else None,
-        axis=1,
-    )
-    pnf["ratio_mg_per_ml"] = pnf.apply(
-        lambda r: safe_ratio_mg_per_ml(r.get("strength"), r.get("unit"), r.get("per_val"))
-        if (r.get("dose_kind") == "ratio" and str(r.get("per_unit")).lower() == "ml")
-        else None,
-        axis=1,
-    )
+    strength_inputs = list(zip(pnf["strength"], pnf["unit"]))
+    pnf["strength_mg"] = maybe_parallel_map(strength_inputs, _calc_strength_mg)
+    ratio_inputs = list(zip(pnf["dose_kind"], pnf["strength"], pnf["unit"], pnf["per_val"], pnf["per_unit"]))
+    pnf["ratio_mg_per_ml"] = maybe_parallel_map(ratio_inputs, _calc_ratio_mg_per_ml)
 
     # Expand the multi-route allowances so each row describes a single canonical
     # route.  This mirrors the matching logic that expects one allowed route per

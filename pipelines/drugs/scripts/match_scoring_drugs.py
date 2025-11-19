@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import ast
 import re
-from typing import Any
+from typing import Any, Dict, Iterable, Mapping
 
 import numpy as np
 import pandas as pd
@@ -73,6 +73,7 @@ WHO_ADM_ROUTE_MAP: dict[str, set[str]] = {
     "urethral": {"urethral"},
 }
 
+from .concurrency_drugs import maybe_parallel_map
 from .dose_drugs import dose_similarity
 from .text_utils_drugs import _base_name, _normalize_text_basic
 
@@ -84,118 +85,299 @@ def _mk_reason(series: pd.Series, default_ok: str) -> pd.Series:
     s = s.replace({"": default_ok, "no_specific_reason_provided": default_ok})
     return s.astype("string")
 
+
+SOLID_FORMS: set[str] = {"tablet", "capsule"}
+_SELECTION_CONTEXT: dict[str, list[dict[str, Any]]] | None = None
+
+
+def _format_variant(
+    dose_kind,
+    strength,
+    unit,
+    per_val,
+    per_unit,
+    pct,
+) -> str:
+    variant = str(dose_kind)
+    if pd.notna(strength):
+        unit_val = unit if isinstance(unit, str) else ""
+        variant = f"{dose_kind}:{strength}{unit_val}"
+    if pd.notna(per_val):
+        pv_display = per_val
+        try:
+            pv_display = int(per_val)
+        except Exception:
+            try:
+                pv_float = float(per_val)
+                if float(pv_float).is_integer():
+                    pv_display = int(pv_float)
+            except Exception:
+                pv_display = per_val
+        per_unit_val = per_unit if isinstance(per_unit, str) else ""
+        variant += f"/{pv_display}{per_unit_val}"
+    if pd.notna(pct):
+        variant += f" {pct}%"
+    return variant
+
+
+def _normalize_route(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    return value.strip().lower()
+
+
+def _normalize_form_token(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    value = value.strip().lower()
+    return {
+        "tab": "tablet",
+        "tabs": "tablet",
+        "tablet": "tablet",
+        "chewing gum": "tablet",
+        "cap": "capsule",
+        "caps": "capsule",
+        "capsule": "capsule",
+        "capsulee": "capsule",
+        "susp": "suspension",
+        "suspension": "suspension",
+        "syr": "syrup",
+        "syrup": "syrup",
+        "sol": "solution",
+        "soln": "solution",
+        "solution": "solution",
+        "inhal.solution": "solution",
+        "instill.solution": "solution",
+        "lamella": "solution",
+        "ointment": "ointment",
+        "oint": "ointment",
+        "gel": "gel",
+        "cream": "cream",
+        "lotion": "lotion",
+        "patch": "patch",
+        "supp": "suppository",
+        "suppository": "suppository",
+        "dpi": "dpi",
+        "inhal.powder": "dpi",
+        "mdi": "mdi",
+        "inhal.aerosol": "mdi",
+        "oral aerosol": "mdi",
+        "ampu": "ampule",
+        "ampul": "ampule",
+        "ampule": "ampule",
+        "ampoule": "ampule",
+        "amp": "ampule",
+        "vial": "vial",
+        "inj": "injection",
+        "injection": "injection",
+        "implant": "solution",
+        "s.c. implant": "solution",
+    }.get(value, value)
+
+
+def _split_route_allowed(value: object) -> set[str]:
+    if not isinstance(value, str):
+        return set()
+    return {part.strip().lower() for part in value.split("|") if part.strip()}
+
+
+def _format_dose_display(dose: dict | None) -> str | None:
+    if not isinstance(dose, dict) or not dose:
+        return None
+    kind = dose.get("kind")
+    if kind == "amount":
+        strength = dose.get("strength")
+        unit = dose.get("unit")
+        if strength is not None and isinstance(unit, str):
+            return f"{strength}{unit}"
+    if kind == "ratio":
+        strength = dose.get("strength")
+        unit = dose.get("unit") or ""
+        per_val = dose.get("per_val")
+        per_unit = dose.get("per_unit") or ""
+        if strength is not None and per_val is not None:
+            return f"{strength}{unit}/{per_val}{per_unit}"
+    if kind == "percent":
+        pct = dose.get("pct")
+        if pct is not None:
+            return f"{pct}%"
+    return None
+
+
+def _parse_dose_obj(value):
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = ast.literal_eval(value)
+        except (SyntaxError, ValueError):  # pragma: no cover - defensive
+            return None
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
+def _normalize_pnf_value(value):
+    if pd.isna(value):
+        return None
+    return value
+
+
+def _selection_worker_init(payload: dict[str, list[dict[str, Any]]] | None) -> None:
+    """Prime worker processes with per-generic PNF candidates."""
+    global _SELECTION_CONTEXT
+    if not payload:
+        _SELECTION_CONTEXT = {}
+        return
+    _SELECTION_CONTEXT = {str(key): list(value) for key, value in payload.items()}
+
+
+def _recompute_dose_row(row: Mapping[str, Any]) -> float:
+    """Recompute dose similarity for one classifier row."""
+    esoa_dose = _parse_dose_obj(row.get("dosage_parsed"))
+    if not isinstance(esoa_dose, dict) or not esoa_dose:
+        return float(row.get("dose_sim") or 0.0)
+    pnf_payload = {
+        "dose_kind": _normalize_pnf_value(row.get("selected_dose_kind")),
+        "strength_mg": _normalize_pnf_value(row.get("selected_strength_mg")),
+        "ratio_mg_per_ml": _normalize_pnf_value(row.get("selected_ratio_mg_per_ml")),
+        "pct": _normalize_pnf_value(row.get("selected_pct")),
+        "per_val": _normalize_pnf_value(row.get("selected_per_val")),
+        "per_unit": _normalize_pnf_value(row.get("selected_per_unit")),
+        "strength": _normalize_pnf_value(row.get("selected_strength")),
+        "unit": _normalize_pnf_value(row.get("selected_unit")),
+    }
+    try:
+        return float(dose_similarity(esoa_dose, pnf_payload))
+    except Exception:
+        return float(row.get("dose_sim") or 0.0)
+
+
+def _maybe_improve_selection_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Attempt to find a better PNF candidate for the given row."""
+    global _SELECTION_CONTEXT
+    result = dict(row)
+    esoa_dose = _parse_dose_obj(result.get("dosage_parsed"))
+    if not isinstance(esoa_dose, dict) or not esoa_dose:
+        return result
+    generic_id = result.get("generic_id")
+    if not isinstance(generic_id, str) or not generic_id:
+        return result
+    context = _SELECTION_CONTEXT or {}
+    candidates = context.get(generic_id)
+    if not candidates:
+        return result
+
+    route_norm = _normalize_route(result.get("route")) or _normalize_route(result.get("route_text"))
+    form_norm = _normalize_form_token(result.get("form")) or _normalize_form_token(result.get("form_text"))
+    best_candidate: dict[str, Any] | None = None
+    best_sim = float(result.get("dose_sim") or 0.0)
+
+    for candidate in candidates:
+        sim = float(dose_similarity(esoa_dose, candidate))
+        route_tokens = _split_route_allowed(candidate.get("route_allowed"))
+        if route_norm and route_tokens and route_norm not in route_tokens:
+            continue
+        cand_form_norm = _normalize_form_token(candidate.get("form_token"))
+        prefer_current = False
+        cand_priority = int(pd.to_numeric(candidate.get("source_priority"), errors="coerce") or 99)
+        best_priority = (
+            int(pd.to_numeric(best_candidate.get("source_priority"), errors="coerce") or 99)
+            if best_candidate is not None
+            else 99
+        )
+        if sim > best_sim + 1e-9:
+            prefer_current = True
+        elif best_candidate is None:
+            prefer_current = True
+        elif abs(sim - best_sim) <= 1e-9:
+            if cand_priority < best_priority:
+                prefer_current = True
+            elif cand_priority == best_priority and esoa_dose.get("kind") == "ratio":
+                best_form_norm = _normalize_form_token(best_candidate.get("form_token"))
+                best_is_solid = best_form_norm in SOLID_FORMS
+                current_is_solid = cand_form_norm in SOLID_FORMS
+                if best_is_solid and not current_is_solid:
+                    prefer_current = True
+        if not prefer_current:
+            continue
+        best_candidate = candidate
+        best_sim = sim
+
+    if best_candidate is None:
+        return result
+
+    result["selected_variant"] = _format_variant(
+        best_candidate.get("dose_kind"),
+        best_candidate.get("strength"),
+        best_candidate.get("unit"),
+        best_candidate.get("per_val"),
+        best_candidate.get("per_unit"),
+        best_candidate.get("pct"),
+    )
+    result["selected_form"] = best_candidate.get("form_token")
+    result["selected_route_allowed"] = best_candidate.get("route_allowed")
+    result["selected_dose_kind"] = best_candidate.get("dose_kind")
+    result["selected_strength"] = best_candidate.get("strength")
+    result["selected_unit"] = best_candidate.get("unit")
+    result["selected_strength_mg"] = best_candidate.get("strength_mg")
+    result["selected_per_val"] = best_candidate.get("per_val")
+    result["selected_per_unit"] = best_candidate.get("per_unit")
+    result["selected_ratio_mg_per_ml"] = best_candidate.get("ratio_mg_per_ml")
+    result["selected_pct"] = best_candidate.get("pct")
+    result["dose_sim"] = float(best_sim)
+
+    friendly = _format_dose_display(esoa_dose)
+    if best_sim >= 1.0 and friendly:
+        result["dose_recognized"] = friendly
+
+    if form_norm:
+        cand_form_norm = _normalize_form_token(best_candidate.get("form_token"))
+        result["form_ok"] = bool(cand_form_norm and cand_form_norm == form_norm)
+    if route_norm:
+        route_tokens = _split_route_allowed(best_candidate.get("route_allowed"))
+        result["route_ok"] = bool((not route_tokens) or (route_norm in route_tokens))
+    return result
+
+
+def _unique_join(values: Iterable[str]) -> str:
+    seen: list[str] = []
+    for val in values:
+        if not isinstance(val, str):
+            continue
+        item = val.strip()
+        if not item or item in seen:
+            continue
+        seen.append(item)
+    return "|".join(seen)
+
+
+def _derive_generic_final_row(row: Mapping[str, Any]) -> str:
+    gid = row.get("generic_id")
+    if isinstance(gid, str) and gid.strip():
+        return gid.strip()
+
+    who_list = row.get("who_molecules_list")
+    if isinstance(who_list, list):
+        joined = _unique_join([str(v) for v in who_list if isinstance(v, str)])
+        if joined:
+            return joined
+
+    fda_list = row.get("fda_generics_list")
+    if isinstance(fda_list, list):
+        joined = _unique_join([str(v) for v in fda_list if isinstance(v, str)])
+        if joined:
+            return joined
+    drugbank_list = row.get("drugbank_generics_list")
+    if isinstance(drugbank_list, list):
+        joined = _unique_join([str(v) for v in drugbank_list if isinstance(v, str)])
+        if joined:
+            return joined
+    return ""
+
 def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.DataFrame:
     """Score features, select best PNF candidates, and prepare audit columns using the policy described in README (route/form whitelist, dose equality, confidence weights, Auto-Accept gates)."""
     df = features_df.copy()
-
-    def _format_variant(
-        dose_kind,
-        strength,
-        unit,
-        per_val,
-        per_unit,
-        pct,
-    ) -> str:
-        variant = str(dose_kind)
-        if pd.notna(strength):
-            unit_val = unit if isinstance(unit, str) else ""
-            variant = f"{dose_kind}:{strength}{unit_val}"
-        if pd.notna(per_val):
-            pv_display = per_val
-            try:
-                pv_display = int(per_val)
-            except Exception:
-                try:
-                    pv_float = float(per_val)
-                    if float(pv_float).is_integer():
-                        pv_display = int(pv_float)
-                except Exception:
-                    pv_display = per_val
-            per_unit_val = per_unit if isinstance(per_unit, str) else ""
-            variant += f"/{pv_display}{per_unit_val}"
-        if pd.notna(pct):
-            variant += f" {pct}%"
-        return variant
-
-    def _normalize_route(value: object) -> str:
-        if not isinstance(value, str):
-            return ""
-        return value.strip().lower()
-
-    def _normalize_form_token(value: object) -> str:
-        if not isinstance(value, str):
-            return ""
-        value = value.strip().lower()
-        return {
-            "tab": "tablet",
-            "tabs": "tablet",
-            "tablet": "tablet",
-            "chewing gum": "tablet",
-            "cap": "capsule",
-            "caps": "capsule",
-            "capsule": "capsule",
-            "capsulee": "capsule",
-            "susp": "suspension",
-            "suspension": "suspension",
-            "syr": "syrup",
-            "syrup": "syrup",
-            "sol": "solution",
-            "soln": "solution",
-            "solution": "solution",
-            "inhal.solution": "solution",
-            "instill.solution": "solution",
-            "lamella": "solution",
-            "ointment": "ointment",
-            "oint": "ointment",
-            "gel": "gel",
-            "cream": "cream",
-            "lotion": "lotion",
-            "patch": "patch",
-            "supp": "suppository",
-            "suppository": "suppository",
-            "dpi": "dpi",
-            "inhal.powder": "dpi",
-            "mdi": "mdi",
-            "inhal.aerosol": "mdi",
-            "oral aerosol": "mdi",
-            "ampu": "ampule",
-            "ampul": "ampule",
-            "ampule": "ampule",
-            "ampoule": "ampule",
-            "amp": "ampule",
-            "vial": "vial",
-            "inj": "injection",
-            "injection": "injection",
-            "implant": "solution",
-            "s.c. implant": "solution",
-        }.get(value, value)
-
-    def _split_route_allowed(value: object) -> set[str]:
-        if not isinstance(value, str):
-            return set()
-        return {part.strip().lower() for part in value.split("|") if part.strip()}
-
-    def _format_dose_display(dose: dict | None) -> str | None:
-        if not isinstance(dose, dict) or not dose:
-            return None
-        kind = dose.get("kind")
-        if kind == "amount":
-            strength = dose.get("strength")
-            unit = dose.get("unit")
-            if strength is not None and isinstance(unit, str):
-                return f"{strength}{unit}"
-        if kind == "ratio":
-            strength = dose.get("strength")
-            unit = dose.get("unit") or ""
-            per_val = dose.get("per_val")
-            per_unit = dose.get("per_unit") or ""
-            if strength is not None and per_val is not None:
-                return f"{strength}{unit}/{per_val}{per_unit}"
-        if kind == "percent":
-            pct = dose.get("pct")
-            if pct is not None:
-                return f"{pct}%"
-        return None
 
     df_cand = df.loc[df["generic_id"].notna(), ["esoa_idx", "generic_id", "route", "form", "dosage_parsed"]].merge(
         pnf_df, on="generic_id", how="left"
@@ -343,7 +525,14 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
                     ]
                 ].rename(columns={"_form_ok": "form_ok", "_route_ok": "route_ok"})
 
-    pnf_by_gid: dict[str, pd.DataFrame] = {gid: grp for gid, grp in pnf_df.groupby("generic_id")}
+    pnf_by_gid: dict[str, list[dict[str, Any]]] = {}
+    for gid, grp in pnf_df.groupby("generic_id"):
+        if not isinstance(gid, str):
+            continue
+        gid_clean = gid.strip()
+        if not gid_clean:
+            continue
+        pnf_by_gid[gid_clean] = grp.to_dict("records")
 
     if best_by_idx.empty:
         out = df.copy()
@@ -397,43 +586,24 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     out["form_ok"] = out["form_ok"].astype(bool)
     out["route_ok"] = out["route_ok"].astype(bool)
 
-    def _parse_dose_obj(value):
-        if isinstance(value, dict):
-            return value
-        if isinstance(value, str):
-            try:
-                parsed = ast.literal_eval(value)
-            except (SyntaxError, ValueError):  # pragma: no cover - defensive
-                return None
-            if isinstance(parsed, dict):
-                return parsed
-        return None
-
-    def _normalize_pnf_value(value):
-        if pd.isna(value):
-            return None
-        return value
-
-    def _recompute_dose(row):
-        esoa_dose = _parse_dose_obj(row.get("dosage_parsed"))
-        if not isinstance(esoa_dose, dict) or not esoa_dose:
-            return row.get("dose_sim", 0.0)
-        pnf_payload = {
-            "dose_kind": _normalize_pnf_value(row.get("selected_dose_kind")),
-            "strength_mg": _normalize_pnf_value(row.get("selected_strength_mg")),
-            "ratio_mg_per_ml": _normalize_pnf_value(row.get("selected_ratio_mg_per_ml")),
-            "pct": _normalize_pnf_value(row.get("selected_pct")),
-            "per_val": _normalize_pnf_value(row.get("selected_per_val")),
-            "per_unit": _normalize_pnf_value(row.get("selected_per_unit")),
-            "strength": _normalize_pnf_value(row.get("selected_strength")),
-            "unit": _normalize_pnf_value(row.get("selected_unit")),
-        }
-        try:
-            return dose_similarity(esoa_dose, pnf_payload)
-        except Exception:  # pragma: no cover - defensive fallback
-            return row.get("dose_sim", 0.0)
-
-    out["dose_sim"] = pd.to_numeric(out.apply(_recompute_dose, axis=1), errors="coerce").fillna(0.0)
+    dose_rows = out[
+        [
+            "dosage_parsed",
+            "dose_sim",
+            "selected_dose_kind",
+            "selected_strength_mg",
+            "selected_ratio_mg_per_ml",
+            "selected_pct",
+            "selected_per_val",
+            "selected_per_unit",
+            "selected_strength",
+            "selected_unit",
+        ]
+    ].to_dict("records")
+    out["dose_sim"] = pd.to_numeric(
+        maybe_parallel_map(dose_rows, _recompute_dose_row, parallel_threshold=500),
+        errors="coerce",
+    ).fillna(0.0)
 
     form_text = out["form"].copy()
     route_text = out["route"].copy()
@@ -493,92 +663,17 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
 
     out["route_evidence"] = out["route_evidence"].fillna("")
 
-    def _maybe_improve_selection(row: pd.Series) -> pd.Series:
-        current_sim = float(row.get("dose_sim") or 0.0)
-        esoa_dose = _parse_dose_obj(row.get("dosage_parsed"))
-        if not isinstance(esoa_dose, dict) or not esoa_dose:
-            return row
-        generic_id = row.get("generic_id")
-        if not isinstance(generic_id, str) or not generic_id:
-            return row
-        candidates = pnf_by_gid.get(generic_id)
-        if candidates is None or candidates.empty:
-            return row
-
-        route_norm = _normalize_route(row.get("route")) or _normalize_route(row.get("route_text"))
-        form_norm = _normalize_form_token(row.get("form")) or _normalize_form_token(row.get("form_text"))
-
-        best_candidate = None
-        best_sim = current_sim
-        solid_forms = {"tablet", "capsule"}
-        for _, candidate in candidates.iterrows():
-            sim = dose_similarity(esoa_dose, candidate)
-            route_tokens = _split_route_allowed(candidate.get("route_allowed"))
-            if route_norm and route_tokens and route_norm not in route_tokens:
-                continue
-            cand_form_norm = _normalize_form_token(candidate.get("form_token"))
-            prefer_current = False
-            cand_priority = int(pd.to_numeric(candidate.get("source_priority"), errors="coerce") or 99)
-            best_priority = int(
-                pd.to_numeric(best_candidate.get("source_priority"), errors="coerce") or 99
-            ) if best_candidate is not None else 99
-            if sim > best_sim + 1e-9:
-                prefer_current = True
-            elif best_candidate is None:
-                prefer_current = True
-            elif abs(sim - best_sim) <= 1e-9:
-                if cand_priority < best_priority:
-                    prefer_current = True
-                elif cand_priority == best_priority and esoa_dose.get("kind") == "ratio":
-                    best_form_norm = _normalize_form_token(best_candidate.get("form_token"))
-                    best_is_solid = best_form_norm in solid_forms
-                    current_is_solid = cand_form_norm in solid_forms
-                    if best_is_solid and not current_is_solid:
-                        prefer_current = True
-            if not prefer_current:
-                continue
-            best_candidate = candidate
-            best_sim = sim
-
-        if best_candidate is None:
-            return row
-
-        row = row.copy()
-        row["selected_variant"] = _format_variant(
-            best_candidate.get("dose_kind"),
-            best_candidate.get("strength"),
-            best_candidate.get("unit"),
-            best_candidate.get("per_val"),
-            best_candidate.get("per_unit"),
-            best_candidate.get("pct"),
-        )
-        row["selected_form"] = best_candidate.get("form_token")
-        row["selected_route_allowed"] = best_candidate.get("route_allowed")
-        row["selected_dose_kind"] = best_candidate.get("dose_kind")
-        row["selected_strength"] = best_candidate.get("strength")
-        row["selected_unit"] = best_candidate.get("unit")
-        row["selected_strength_mg"] = best_candidate.get("strength_mg")
-        row["selected_per_val"] = best_candidate.get("per_val")
-        row["selected_per_unit"] = best_candidate.get("per_unit")
-        row["selected_ratio_mg_per_ml"] = best_candidate.get("ratio_mg_per_ml")
-        row["selected_pct"] = best_candidate.get("pct")
-        row["dose_sim"] = float(best_sim)
-
-        if best_sim >= 1.0:
-            friendly = _format_dose_display(esoa_dose)
-            if friendly:
-                row["dose_recognized"] = friendly
-
-        if form_norm:
-            cand_form_norm = _normalize_form_token(best_candidate.get("form_token"))
-            row["form_ok"] = bool(cand_form_norm and cand_form_norm == form_norm)
-        if route_norm:
-            route_tokens = _split_route_allowed(best_candidate.get("route_allowed"))
-            row["route_ok"] = bool((not route_tokens) or (route_norm in route_tokens))
-
-        return row
-
-    out = out.apply(_maybe_improve_selection, axis=1, result_type="expand")
+    selection_columns = list(out.columns)
+    selection_index = out.index
+    selection_rows = maybe_parallel_map(
+        out.to_dict("records"),
+        _maybe_improve_selection_row,
+        initializer=_selection_worker_init,
+        initargs=(pnf_by_gid,),
+        parallel_threshold=500,
+    )
+    out = pd.DataFrame(selection_rows, columns=selection_columns)
+    out.index = selection_index
     out["dose_sim"] = pd.to_numeric(out["dose_sim"], errors="coerce").fillna(0.0)
 
     form_values = out["form"].fillna("").astype(str).str.strip()
@@ -741,41 +836,11 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
     qty_fda_food = _count_listlike("non_therapeutic_tokens")
     qty_unknown = _count_listlike("unknown_words_list")
 
-    def _unique_join(values: list[str]) -> str:
-        seen: list[str] = []
-        for val in values:
-            if not isinstance(val, str):
-                continue
-            item = val.strip()
-            if not item or item in seen:
-                continue
-            seen.append(item)
-        return "|".join(seen)
-
-    def _derive_generic_final(row: pd.Series) -> str:
-        gid = row.get("generic_id")
-        if isinstance(gid, str) and gid.strip():
-            return gid.strip()
-
-        who_list = row.get("who_molecules_list")
-        if isinstance(who_list, list):
-            joined = _unique_join([str(v) for v in who_list if isinstance(v, str)])
-            if joined:
-                return joined
-
-        fda_list = row.get("fda_generics_list")
-        if isinstance(fda_list, list):
-            joined = _unique_join([str(v) for v in fda_list if isinstance(v, str)])
-            if joined:
-                return joined
-        drugbank_list = row.get("drugbank_generics_list")
-        if isinstance(drugbank_list, list):
-            joined = _unique_join([str(v) for v in drugbank_list if isinstance(v, str)])
-            if joined:
-                return joined
-        return ""
-
-    generic_final_series = out.apply(_derive_generic_final, axis=1)
+    generic_inputs = out[
+        ["generic_id", "who_molecules_list", "fda_generics_list", "drugbank_generics_list"]
+    ].to_dict("records")
+    generic_final_values = maybe_parallel_map(generic_inputs, _derive_generic_final_row, parallel_threshold=500)
+    generic_final_series = pd.Series(generic_final_values, index=out.index)
 
     new_columns_df = pd.DataFrame(
         {
