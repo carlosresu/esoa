@@ -83,12 +83,27 @@ def main() -> None:
     if brand_source.is_file():
         copies["drugbank_brands.csv"] = [PIPELINE_DRUGBANK_BRANDS_PATH]
 
+    def _resolve_source(path_candidates: list[Path]) -> Path | None:
+        for candidate in path_candidates:
+            if candidate.is_file():
+                return candidate
+        return None
+
+    def _same_path(left: Path, right: Path) -> bool:
+        return left.resolve(strict=False) == right.resolve(strict=False)
+
     for filename, targets in copies.items():
-        source = output_dir / filename
-        if not source.is_file():
-            sys.stderr.write(f"Warning: expected {source} not found; nothing copied.\n")
+        source_candidates = [
+            PIPELINE_INPUTS_DIR / filename,
+            output_dir / filename,
+        ]
+        source = _resolve_source(source_candidates)
+        if source is None:
+            sys.stderr.write(f"Warning: expected {filename} not found in output paths; nothing copied.\n")
             continue
         for target in targets:
+            if _same_path(source, target):
+                continue
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, target)
             print(f"Copied {source.name} to {target}")
