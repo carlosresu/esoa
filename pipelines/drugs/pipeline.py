@@ -9,7 +9,6 @@ import shutil
 import subprocess
 import sys
 import time
-from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, Mapping, Optional
 
@@ -236,36 +235,43 @@ class DrugsAndMedicinePipeline(BasePipeline):
 
     @staticmethod
     def _build_brand_map(inputs_dir: Path) -> Path:
-        date_str = datetime.now().strftime("%Y-%m-%d")
-        out_csv = inputs_dir / f"fda_brand_map_{date_str}.csv"
-        if out_csv.exists():
-            return out_csv
         existing_maps = sorted(inputs_dir.glob("fda_brand_map_*.csv"), reverse=True)
+        module_output_dir = THIS_DIR / "dependencies" / "fda_ph_scraper" / "output"
+        module_output_dir.mkdir(parents=True, exist_ok=True)
         with open(os.devnull, "w") as devnull:
-        try:
-            subprocess.run(
-                [
-                    sys.executable,
-                    "-m",
-                    "dependencies.fda_ph_scraper.drug_scraper",
-                    "--outdir",
-                    str(inputs_dir),
-                    "--outfile",
-                    str(out_csv),
-                ],
-                check=True,
-                cwd=str(THIS_DIR),
-                stdout=devnull,
-                stderr=devnull,
-            )
-        except subprocess.CalledProcessError as exc:
+            try:
+                subprocess.run(
+                    [
+                        sys.executable,
+                        "-m",
+                        "dependencies.fda_ph_scraper.drug_scraper",
+                        "--outdir",
+                        str(module_output_dir),
+                    ],
+                    check=True,
+                    cwd=str(THIS_DIR),
+                    stdout=devnull,
+                    stderr=devnull,
+                )
+            except subprocess.CalledProcessError as exc:
                 if existing_maps:
                     return existing_maps[0]
                 raise RuntimeError(
                     "Building FDA brand map failed and no prior map is available. "
                     "Re-run with --skip-brandmap if the FDA site is unreachable."
                 ) from exc
-        return out_csv
+        brand_files = sorted(module_output_dir.glob("fda_brand_map_*.csv"))
+        if not brand_files:
+            if existing_maps:
+                return existing_maps[0]
+            raise RuntimeError(
+                "No FDA brand map was created; rerun with --skip-brandmap once the site is reachable."
+            )
+        latest_map = brand_files[-1]
+        dest = inputs_dir / latest_map.name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(latest_map, dest)
+        return dest
 
     @staticmethod
     def _run_resolve_unknowns(project_root: Path) -> None:

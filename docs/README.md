@@ -211,7 +211,7 @@ Supervisor input needed
 - `non_therapeutic_summary` emits `non_therapeutic_detected` to make the Unknown-bucket routing obvious in pivots without expanding the nested JSON columns.
 - When a line resolves to an FDA food/non-therapeutic item and no PNF/WHO/FDA-drug molecule exists, scoring routes the row to the `Unknown` bucket with `why_final = "Unknown"` and `reason_final = "non_therapeutic_detected"`.
 
-The FDA PH scrapers now live under `dependencies/fda_ph_scraper/` (soon to become the `carlosresu/fda_ph_scraper` submodule). Run them directly with `python -m dependencies.fda_ph_scraper.food_scraper` or `python -m dependencies.fda_ph_scraper.drug_scraper --outdir inputs/drugs` so their CSV outputs end up in `inputs/drugs/` while their raw downloads stay under `raw/`.
+The FDA PH scrapers now live under `dependencies/fda_ph_scraper/` (soon to become the `carlosresu/fda_ph_scraper` submodule). Run them directly with `python -m dependencies.fda_ph_scraper.food_scraper` or `python -m dependencies.fda_ph_scraper.drug_scraper`; their CSV exports land under `dependencies/fda_ph_scraper/output/`, raw downloads stay under `raw/`, and the convenient runners mirror the fresh files into `inputs/drugs/`.
 - Tokens from the catalog are excluded from `unknown_words` so food-only strings don’t pollute the missed-generic report.
 
 Public health/program implications

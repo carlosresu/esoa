@@ -47,6 +47,14 @@ def _run_r_script(script_path: Path) -> None:
         raise RuntimeError(f"{script_path.name} exited with status {exc.returncode}") from exc
 
 
+def _copy_to_pipeline_inputs(source: Path, dest: Path) -> None:
+    """Mirror a module export into the Drugs pipeline inputs directory."""
+    if not source.is_file():
+        raise FileNotFoundError(f"Expected output from module at {source}, but it was not created.")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, dest)
+
+
 def _natural_esoa_part_order(path: Path) -> tuple[int, str]:
     """Sort helper that orders esoa_pt_* files by their numeric suffix."""
     for token in path.stem.split("_"):
@@ -162,15 +170,17 @@ def refresh_fda_brand_map(inputs_dir: Path) -> Path:
 def refresh_fda_food(inputs_dir: Path, quiet: bool = True) -> Path:
     print("[fda_food] Scraping FDA PH food catalog...")
     module_name = "dependencies.fda_ph_scraper.food_scraper"
-    argv: List[str] = ["--outdir", str(inputs_dir)]
+    module_output_dir = PROJECT_DIR / "dependencies" / "fda_ph_scraper" / "output"
+    module_output_dir.mkdir(parents=True, exist_ok=True)
+    argv: List[str] = ["--outdir", str(module_output_dir)]
     if quiet:
         argv.append("--quiet")
     _run_python_module(module_name, argv)
-    out_path = inputs_dir / "fda_food_products.csv"
-    if not out_path.is_file():
-        raise FileNotFoundError(f"Expected FDA food output at {out_path} but it was not created.")
-    print(f"[fda_food] Catalog refreshed at {out_path}")
-    return out_path
+    module_output = module_output_dir / "fda_food_products.csv"
+    dest_path = inputs_dir / module_output.name
+    _copy_to_pipeline_inputs(module_output, dest_path)
+    print(f"[fda_food] Catalog refreshed at {dest_path}")
+    return dest_path
 
 
 def refresh_drugbank_generics_exports() -> tuple[Optional[Path], Optional[Path]]:
