@@ -6,14 +6,16 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
+from pathlib import Path
 from typing import List
 
 import run_drugs_all_parts as run_dm
 
 
 def _run_drugbank_export(extra_args: List[str] | None = None) -> None:
-    """Execute the DrugBank aggregation helper so CSVs land under dependencies/ and inputs/drugs."""
-    cmd = [sys.executable, "-m", "pipelines.drugs.scripts.run_drugbank_drugs"]
+    """Execute the generics-only DrugBank builder so CSVs land under dependencies/ and inputs."""
+    script_path = run_dm.THIS_DIR / "dependencies" / "drugbank_generics" / "drugbank_generics.R"
+    cmd = ["Rscript", str(script_path)]
     if extra_args:
         cmd.extend(extra_args)
     subprocess.check_call(cmd, cwd=str(run_dm.THIS_DIR))
