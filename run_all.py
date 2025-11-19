@@ -156,7 +156,7 @@ def refresh_fda_food(inputs_dir: Path, quiet: bool = True) -> Path:
 
 def refresh_drugbank_generics_exports() -> tuple[Optional[Path], Optional[Path]]:
     """Invoke the DrugBank R helper to regenerate generics + brand exports."""
-    print("[drugbank_generics] Launching dependencies/drugbank_generics/drugbank.R...")
+    print("[drugbank_generics] Launching dependencies/drugbank_generics/drugbank_all.R...")
     run_drugbank_generics()
     inputs_generics = DRUGS_INPUTS_DIR / "drugbank_generics.csv"
     inputs_brands = DRUGS_INPUTS_DIR / "drugbank_brands.csv"
@@ -170,22 +170,12 @@ def refresh_drugbank_generics_exports() -> tuple[Optional[Path], Optional[Path]]
     )
 
 
-def run_drugbank_mixtures() -> Path:
-    script_path = PROJECT_DIR / "dependencies" / "drugbank_generics" / "drugbank_mixtures.R"
-    if not script_path.is_file():
-        raise FileNotFoundError(f"DrugBank mixtures R script not found at {script_path}")
-    rscript = shutil.which("Rscript")
-    if not rscript:
-        raise RuntimeError("Rscript executable not found on PATH.")
-    print(f"[drugbank_mixtures] Running {script_path}...")
-    subprocess.run([rscript, str(script_path)], check=True, cwd=str(script_path.parent))
+def ensure_drugbank_mixtures_output() -> Optional[Path]:
     output_path = DRUGS_INPUTS_DIR / "drugbank_mixtures_master.csv"
-    if not output_path.is_file():
-        raise FileNotFoundError(
-            f"DrugBank mixtures output not found at {output_path}. Check the R script logs for details."
-        )
-    print(f"[drugbank_mixtures] Output written to {output_path}")
-    return output_path
+    if output_path.is_file():
+        return output_path
+    print(f"[drugbank_mixtures] Warning: expected output not found at {output_path}")
+    return None
 
 
 def _maybe_run_drugbank_brands_script(include_flag: bool) -> None:
@@ -237,7 +227,9 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         artifacts["drugbank_generics"] = generics_path
     if brands_path:
         artifacts["drugbank_brands_csv"] = brands_path
-    artifacts["drugbank_mixtures"] = run_drugbank_mixtures()
+    mixtures_path = ensure_drugbank_mixtures_output()
+    if mixtures_path:
+        artifacts["drugbank_mixtures"] = mixtures_path
     _maybe_run_drugbank_brands_script(args.include_drugbank_brands)
 
     print("\nArtifacts updated:")
