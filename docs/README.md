@@ -362,7 +362,7 @@ python run_drugs_all_parts.py \
 Ensure `inputs/drugs/annex_f.csv` already contains the normalized routes/forms/dose metadata expected by the matcher; the pipeline no longer generates this file automatically.
 
 **DrugBank prerequisite**  
-Run `python run_drugs_pt_0_drugbank_onetime.py` whenever the upstream DrugBank dataset changes. The helper now invokes `Rscript dependencies/drugbank_generics/drugbank_all.R` directly, streams the R output, and copies the resulting CSVs into `dependencies/drugbank_generics/output/` plus `inputs/drugs/` so downstream stages pick up the fresh exports automatically.
+Run `python run_drugs_pt_0_drugbank_onetime.py` whenever the upstream DrugBank dataset changes. The helper invokes `Rscript dependencies/drugbank_generics/drugbank_all.R` directly, keeps each export under `dependencies/drugbank_generics/output/`, and copies the generated CSVs into `inputs/drugs/` so downstream stages pick up the fresh exports automatically.
 
 Optional flags
 
