@@ -1,0 +1,7 @@
+# AGENT INSTRUCTIONS
+
+These rules are meant for GPT agents running as `gpt-X.x-codex-high` or `gpt-X.x-codex-mini-high`. Apply them whenever you are editing this repository:
+
+1. **Keep the standalone FDA scraper dependency files aligned.** Whenever you touch `pipelines/drugs/scripts/` (especially the normalization helpers or third-party imports) make sure the counterpart `dependencies/fda_ph_scraper/text_utils.py` captures the same text-processing logic and the `dependencies/fda_ph_scraper/requirements.txt` lists the packages needed by those scripts so the standalone scraper runs with the same dependencies as the pipeline helpers.
+2. **Standalone runner behavior.** The scripts under `dependencies/fda_ph_scraper`, `dependencies/atcd`, and `dependencies/drugbank_generics` must continue to be runnable on their own roots; they should default to writing outputs under their own `output/` directories while downstream runners copy those exports into `inputs/drugs/`.
+3. **Commit & submodule workflow.** Before creating a commit, inspect every submodule (`git submodule status`) for unstaged changes. If a submodule changed, commit and push that submodule first using a concise message describing its diff, then update the main repository’s submodule pointer (commit and push that change separately). Always pull/push as appropriate within each repository before moving on so every agent run leaves the working tree clean.
