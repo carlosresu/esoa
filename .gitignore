@@ -218,4 +218,4 @@ __marimo__/
 .DS_Store
 prompt.txt
 .Rproj.user
-**/.Rproj.user/*
+**/.Rproj.user/*.Rproj.user/
