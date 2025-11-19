@@ -22,9 +22,11 @@ It prepares raw CSVs, parses text into structured features, detects candidate ge
 
 **Python packages**
 - `numpy>=1.21`
+- `duckdb>=1.0`
 - `openpyxl>=3.1`
 - `pandas>=1.5`
 - `pyahocorasick>=2.0`
+- `pytest>=7.4`
 - `requests>=2.31`
 - `XlsxWriter>=3.0`
 
