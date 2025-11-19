@@ -15,7 +15,6 @@ from typing import List, Optional, Sequence
 from pipelines.drugs.constants import PIPELINE_INPUTS_DIR, PROJECT_ROOT
 from pipelines.drugs.pipeline import DrugsAndMedicinePipeline
 from pipelines.drugs.scripts.prepare_drugs import prepare
-from pipelines.drugs.scripts.run_drugbank_drugs import main as run_drugbank_generics
 from pipelines.drugs.scripts.scrape_fda_food_products_drugs import main as run_fda_food_scraper
 
 PROJECT_DIR = PROJECT_ROOT
@@ -155,10 +154,14 @@ def refresh_fda_food(inputs_dir: Path, quiet: bool = True) -> Path:
 
 
 def refresh_drugbank_generics_exports() -> tuple[Optional[Path], Optional[Path]]:
-    print("[drugbank_generics] Launching dependencies/drugbank_generics/drugbank.R...")
-    run_drugbank_generics()
+    """Check for existing DrugBank generics/brands exports without re-running the deprecated R script."""
+    print("[drugbank_generics] Automatic refresh is temporarily disabled; reusing existing exports if present.")
     inputs_generics = DRUGS_INPUTS_DIR / "drugbank_generics.csv"
     inputs_brands = DRUGS_INPUTS_DIR / "drugbank_brands.csv"
+    if not inputs_generics.exists():
+        print(f"[drugbank_generics] Warning: {inputs_generics} not found.")
+    if not inputs_brands.exists():
+        print(f"[drugbank_generics] Warning: {inputs_brands} not found.")
     return (
         inputs_generics if inputs_generics.is_file() else None,
         inputs_brands if inputs_brands.is_file() else None,
