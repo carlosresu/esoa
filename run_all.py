@@ -190,6 +190,15 @@ def refresh_drugbank_generics_exports() -> tuple[Optional[Path], Optional[Path]]
     if not script_path.is_file():
         raise FileNotFoundError(f"DrugBank helper not found at {script_path}")
     _run_r_script(script_path)
+    module_output = script_path.parent / "output"
+    for filename in (
+        "drugbank_generics.csv",
+        "drugbank_generics_master.csv",
+        "drugbank_mixtures_master.csv",
+    ):
+        source = module_output / filename
+        if source.is_file():
+            _copy_to_pipeline_inputs(source, DRUGS_INPUTS_DIR / filename)
     inputs_generics = DRUGS_INPUTS_DIR / "drugbank_generics.csv"
     inputs_brands = DRUGS_INPUTS_DIR / "drugbank_brands.csv"
     if not inputs_generics.exists():
