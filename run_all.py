@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
 import shutil
 import subprocess
 import sys
@@ -163,7 +164,10 @@ def refresh_drugbank_generics_exports() -> tuple[Optional[Path], Optional[Path]]
     if not inputs_generics.exists():
         print(f"[drugbank_generics] Warning: {inputs_generics} not found after refresh.")
     if not inputs_brands.exists():
-        print(f"[drugbank_generics] Warning: {inputs_brands} not found after refresh.")
+        print(
+            "[drugbank_generics] Note: drugbank_brands.csv was not produced. "
+            "Run with --include-drugbank-brands when the placeholder script is implemented."
+        )
     return (
         inputs_generics if inputs_generics.is_file() else None,
         inputs_brands if inputs_brands.is_file() else None,
@@ -190,7 +194,9 @@ def _maybe_run_drugbank_brands_script(include_flag: bool) -> None:
         print("[drugbank_brands] Rscript executable not found; cannot run placeholder.")
         return
     print(f"[drugbank_brands] Executing placeholder R script {script_path}...")
-    subprocess.run([rscript, str(script_path)], check=True, cwd=str(script_path.parent))
+    env = os.environ.copy()
+    env.setdefault("ESOA_DRUGBANK_QUIET", "1")
+    subprocess.run([rscript, str(script_path)], check=True, cwd=str(script_path.parent), env=env)
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:

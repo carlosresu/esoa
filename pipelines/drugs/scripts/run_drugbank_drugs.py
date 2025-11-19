@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import os
 import shutil
 import subprocess
 import sys
@@ -11,7 +12,7 @@ from ..constants import (
 )
 
 
-def stream_r_script(executable: str, script_path: Path) -> int:
+def stream_r_script(executable: str, script_path: Path, *, env: dict[str, str] | None = None) -> int:
     """Run the R script while streaming its combined stdout/stderr."""
     process = subprocess.Popen(
         [executable, str(script_path)],
@@ -19,6 +20,7 @@ def stream_r_script(executable: str, script_path: Path) -> int:
         stderr=subprocess.STDOUT,
         text=True,
         bufsize=1,
+        env=env,
     )
 
     assert process.stdout is not None  # stdout is redirected above
@@ -46,8 +48,11 @@ def main() -> None:
 
     print(f"Launching DrugBank aggregation via {r_script}")
 
+    env = os.environ.copy()
+    env.setdefault("ESOA_DRUGBANK_QUIET", "1")
+
     try:
-        return_code = stream_r_script("Rscript", r_script)
+        return_code = stream_r_script("Rscript", r_script, env=env)
     except FileNotFoundError:
         sys.stderr.write("Rscript executable not found. Please install R or adjust PATH.\n")
         sys.exit(1)
@@ -62,13 +67,21 @@ def main() -> None:
         sys.exit(return_code)
 
     output_dir = project_root / "dependencies" / "drugbank_generics" / "output"
-    copies = {
-        "drugbank_generics.csv": [
+    copies: dict[str, list[Path]] = {
+        "drugbank_generics_master.csv": [
+            output_dir / "drugbank_generics.csv",
             PIPELINE_DRUGBANK_GENERICS_PATH,
-            PIPELINE_INPUTS_DIR / "generics.csv",  # legacy fallback for older tooling
+            PIPELINE_INPUTS_DIR / "drugbank_generics_master.csv",
+            PIPELINE_INPUTS_DIR / "generics.csv",  # legacy fallback
         ],
-        "drugbank_brands.csv": [PIPELINE_DRUGBANK_BRANDS_PATH],
+        "drugbank_mixtures_master.csv": [
+            PIPELINE_INPUTS_DIR / "drugbank_mixtures_master.csv",
+        ],
     }
+
+    brand_source = output_dir / "drugbank_brands.csv"
+    if brand_source.is_file():
+        copies["drugbank_brands.csv"] = [PIPELINE_DRUGBANK_BRANDS_PATH]
 
     for filename, targets in copies.items():
         source = output_dir / filename
