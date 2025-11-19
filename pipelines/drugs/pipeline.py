@@ -242,23 +242,23 @@ class DrugsAndMedicinePipeline(BasePipeline):
             return out_csv
         existing_maps = sorted(inputs_dir.glob("fda_brand_map_*.csv"), reverse=True)
         with open(os.devnull, "w") as devnull:
-            try:
-                subprocess.run(
-                    [
-                        sys.executable,
-                        "-m",
-                        "pipelines.drugs.scripts.fda_ph_drug_scraper_drugs",
-                        "--outdir",
-                        str(inputs_dir),
-                        "--outfile",
-                        str(out_csv),
-                    ],
-                    check=True,
-                    cwd=str(THIS_DIR),
-                    stdout=devnull,
-                    stderr=devnull,
-                )
-            except subprocess.CalledProcessError as exc:
+        try:
+            subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "dependencies.fda_ph_scraper.drug_scraper",
+                    "--outdir",
+                    str(inputs_dir),
+                    "--outfile",
+                    str(out_csv),
+                ],
+                check=True,
+                cwd=str(THIS_DIR),
+                stdout=devnull,
+                stderr=devnull,
+            )
+        except subprocess.CalledProcessError as exc:
                 if existing_maps:
                     return existing_maps[0]
                 raise RuntimeError(

@@ -4,3 +4,6 @@
 [submodule "dependencies/drugbank_generics"]
 	path = dependencies/drugbank_generics
 	url = https://github.com/carlosresu/drugbank_generics
+[submodule "dependencies/fda_ph_scraper"]
+	path = dependencies/fda_ph_scraper
+	url = https://github.com/carlosresu/fda_ph_scraper

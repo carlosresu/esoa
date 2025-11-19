@@ -215,6 +215,8 @@ __marimo__/
 **/*.tsv
 **/outputs
 **/dependencies/*
+!dependencies/fda_ph_scraper/
+!dependencies/fda_ph_scraper/**
 .DS_Store
 prompt.txt
 .Rproj.user/

@@ -16,8 +16,6 @@ from typing import List, Optional, Sequence
 from pipelines.drugs.constants import PIPELINE_INPUTS_DIR, PROJECT_ROOT
 from pipelines.drugs.pipeline import DrugsAndMedicinePipeline
 from pipelines.drugs.scripts.prepare_drugs import prepare
-from pipelines.drugs.scripts.run_drugbank_drugs import main as run_drugbank_generics
-from pipelines.drugs.scripts.scrape_fda_food_products_drugs import main as run_fda_food_scraper
 
 PROJECT_DIR = PROJECT_ROOT
 DRUGS_INPUTS_DIR = PIPELINE_INPUTS_DIR
@@ -26,6 +24,27 @@ DRUGS_INPUTS_DIR = PIPELINE_INPUTS_DIR
 def _ensure_inputs_dir() -> Path:
     DRUGS_INPUTS_DIR.mkdir(parents=True, exist_ok=True)
     return DRUGS_INPUTS_DIR
+
+
+def _run_python_module(module: str, argv: Sequence[str], *, cwd: Path | None = None) -> None:
+    command = [sys.executable, "-m", module, *argv]
+    workdir = cwd or PROJECT_DIR
+    try:
+        subprocess.run(command, check=True, cwd=str(workdir))
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(f"Module {module} exited with status {exc.returncode}") from exc
+
+
+def _run_r_script(script_path: Path) -> None:
+    rscript = shutil.which("Rscript")
+    if not rscript:
+        raise FileNotFoundError("Rscript executable not found. Install R or adjust your PATH.")
+    env = os.environ.copy()
+    env.setdefault("ESOA_DRUGBANK_QUIET", "1")
+    try:
+        subprocess.run([rscript, str(script_path)], check=True, cwd=str(script_path.parent), env=env)
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(f"{script_path.name} exited with status {exc.returncode}") from exc
 
 
 def _natural_esoa_part_order(path: Path) -> tuple[int, str]:
@@ -142,12 +161,11 @@ def refresh_fda_brand_map(inputs_dir: Path) -> Path:
 
 def refresh_fda_food(inputs_dir: Path, quiet: bool = True) -> Path:
     print("[fda_food] Scraping FDA PH food catalog...")
+    module_name = "dependencies.fda_ph_scraper.food_scraper"
     argv: List[str] = ["--outdir", str(inputs_dir)]
     if quiet:
         argv.append("--quiet")
-    code = run_fda_food_scraper(argv)
-    if code not in (0, None):
-        raise RuntimeError(f"FDA food scraper exited with status {code}")
+    _run_python_module(module_name, argv)
     out_path = inputs_dir / "fda_food_products.csv"
     if not out_path.is_file():
         raise FileNotFoundError(f"Expected FDA food output at {out_path} but it was not created.")
@@ -158,7 +176,10 @@ def refresh_fda_food(inputs_dir: Path, quiet: bool = True) -> Path:
 def refresh_drugbank_generics_exports() -> tuple[Optional[Path], Optional[Path]]:
     """Invoke the DrugBank R helper to regenerate generics + brand exports."""
     print("[drugbank_generics] Launching dependencies/drugbank_generics/drugbank_all.R...")
-    run_drugbank_generics()
+    script_path = PROJECT_DIR / "dependencies" / "drugbank_generics" / "drugbank_all.R"
+    if not script_path.is_file():
+        raise FileNotFoundError(f"DrugBank helper not found at {script_path}")
+    _run_r_script(script_path)
     inputs_generics = DRUGS_INPUTS_DIR / "drugbank_generics.csv"
     inputs_brands = DRUGS_INPUTS_DIR / "drugbank_brands.csv"
     if not inputs_generics.exists():
