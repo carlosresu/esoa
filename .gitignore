@@ -217,6 +217,7 @@ __marimo__/
 **/dependencies/*
 .DS_Store
 prompt.txt
-.Rproj.user
+.Rproj.user/
 **/.Rproj.user/*.Rproj.user/
+*.Rproj
 .Rhistory
