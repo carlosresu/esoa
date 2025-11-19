@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import sys
 
-import run_drugs_pt_2_esoa_matching_minimal as stage2_min
+import run_drugs_pt_3_esoa_matching_minimal as stage2_min
 
 
 def main(argv: list[str] | None = None) -> None:
