@@ -19,7 +19,7 @@ Input:
 
 Search lists:
   • PNF: ./inputs/drugs/pnf_prepared.csv (generic_name)
-  • FDA brand map: newest of ./inputs/drugs/fda_brand_map_*.csv OR ./inputs/drugs/brand_map_*.csv (generic_name)
+  • FDA brand map: newest of ./inputs/drugs/fda_drug_*.csv OR ./inputs/drugs/fda_brand_map_*.csv OR ./inputs/drugs/brand_map_*.csv (generic_name)
   • WHO ATC: newest of ./inputs/drugs/who_atc_*_molecules.csv (atc_name)
 
 Output:
@@ -222,7 +222,7 @@ def main():
     pnf_path = INPUTS / "pnf_prepared.csv"
     pnf_names = _read_col(pnf_path, "generic_name")
 
-    fda_path = _pick_newest(INPUTS / "fda_brand_map_*.csv")
+    fda_path = _pick_newest(INPUTS / "fda_drug_*.csv") or _pick_newest(INPUTS / "fda_brand_map_*.csv")
     fda_names = _read_col(fda_path, "generic_name") if fda_path else []
 
     if not fda_names:

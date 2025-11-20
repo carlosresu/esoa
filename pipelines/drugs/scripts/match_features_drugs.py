@@ -1092,9 +1092,13 @@ def build_features(
     def _load_nontherapeutic_catalog():
         project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
         inputs_dir = str(PIPELINE_INPUTS_DIR)
-        catalog_path = str(PIPELINE_INPUTS_DIR / "fda_food_products.csv")
-        if not os.path.exists(catalog_path):
+        food_candidates = sorted((PIPELINE_INPUTS_DIR).glob("fda_food_*.csv"))
+        if not food_candidates:
+            legacy_path = PIPELINE_INPUTS_DIR / "fda_food_products.csv"
+            if legacy_path.exists():
+                legacy_path.unlink(missing_ok=True)
             return
+        catalog_path = str(food_candidates[-1])
         try:
             df_catalog = pd.read_csv(catalog_path)
         except Exception:

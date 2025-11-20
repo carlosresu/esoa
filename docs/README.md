@@ -297,7 +297,7 @@ Frequent unknowns may mean missing formulary entries, local shorthand, or data q
 
 Supervisor input needed
 
-- Confirm triage workflow: which unknowns trigger formulary enrichment vs local mapping vs data cleaning?
+- Confirm triage workflow: which unknowns trigger formulary enrichment vs local mapping vs data-quality remediation?
 - Suggested triage options:
   - Formulary enrichment (e.g., add missing drugs to PNF)
   - Local mapping (e.g., create local aliases or shorthand mappings)

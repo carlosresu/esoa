@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 import csv
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -41,6 +42,10 @@ def _run_r_script(script_path: Path) -> None:
         raise FileNotFoundError("Rscript executable not found. Install R or adjust your PATH.")
     env = os.environ.copy()
     env.setdefault("ESOA_DRUGBANK_QUIET", "1")
+    # Allow R helpers to use all local cores by default (tunable via env).
+    if "ESOA_DRUGBANK_WORKERS" not in env:
+        cpu_count = os.cpu_count() or 13
+        env["ESOA_DRUGBANK_WORKERS"] = str(max(13, cpu_count - 1))
     try:
         subprocess.run([rscript, str(script_path)], check=True, cwd=str(script_path.parent), env=env)
     except subprocess.CalledProcessError as exc:
@@ -53,6 +58,9 @@ def _copy_to_pipeline_inputs(source: Path, dest: Path) -> None:
         raise FileNotFoundError(f"Expected output from module at {source}, but it was not created.")
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, dest)
+    parquet_src = source.with_suffix(".parquet")
+    if parquet_src.is_file():
+        shutil.copy2(parquet_src, dest.with_suffix(".parquet"))
 
 
 def _natural_esoa_part_order(path: Path) -> tuple[int, str]:
@@ -153,9 +161,17 @@ def refresh_who(inputs_dir: Path) -> Path:
     """Trigger the WHO ATC R scripts and return the freshest molecules export."""
     print("[who] Running dependencies/atcd R scripts...")
     DrugsAndMedicinePipeline._run_r_scripts(PROJECT_DIR, inputs_dir)
-    latest = _find_latest_file(inputs_dir, "who_atc_*_molecules.csv")
+    candidates = list(inputs_dir.glob("who_atc_*_molecules.csv"))
+    candidates.extend(
+        p
+        for p in inputs_dir.glob("who_atc_*.csv")
+        if re.fullmatch(r"who_atc_\d{4}-\d{2}-\d{2}\.csv", p.name)
+    )
+    latest = sorted(candidates)[-1] if candidates else None
     if latest is None:
-        raise FileNotFoundError("WHO ATC export not found after running the R scripts.")
+        raise FileNotFoundError(
+            "WHO ATC export not found after running the R scripts (expected who_atc_<date>.csv)."
+        )
     print(f"[who] Latest molecules export: {latest}")
     return latest
 
@@ -167,7 +183,7 @@ def refresh_fda_brand_map(inputs_dir: Path) -> Path:
     return path
 
 
-def refresh_fda_food(inputs_dir: Path, quiet: bool = True) -> Path:
+def refresh_fda_food(inputs_dir: Path, quiet: bool = True, *, allow_scrape: bool = False) -> Path:
     print("[fda_food] Scraping FDA PH food catalog...")
     module_name = "dependencies.fda_ph_scraper.food_scraper"
     module_output_dir = PROJECT_DIR / "dependencies" / "fda_ph_scraper" / "output"
@@ -175,10 +191,23 @@ def refresh_fda_food(inputs_dir: Path, quiet: bool = True) -> Path:
     argv: List[str] = ["--outdir", str(module_output_dir)]
     if quiet:
         argv.append("--quiet")
+    if allow_scrape:
+        argv.append("--allow-scrape")
     _run_python_module(module_name, argv)
-    module_output = module_output_dir / "fda_food_products.csv"
-    dest_path = inputs_dir / module_output.name
-    _copy_to_pipeline_inputs(module_output, dest_path)
+    food_outputs = [
+        path
+        for path in module_output_dir.glob("fda_food_*.csv")
+        if "export" not in path.name and "products" not in path.name
+    ]
+    latest = sorted(food_outputs)[-1] if food_outputs else None
+    if latest is None:
+        raise FileNotFoundError("FDA food catalog not produced.")
+    dest_path = inputs_dir / latest.name
+    _copy_to_pipeline_inputs(latest, dest_path)
+    # Clean up legacy copies if present
+    for pattern in ("fda_food_products*.csv", "fda_food_products*.parquet", "fda_food_export_*.csv"):
+        for legacy in inputs_dir.glob(pattern):
+            legacy.unlink(missing_ok=True)
     print(f"[fda_food] Catalog refreshed at {dest_path}")
     return dest_path
 
@@ -192,24 +221,25 @@ def refresh_drugbank_generics_exports() -> tuple[Optional[Path], Optional[Path]]
     _run_r_script(script_path)
     module_output = script_path.parent / "output"
     for filename in (
-        "drugbank_generics.csv",
         "drugbank_generics_master.csv",
         "drugbank_mixtures_master.csv",
     ):
         source = module_output / filename
         if source.is_file():
             _copy_to_pipeline_inputs(source, DRUGS_INPUTS_DIR / filename)
-    inputs_generics = DRUGS_INPUTS_DIR / "drugbank_generics.csv"
+    inputs_generics_master = DRUGS_INPUTS_DIR / "drugbank_generics_master.csv"
     inputs_brands = DRUGS_INPUTS_DIR / "drugbank_brands.csv"
-    if not inputs_generics.exists():
-        print(f"[drugbank_generics] Warning: {inputs_generics} not found after refresh.")
+    if not inputs_generics_master.exists():
+        print(
+            f"[drugbank_generics] Warning: {inputs_generics_master} not found after refresh."
+        )
     if not inputs_brands.exists():
         print(
             "[drugbank_generics] Note: drugbank_brands.csv was not produced. "
             "Run with --include-drugbank-brands when the placeholder script is implemented."
         )
     return (
-        inputs_generics if inputs_generics.is_file() else None,
+        inputs_generics_master if inputs_generics_master.is_file() else None,
         inputs_brands if inputs_brands.is_file() else None,
     )
 
@@ -251,7 +281,20 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     parser.add_argument(
         "--include-fda-food",
         action="store_true",
-        help="Scrape the FDA PH food catalog in addition to the default steps.",
+        default=True,
+        help="Include FDA PH food catalog refresh (default enabled).",
+    )
+    parser.add_argument(
+        "--skip-fda-food",
+        action="store_false",
+        dest="include_fda_food",
+        help="Skip FDA PH food catalog refresh.",
+    )
+    parser.add_argument(
+        "--allow-fda-food-scrape",
+        action="store_true",
+        default=False,
+        help="Enable HTML scraping fallback when FDA food export download is unavailable.",
     )
     parser.add_argument(
         "--include-drugbank-brands",
@@ -266,7 +309,10 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     artifacts["pnf_prepared"] = refresh_pnf(args.esoa)
     artifacts["who_molecules"] = refresh_who(inputs_dir)
     if args.include_fda_food:
-        artifacts["fda_food_catalog"] = refresh_fda_food(inputs_dir)
+        artifacts["fda_food_catalog"] = refresh_fda_food(
+            inputs_dir,
+            allow_scrape=args.allow_fda_food_scrape,
+        )
     artifacts["fda_brand_map"] = refresh_fda_brand_map(inputs_dir)
     generics_path, brands_path = refresh_drugbank_generics_exports()
     if generics_path:
