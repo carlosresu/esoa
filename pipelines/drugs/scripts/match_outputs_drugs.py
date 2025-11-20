@@ -198,7 +198,7 @@ def _known_tokens() -> Set[str]:
             pass
 
     # FDA brand map (latest)
-    brand_maps = sorted(glob.glob(str(inputs_dir / "fda_brand_map_*.csv")))
+    brand_maps = sorted(glob.glob(str(inputs_dir / "fda_drug_*.csv")) or glob.glob(str(inputs_dir / "fda_brand_map_*.csv")))
     if brand_maps:
         try:
             df_brand = pd.read_csv(brand_maps[-1], usecols=["brand_name", "generic_name"], dtype=str)
@@ -208,8 +208,13 @@ def _known_tokens() -> Set[str]:
             pass
 
     # FDA food catalog (optional)
-    food_catalog = inputs_dir / "fda_food_products.csv"
-    if food_catalog.is_file():
+    food_candidates = sorted(glob.glob(str(inputs_dir / "fda_food_*.csv")))
+    if not food_candidates:
+        legacy_food = inputs_dir / "fda_food_products.csv"
+        if legacy_food.is_file():
+            legacy_food.unlink(missing_ok=True)
+    if food_candidates:
+        food_catalog = Path(food_candidates[-1])
         try:
             df_food = pd.read_csv(
                 food_catalog,
@@ -238,6 +243,13 @@ def _known_tokens() -> Set[str]:
 
     _KNOWN_TOKENS_CACHE = tokens
     return _KNOWN_TOKENS_CACHE
+
+
+def _write_csv_and_parquet(frame: pd.DataFrame, csv_path: str) -> None:
+    """Persist a dataframe to both CSV and Parquet with matching stems."""
+    frame.to_csv(csv_path, index=False, encoding="utf-8")
+    parquet_path = Path(csv_path).with_suffix(".parquet")
+    frame.to_parquet(parquet_path, index=False)
 
 def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
     """Produce human-readable distribution summaries for review files."""
@@ -449,7 +461,7 @@ def write_outputs(
         if col in friendly_out.columns:
             friendly_out[col] = friendly_out[col].map(lambda val: _friendly_label(val, mapping))
 
-    _timed("Write matched CSV", lambda: friendly_out.to_csv(out_csv, index=False, encoding="utf-8"))
+    _timed("Write matched CSV/Parquet", lambda: _write_csv_and_parquet(friendly_out, out_csv))
 
     if not skip_excel:
         xlsx_out = os.path.splitext(out_csv)[0] + ".xlsx"
@@ -504,9 +516,9 @@ def write_outputs(
             )
         else:
             unk_df = pd.DataFrame(columns=["word", "count"])
-        unk_df.to_csv(unk_path, index=False, encoding="utf-8")
+        _write_csv_and_parquet(unk_df, unk_path)
         # Feeds resolve_unknowns.py to produce the missed_generics report highlighted in README.
-    _timed("Write unknown words CSV", _write_unknowns)
+    _timed("Write unknown words CSV/Parquet", _write_unknowns)
 
     _timed("Write summary.txt", lambda: _write_summary_text(out_small, out_csv))
 

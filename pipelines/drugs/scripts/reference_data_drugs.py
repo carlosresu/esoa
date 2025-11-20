@@ -58,6 +58,8 @@ def load_drugbank_generics(
     root = _project_root(project_root)
     inputs_dir = root / _PIPELINE_INPUTS_SUBPATH
     candidates = [
+        root / "dependencies" / "drugbank_generics" / "output" / "drugbank_generics_master.csv",
+        inputs_dir / "drugbank_generics_master.csv",
         root / "dependencies" / "drugbank_generics" / "output" / "drugbank_generics.csv",
         root / "dependencies" / "drugbank" / "output" / "generics.csv",  # legacy path
         inputs_dir / "drugbank_generics.csv",

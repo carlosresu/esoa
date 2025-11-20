@@ -10,6 +10,7 @@ reverse engineer the data frame mutations.
 """
 
 import os
+from pathlib import Path
 import pandas as pd
 
 from .routes_forms_drugs import map_route_token, parse_form_from_text
@@ -38,6 +39,13 @@ def _calc_ratio_mg_per_ml(payload: tuple[object, object, object, object, object]
     if dose_kind == "ratio" and isinstance(per_unit, str) and per_unit.lower() == "ml":
         return safe_ratio_mg_per_ml(strength, unit, per_val)
     return None
+
+
+def _write_csv_and_parquet(frame: pd.DataFrame, csv_path: str) -> None:
+    """Persist a dataframe to CSV and Parquet using the same stem."""
+    frame.to_csv(csv_path, index=False, encoding="utf-8")
+    parquet_path = Path(csv_path).with_suffix(".parquet")
+    frame.to_parquet(parquet_path, index=False)
 
 
 def prepare(pnf_csv: str, esoa_csv: str, outdir: str = ".") -> tuple[str, str]:
@@ -111,7 +119,7 @@ def prepare(pnf_csv: str, esoa_csv: str, outdir: str = ".") -> tuple[str, str]:
     ]].copy()
 
     pnf_out = os.path.join(outdir, "pnf_prepared.csv")
-    pnf_prepared.to_csv(pnf_out, index=False, encoding="utf-8")
+    _write_csv_and_parquet(pnf_prepared, pnf_out)
 
     # eSOA preparation is intentionally light-weight: only rename the primary
     # text column but still validate that the source CSV carries it.
@@ -120,6 +128,6 @@ def prepare(pnf_csv: str, esoa_csv: str, outdir: str = ".") -> tuple[str, str]:
         raise ValueError("esoa.csv is missing required column: DESCRIPTION")
     esoa_prepared = esoa.rename(columns={"DESCRIPTION": "raw_text"}).copy()
     esoa_out = os.path.join(outdir, "esoa_prepared.csv")
-    esoa_prepared.to_csv(esoa_out, index=False, encoding="utf-8")
+    _write_csv_and_parquet(esoa_prepared, esoa_out)
 
     return pnf_out, esoa_out

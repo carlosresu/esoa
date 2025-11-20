@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -219,23 +220,40 @@ class DrugsAndMedicinePipeline(BasePipeline):
             if dest.exists():
                 dest.unlink()
             shutil.copy2(source, dest)
+            parquet_src = source.with_suffix(".parquet")
+            if parquet_src.is_file():
+                shutil.copy2(parquet_src, dest.with_suffix(".parquet"))
 
-        patterns = ("who_atc_*.csv", "WHO ATC-DDD *.csv")
+        patterns = ("who_atc_*_molecules.csv", "who_atc_*_molecules.parquet")
         for pattern in patterns:
             for csv_path in out_dir.glob(pattern):
-                _hydrate(dest_inputs_dir / csv_path.name, csv_path)
+                dest_name = csv_path.name.replace("_molecules", "")
+                _hydrate(dest_inputs_dir / dest_name, csv_path)
 
             # Move any remnants from the legacy ./inputs/ directory into the
             # pipeline-scoped inputs folder so future runs only see the new layout.
             for legacy_path in root_inputs_dir.glob(pattern):
-                target = dest_inputs_dir / legacy_path.name
+                target = dest_inputs_dir / legacy_path.name.replace("_molecules", "")
                 if target.exists():
                     target.unlink()
                 shutil.move(str(legacy_path), str(target))
 
     @staticmethod
     def _build_brand_map(inputs_dir: Path) -> Path:
-        existing_maps = sorted(inputs_dir.glob("fda_brand_map_*.csv"), reverse=True)
+        def _pick_latest(paths: list[Path]) -> Optional[Path]:
+            if not paths:
+                return None
+            dated: list[tuple[str, Path]] = []
+            for p in paths:
+                match = re.search(r"fda_(?:brand_map|drug)_(\\d{4}-\\d{2}-\\d{2})\\.csv$", p.name)
+                if match:
+                    dated.append((match.group(1), p))
+            if dated:
+                dated.sort(key=lambda tup: tup[0])
+                return dated[-1][1]
+            return max(paths, key=lambda p: p.stat().st_mtime)
+
+        existing_maps = sorted(list(inputs_dir.glob("fda_drug_*.csv")) + list(inputs_dir.glob("fda_brand_map_*.csv")))
         module_output_dir = THIS_DIR / "dependencies" / "fda_ph_scraper" / "output"
         module_output_dir.mkdir(parents=True, exist_ok=True)
         with open(os.devnull, "w") as devnull:
@@ -254,23 +272,28 @@ class DrugsAndMedicinePipeline(BasePipeline):
                     stderr=devnull,
                 )
             except subprocess.CalledProcessError as exc:
-                if existing_maps:
-                    return existing_maps[0]
+                latest_existing = _pick_latest(existing_maps)
+                if latest_existing:
+                    return latest_existing
                 raise RuntimeError(
                     "Building FDA brand map failed and no prior map is available. "
                     "Re-run with --skip-brandmap if the FDA site is unreachable."
                 ) from exc
-        brand_files = sorted(module_output_dir.glob("fda_brand_map_*.csv"))
-        if not brand_files:
-            if existing_maps:
-                return existing_maps[0]
+        brand_files = sorted(list(module_output_dir.glob("fda_drug_*.csv")) + list(module_output_dir.glob("fda_brand_map_*.csv")))
+        selected = _pick_latest(brand_files)
+        if not selected:
+            latest_existing = _pick_latest(existing_maps)
+            if latest_existing:
+                return latest_existing
             raise RuntimeError(
                 "No FDA brand map was created; rerun with --skip-brandmap once the site is reachable."
             )
-        latest_map = brand_files[-1]
-        dest = inputs_dir / latest_map.name
+        dest = inputs_dir / selected.name
         dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(latest_map, dest)
+        shutil.copy2(selected, dest)
+        parquet_src = selected.with_suffix(".parquet")
+        if parquet_src.is_file():
+            shutil.copy2(parquet_src, dest.with_suffix(".parquet"))
         return dest
 
     @staticmethod

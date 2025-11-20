@@ -10,6 +10,12 @@ from typing import Dict
 
 import pandas as pd
 
+def _write_csv_and_parquet(frame: pd.DataFrame, csv_path: Path) -> None:
+    """Persist a dataframe to CSV and Parquet with matching stems."""
+    frame.to_csv(csv_path, index=False, encoding="utf-8")
+    parquet_path = Path(csv_path).with_suffix(".parquet")
+    frame.to_parquet(parquet_path, index=False)
+
 
 def _normalize(text: str | float | int | None) -> str:
     if text is None:
@@ -107,7 +113,7 @@ def match_labs_records(
     matched_df = pd.DataFrame(results)
     matched_df.sort_values(by=["ITEM_NUMBER"], inplace=True, ignore_index=True)
     out_csv.parent.mkdir(parents=True, exist_ok=True)
-    matched_df.to_csv(out_csv, index=False, encoding="utf-8")
+    _write_csv_and_parquet(matched_df, out_csv)
 
     if not skip_excel:
         xlsx_path = out_csv.with_suffix(".xlsx")

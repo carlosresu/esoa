@@ -34,7 +34,7 @@ class BrandMatch:
 def _latest_brandmap_path(inputs_dir: str) -> Optional[str]:
     """Return the newest brand map file path, supporting legacy naming schemes."""
     # Prefer renamed pattern
-    pattern_new = os.path.join(inputs_dir, "fda_brand_map_*.csv")
+    pattern_new = os.path.join(inputs_dir, "fda_drug_*.csv")
     candidates = glob.glob(pattern_new)
     if not candidates:
         # Backward-compatibility with old name
