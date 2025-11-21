@@ -62,14 +62,16 @@ def prepare(pnf_csv: str, esoa_csv: str, outdir: str = ".") -> tuple[str, str]:
     # Canonicalize the identifying columns that later stages depend on.  These
     # are split out early so failures surface before any heavy parsing work.
     molecule_values = pnf["Molecule"].fillna("").astype(str)
+    pnf["raw_molecule"] = molecule_values
+    pnf["generic_name"] = molecule_values.str.strip().str.upper()
     molecule_list = molecule_values.tolist()
     split_values = maybe_parallel_map(molecule_list, extract_base_and_salts)
-    pnf["generic_name"] = [
+    pnf["generic_normalized"] = [
         base or original.strip().upper()
         for (base, _), original in zip(split_values, molecule_list)
     ]
     pnf["salt_form"] = [serialize_salt_list(salts) for _, salts in split_values]
-    generic_names = pnf["generic_name"].astype(str).tolist()
+    generic_names = pnf["generic_normalized"].astype(str).tolist()
     pnf["generic_id"] = maybe_parallel_map(generic_names, slug_id)
     pnf["synonyms"] = ""
     route_values = pnf["Route"].fillna("").astype(str).tolist()
@@ -82,7 +84,7 @@ def prepare(pnf_csv: str, esoa_csv: str, outdir: str = ".") -> tuple[str, str]:
     # normalization step.
     text_cols = [c for c in ["Technical Specifications", "Specs", "Specification"] if c in pnf.columns]
     pnf["_tech"] = pnf[text_cols[0]].fillna("") if text_cols else ""
-    parse_src_raw = (pnf["generic_name"].astype(str) + " " + pnf["_tech"].astype(str)).str.strip()
+    parse_src_raw = (pnf["generic_normalized"].astype(str) + " " + pnf["_tech"].astype(str)).str.strip()
     parse_src_list = parse_src_raw.tolist()
     pnf["_parse_src"] = maybe_parallel_map(parse_src_list, normalize_text)
 
@@ -112,7 +114,7 @@ def prepare(pnf_csv: str, esoa_csv: str, outdir: str = ".") -> tuple[str, str]:
     keep = exploded[exploded["generic_name"].astype(bool)].copy()
 
     pnf_prepared = keep[[
-        "generic_id", "generic_name", "salt_form", "synonyms", "atc_code",
+        "generic_id", "generic_name", "generic_normalized", "raw_molecule", "salt_form", "synonyms", "atc_code",
         "route_allowed", "form_token", "dose_kind",
         "strength", "unit", "per_val", "per_unit", "pct",
         "strength_mg", "ratio_mg_per_ml",

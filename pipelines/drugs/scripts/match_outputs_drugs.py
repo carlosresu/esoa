@@ -191,7 +191,12 @@ def _known_tokens() -> Set[str]:
     pnf_prepared = inputs_dir / "pnf_prepared.csv"
     if pnf_prepared.is_file():
         try:
-            df_pnf = pd.read_csv(pnf_prepared, usecols=["generic_name", "synonyms"], dtype=str)
+            df_pnf = pd.read_csv(
+                pnf_prepared,
+                usecols=lambda c: c in {"generic_name", "generic_normalized", "synonyms"},
+                dtype=str,
+            )
+            tokens.update(_extract_tokens(df_pnf.get("generic_normalized", [])))
             tokens.update(_extract_tokens(df_pnf.get("generic_name", [])))
             tokens.update(_extract_tokens(df_pnf.get("synonyms", [])))
         except Exception:
