@@ -36,8 +36,9 @@ class PnfTokenIndex:
 
     def build_from_pnf(self, pnf_df) -> "PnfTokenIndex":
         """Populate the index from the prepared PNF dataframe."""
-        # expects columns: generic_id, generic_name (normalized externally if desired)
-        for gid, gname in pnf_df[["generic_id","generic_name"]].drop_duplicates().itertuples(index=False):
+        # expects columns: generic_id + generic name (normalized if available)
+        name_col = "generic_normalized" if "generic_normalized" in pnf_df.columns else "generic_name"
+        for gid, gname in pnf_df[["generic_id", name_col]].drop_duplicates().itertuples(index=False):
             if not isinstance(gname, str):
                 continue
             name_norm = gname.strip().lower()

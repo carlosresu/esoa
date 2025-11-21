@@ -892,7 +892,8 @@ def build_features(
     pnf_name_to_gid: Dict[str, Tuple[str, str]] = {}
 
     def _pnf_map():
-        for gid, gname in pnf_df[["generic_id","generic_name"]].drop_duplicates().itertuples(index=False):
+        name_col = "generic_normalized" if "generic_normalized" in pnf_df.columns else "generic_name"
+        for gid, gname in pnf_df[["generic_id", name_col]].drop_duplicates().itertuples(index=False):
             alias_set = expand_generic_aliases(str(gname))
             alias_set |= SPECIAL_GENERIC_ALIASES.get(gid, set())
             syns = pnf_df.loc[pnf_df["generic_id"] == gid, "synonyms"].dropna().astype(str)

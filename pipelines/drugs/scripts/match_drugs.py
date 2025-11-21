@@ -78,6 +78,8 @@ def _assemble_reference_catalogue(annex_df: pd.DataFrame, pnf_df: pd.DataFrame) 
         {
             "generic_id": annex["drug_code"].astype(str),
             "generic_name": annex["generic_name"].astype(str),
+            "generic_normalized": annex["generic_name"].astype(str),
+            "raw_molecule": annex["generic_name"].astype(str),
             "synonyms": annex_synonyms,
             "atc_code": [""] * len(annex),
             "route_allowed": annex["route_allowed"].fillna("").astype(str),
@@ -109,6 +111,8 @@ def _assemble_reference_catalogue(annex_df: pd.DataFrame, pnf_df: pd.DataFrame) 
             [
                 "generic_id",
                 "generic_name",
+                "generic_normalized",
+                "raw_molecule",
                 "synonyms",
                 "atc_code",
                 "route_allowed",

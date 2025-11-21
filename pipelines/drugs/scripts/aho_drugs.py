@@ -16,7 +16,8 @@ def build_molecule_automata(pnf_df) -> Tuple[ahocorasick.Automaton, ahocorasick.
     A_comp = ahocorasick.Automaton()
     seen_norm = set()
     seen_comp = set()
-    for gid, gname in pnf_df[["generic_id", "generic_name"]].drop_duplicates().itertuples(index=False):
+    name_col = "generic_normalized" if "generic_normalized" in pnf_df.columns else "generic_name"
+    for gid, gname in pnf_df[["generic_id", name_col]].drop_duplicates().itertuples(index=False):
         alias_set = expand_generic_aliases(gname)
         alias_set.update(SPECIAL_GENERIC_ALIASES.get(gid, set()))
         if "synonyms" in pnf_df.columns:
