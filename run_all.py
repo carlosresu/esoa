@@ -14,6 +14,8 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Sequence
 
+import pandas as pd
+
 from pipelines.drugs.constants import PIPELINE_INPUTS_DIR, PROJECT_ROOT
 from pipelines.drugs.pipeline import DrugsAndMedicinePipeline
 from pipelines.drugs.scripts.prepare_drugs import prepare
@@ -63,6 +65,23 @@ def _copy_to_pipeline_inputs(source: Path, dest: Path) -> None:
         shutil.copy2(parquet_src, dest.with_suffix(".parquet"))
 
 
+def _ensure_parquet_sibling(csv_path: Path) -> Optional[Path]:
+    """Create a Parquet sibling for a CSV if missing."""
+    if csv_path.suffix.lower() != ".csv":
+        return None
+    parquet_path = csv_path.with_suffix(".parquet")
+    if parquet_path.exists():
+        return parquet_path
+    try:
+        df = pd.read_csv(csv_path)
+        parquet_path.parent.mkdir(parents=True, exist_ok=True)
+        df.to_parquet(parquet_path, index=False)
+        return parquet_path
+    except Exception as exc:
+        print(f"[parquet] Warning: could not create {parquet_path} from {csv_path}: {exc}")
+        return None
+
+
 def _natural_esoa_part_order(path: Path) -> tuple[int, str]:
     """Sort helper that orders esoa_pt_* files by their numeric suffix."""
     for token in path.stem.split("_"):
@@ -96,6 +115,7 @@ def _concatenate_csv(parts: Sequence[Path], dest: Path) -> Path:
                     )
                 assert writer is not None
                 writer.writerows(reader)
+    _ensure_parquet_sibling(dest)
     return dest
 
 
@@ -323,6 +343,11 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     if mixtures_path:
         artifacts["drugbank_mixtures"] = mixtures_path
     _maybe_run_drugbank_brands_script(args.include_drugbank_brands)
+
+    # Ensure Parquet siblings for downstream consumers (CSV remains for compatibility).
+    for path in artifacts.values():
+        if path and path.suffix.lower() == ".csv":
+            _ensure_parquet_sibling(path)
 
     print("\nArtifacts updated:")
     for label, path in artifacts.items():
