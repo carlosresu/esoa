@@ -7,10 +7,11 @@ import concurrent.futures
 import math
 import os
 import re
+import sys
 import time
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Iterable, List
+from typing import Callable, Iterable, List, TypeVar
 
 import pandas as pd
 
@@ -26,6 +27,45 @@ _GENERIC_PHRASES_SHARED: list[str] | None = None
 _GENERIC_AUTOMATON_SHARED = None
 _MIXTURE_LOOKUP_SHARED: dict[str, list[dict]] | None = None
 _DRUGBANK_BY_ID_SHARED: dict[str, list[dict]] | None = None
+
+
+T = TypeVar("T")
+
+
+def _run_with_spinner(label: str, func: Callable[[], T]) -> T:
+    """Run func() in a worker thread while showing a simple CLI spinner."""
+    import threading
+
+    done = threading.Event()
+    result: list[T] = []
+    err: list[BaseException] = []
+
+    def worker():
+        try:
+            result.append(func())
+        except BaseException as exc:  # noqa: BLE001
+            err.append(exc)
+        finally:
+            done.set()
+
+    start = time.perf_counter()
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+    frames = "|/-\\"
+    idx = 0
+    while not done.wait(0.1):
+        elapsed = time.perf_counter() - start
+        sys.stdout.write(f"\r{frames[idx % len(frames)]} {elapsed:7.2f}s {label}")
+        sys.stdout.flush()
+        idx += 1
+    thread.join()
+    elapsed = time.perf_counter() - start
+    status = "done" if not err else "error"
+    sys.stdout.write(f"\r[{status}] {elapsed:7.2f}s {label}\n")
+    sys.stdout.flush()
+    if err:
+        raise err[0]
+    return result[0] if result else None  # type: ignore[return-value]
 
 
 def _effective_workers(requested: int | None) -> int:
@@ -747,6 +787,22 @@ def build_reference_rows(
     return refs
 
 
+def _build_reference_index(reference_rows: list[dict]) -> dict[str, list[int]]:
+    reference_index: dict[str, list[int]] = defaultdict(list)
+    for idx, ref in enumerate(reference_rows):
+        for tok in ref.get("primary_tokens", ()):
+            reference_index[tok].append(idx)
+    return reference_index
+
+
+def _group_drugbank_refs_by_id(reference_rows: list[dict]) -> dict[str, list[dict]]:
+    lookup: dict[str, list[dict]] = defaultdict(list)
+    for ref in reference_rows:
+        if ref.get("source") == "drugbank" and ref.get("id"):
+            lookup[str(ref["id"])].append(ref)
+    return lookup
+
+
 def _empty_match_record(annex_row: dict) -> dict:
     return {
         "Drug Code": annex_row.get("Drug Code"),
@@ -1152,36 +1208,48 @@ def main() -> None:
     fda_brand_path = DRUGS_DIR / "fda_drug_2025-11-12.csv"
     mixture_path = DRUGS_DIR / "drugbank_mixtures_master.csv"
 
-    fda_df = _read_table(fda_brand_path, required=False)
-    brand_patterns = _build_brand_map(fda_df)
+    fda_df = _run_with_spinner("Load FDA brand map", lambda: _read_table(fda_brand_path, required=False))
+    brand_patterns = _run_with_spinner("Build brand substitutions", lambda: _build_brand_map(fda_df))
 
-    annex_source_df = _read_table(annex_raw_path, required=False)
-    if annex_source_df.empty:
-        annex_source_df = _read_table(annex_lex_path, required=True)
+    def _load_annex_source() -> pd.DataFrame:
+        df = _read_table(annex_raw_path, required=False)
+        if not df.empty:
+            return df
+        return _read_table(annex_lex_path, required=True)
 
-    annex_df = _normalize_annex_df(annex_source_df, brand_patterns)
-    _write_csv_and_parquet(annex_df, annex_lex_path)
+    annex_source_df = _run_with_spinner("Load Annex F source", _load_annex_source)
 
-    mixture_df = _read_table(mixture_path, required=False)
-    pnf_df = _read_table(pnf_path, required=True)
-    who_df = _read_table(who_path, required=True)
-    drugbank_df = _read_table(drugbank_path, required=True)
+    def _normalize_annex() -> pd.DataFrame:
+        annex_df = _normalize_annex_df(annex_source_df, brand_patterns)
+        _write_csv_and_parquet(annex_df, annex_lex_path)
+        return annex_df
 
-    generic_phrases = _build_generic_phrases(drugbank_df)
-    generic_automaton = _build_aho_automaton(generic_phrases) if generic_phrases else None
-    mixture_lookup = _build_mixture_lookup(mixture_df) if not mixture_df.empty else {}
+    annex_df = _run_with_spinner("Normalize Annex F descriptions", _normalize_annex)
 
-    reference_rows = build_reference_rows(pnf_df, drugbank_df, who_df)
-    reference_index: dict[str, list[int]] = defaultdict(list)
-    for idx, ref in enumerate(reference_rows):
-        for tok in ref.get("primary_tokens", ()):
-            reference_index[tok].append(idx)
-    drugbank_refs_by_id: dict[str, list[dict]] = defaultdict(list)
-    for ref in reference_rows:
-        if ref.get("source") == "drugbank" and ref.get("id"):
-            drugbank_refs_by_id[str(ref["id"])].append(ref)
+    mixture_df = _run_with_spinner("Load DrugBank mixtures", lambda: _read_table(mixture_path, required=False))
+    pnf_df = _run_with_spinner("Load PNF lexicon", lambda: _read_table(pnf_path, required=True))
+    who_df = _run_with_spinner("Load WHO ATC export", lambda: _read_table(who_path, required=True))
+    drugbank_df = _run_with_spinner("Load DrugBank generics", lambda: _read_table(drugbank_path, required=True))
 
-    annex_records = _precompute_annex_records(annex_df, brand_patterns, generic_phrases)
+    generic_phrases = _run_with_spinner("Build generic phrase list", lambda: _build_generic_phrases(drugbank_df))
+    generic_automaton = _run_with_spinner(
+        "Build generic automaton", lambda: _build_aho_automaton(generic_phrases) if generic_phrases else None
+    )
+    mixture_lookup = _run_with_spinner(
+        "Index mixture components", lambda: _build_mixture_lookup(mixture_df) if not mixture_df.empty else {}
+    )
+
+    reference_rows = _run_with_spinner(
+        "Assemble reference rows", lambda: build_reference_rows(pnf_df, drugbank_df, who_df)
+    )
+    reference_index = _run_with_spinner("Build reference token index", lambda: _build_reference_index(reference_rows))
+    drugbank_refs_by_id = _run_with_spinner(
+        "Index DrugBank references by id", lambda: _group_drugbank_refs_by_id(reference_rows)
+    )
+
+    annex_records = _run_with_spinner(
+        "Prepare Annex F records", lambda: _precompute_annex_records(annex_df, brand_patterns, generic_phrases)
+    )
 
     backend = args.backend
     use_threads = args.use_threads
@@ -1206,23 +1274,28 @@ def main() -> None:
             )
             return time.perf_counter() - start
 
-        t_thread = _time_backend(True)
-        t_process = _time_backend(False)
+        def _benchmark_backends() -> tuple[float, float]:
+            return _time_backend(True), _time_backend(False)
+
+        t_thread, t_process = _run_with_spinner("Benchmark process vs thread", _benchmark_backends)
         use_threads = t_thread <= t_process
         print(f"[auto-backend] thread={t_thread:.2f}s, process={t_process:.2f}s -> using {'threads' if use_threads else 'processes'}")
 
-    match_df, tie_df, unresolved_df = match_annex_with_atc(
-        annex_records,
-        reference_rows,
-        reference_index,
-        brand_patterns,
-        None if use_threads else generic_automaton,
-        generic_phrases,
-        mixture_lookup,
-        drugbank_refs_by_id,
-        max_workers=args.workers,
-        chunk_size=args.chunk_size,
-        use_threads=use_threads or backend == "thread",
+    match_df, tie_df, unresolved_df = _run_with_spinner(
+        "Match Annex F against references",
+        lambda: match_annex_with_atc(
+            annex_records,
+            reference_rows,
+            reference_index,
+            brand_patterns,
+            None if use_threads else generic_automaton,
+            generic_phrases,
+            mixture_lookup,
+            drugbank_refs_by_id,
+            max_workers=args.workers,
+            chunk_size=args.chunk_size,
+            use_threads=use_threads or backend == "thread",
+        ),
     )
 
     OUTPUTS_DRUGS_DIR.mkdir(parents=True, exist_ok=True)
@@ -1250,9 +1323,12 @@ def main() -> None:
         remaining = [c for c in df.columns if c not in existing]
         return df.loc[:, existing + remaining]
 
-    _write_csv_and_parquet(reorder(match_df), match_path)
-    _write_csv_and_parquet(reorder(tie_df), ties_path)
-    _write_csv_and_parquet(reorder(unresolved_df), unresolved_path)
+    def _write_outputs() -> None:
+        _write_csv_and_parquet(reorder(match_df), match_path)
+        _write_csv_and_parquet(reorder(tie_df), ties_path)
+        _write_csv_and_parquet(reorder(unresolved_df), unresolved_path)
+
+    _run_with_spinner("Write Annex F outputs", _write_outputs)
 
     print(f"Annex F ATC matches saved to {match_path}")
     print(f"Acceptable ties saved to {ties_path}")
