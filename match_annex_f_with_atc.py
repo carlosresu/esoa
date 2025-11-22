@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import concurrent.futures
 import math
 import os
@@ -24,6 +25,14 @@ _GENERIC_PHRASES_SHARED: list[str] | None = None
 _GENERIC_AUTOMATON_SHARED = None
 _MIXTURE_LOOKUP_SHARED: dict[str, list[dict]] | None = None
 _DRUGBANK_BY_ID_SHARED: dict[str, list[dict]] | None = None
+
+
+def _effective_workers(requested: int | None) -> int:
+    """Pick a sensible worker count: default to (cores - 1) but at least 1."""
+    if requested is None or requested <= 0:
+        cores = os.cpu_count() or 1
+        return max(1, cores - 1)
+    return max(1, requested)
 
 
 def _strip_commas(token: str) -> str:
@@ -1002,16 +1011,16 @@ def match_annex_with_atc(
     mixture_lookup: dict[str, list[dict]],
     drugbank_refs_by_id: dict[str, list[dict]],
     max_workers: int | None = None,
+    chunk_size: int = 25,
+    use_threads: bool = False,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     annex_records = annex_df.to_dict(orient="records")
     matched_rows: list[dict] = []
     tie_rows: list[dict] = []
     unresolved_rows: list[dict] = []
 
-    worker_count = max_workers
-    if worker_count is None:
-        worker_count = max(1, min(32, os.cpu_count() or 1))
-    use_threads = False
+    worker_count = _effective_workers(max_workers)
+    use_threads = bool(use_threads)
     if worker_count <= 1:
         for rec in annex_records:
             match_row, ties, unresolved = _score_annex_row(
@@ -1056,7 +1065,7 @@ def match_annex_with_atc(
             initargs=(reference_rows, reference_index, brand_patterns, generic_phrases, mixture_lookup, drugbank_refs_by_id),
         ) as executor:
             for match_row, ties, unresolved in executor.map(
-                _process_annex_row_worker, annex_records, chunksize=25
+                _process_annex_row_worker, annex_records, chunksize=max(1, chunk_size)
             ):
                 matched_rows.append(match_row)
                 tie_rows.extend(ties)
@@ -1069,7 +1078,30 @@ def match_annex_with_atc(
     )
 
 
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Match Annex F entries to ATC codes.")
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Number of workers to use (defaults to available CPU, minimum 2).",
+    )
+    parser.add_argument(
+        "--use-threads",
+        action="store_true",
+        help="Use threads instead of processes (handy if process forking is slow).",
+    )
+    parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=25,
+        help="Batch size per worker for process pool execution.",
+    )
+    return parser.parse_args()
+
+
 def main() -> None:
+    args = _parse_args()
     annex_lex_path = DRUGS_DIR / "annex_f_lexicon.csv"
     annex_raw_path = DRUGS_DIR / "annex_f.csv"
     drugbank_path = DRUGS_DIR / "drugbank_generics_master.csv"
@@ -1116,6 +1148,9 @@ def main() -> None:
         generic_phrases,
         mixture_lookup,
         drugbank_refs_by_id,
+        max_workers=args.workers,
+        chunk_size=args.chunk_size,
+        use_threads=args.use_threads,
     )
 
     OUTPUTS_DRUGS_DIR.mkdir(parents=True, exist_ok=True)
