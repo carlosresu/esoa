@@ -8,6 +8,7 @@ from collections import defaultdict
 from typing import Dict, List, Tuple
 
 import polars as pl
+from pathlib import Path
 
 from .text_utils_drugs import (
     _base_name,
@@ -18,8 +19,12 @@ from .text_utils_drugs import (
 
 
 def load_who_molecules(who_parquet: str) -> Tuple[Dict[str, set], List[str], Dict[str, List[dict]]]:
-    """Load WHO exports (Parquet/Polars-first), providing lookup dictionaries and candidate name lists."""
-    who = pl.read_parquet(who_parquet)
+    """Load WHO exports (Parquet/Polars-first, CSV fallback), providing lookup dictionaries and candidate name lists."""
+    path = Path(who_parquet)
+    if path.suffix.lower() == ".parquet":
+        who = pl.read_parquet(path)
+    else:
+        who = pl.read_csv(path)
     who = who.with_columns(
         pl.col("atc_name").fill_null("").cast(pl.Utf8).alias("atc_name"),
         pl.col("atc_code").fill_null("").cast(pl.Utf8).alias("atc_code"),
@@ -49,6 +54,13 @@ def load_who_molecules(who_parquet: str) -> Tuple[Dict[str, set], List[str], Dic
         pl.Series(name_base_norm).alias("name_base_norm"),
         pl.Series(name_saltless_norm).alias("name_saltless_norm"),
     ).drop("_split_vals")
+
+    # If we ingested CSV, emit a parquet sibling to keep downstream parquet-first workflows happy.
+    if path.suffix.lower() == ".csv":
+        try:
+            who.write_parquet(path.with_suffix(".parquet"))
+        except Exception:
+            pass
 
     codes_by_name = defaultdict(set)
     details_by_code: Dict[str, List[dict]] = defaultdict(list)

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import glob
 import os
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -39,13 +40,19 @@ def _split_generic_parts(value: str) -> Dict[str, Any]:
 
 def _latest_brandmap_path(inputs_dir: str) -> Optional[str]:
     """Return the newest brand map file path, supporting legacy naming schemes."""
-    # Prefer renamed pattern
+    # Prefer renamed parquet pattern, fall back to parquet brand_map_*, then CSV legacy files.
     pattern_new = os.path.join(inputs_dir, "fda_drug_*.parquet")
     candidates = glob.glob(pattern_new)
     if not candidates:
-        # Backward-compatibility with old name
         pattern_old = os.path.join(inputs_dir, "brand_map_*.parquet")
         candidates = glob.glob(pattern_old)
+    if not candidates:
+        # CSV fallback for legacy drops; consumers will convert to Parquet after load.
+        pattern_new_csv = os.path.join(inputs_dir, "fda_drug_*.csv")
+        candidates = glob.glob(pattern_new_csv)
+    if not candidates:
+        pattern_old_csv = os.path.join(inputs_dir, "brand_map_*.csv")
+        candidates = glob.glob(pattern_old_csv)
     if not candidates:
         return None
     candidates.sort(reverse=True)
@@ -63,7 +70,10 @@ def load_latest_brandmap(inputs_dir: str) -> Optional[pl.DataFrame]:
     if not path or not os.path.exists(path):
         return None
     try:
-        lf = pl.scan_parquet(path)
+        if path.lower().endswith(".parquet"):
+            lf = pl.scan_parquet(path)
+        else:
+            lf = pl.scan_csv(path)
         required_cols = ["brand_name", "generic_name", "dosage_form", "route", "dosage_strength", "salt_form"]
         lf = lf.with_columns([pl.lit("").alias(c) for c in required_cols if c not in lf.columns])
         lf = lf.with_columns(
@@ -93,7 +103,14 @@ def load_latest_brandmap(inputs_dir: str) -> Optional[pl.DataFrame]:
             .fill_null("")
             .alias("salt_form"),
         ).drop("generic_parts")
-        return lf.collect()
+        df = lf.collect()
+        # If we loaded from CSV, emit a parquet sibling for subsequent runs.
+        if path.lower().endswith(".csv"):
+            try:
+                df.write_parquet(Path(path).with_suffix(".parquet"))
+            except Exception:
+                pass
+        return df
     except Exception:
         return None
 
