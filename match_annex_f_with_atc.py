@@ -10,7 +10,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Iterable, List
 
-import polars as pl
+import pandas as pd
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -87,27 +87,30 @@ def tokens_from_field(value) -> List[str]:
     return split_with_parentheses(text)
 
 
-def _read_table(base_path: Path, required: bool = True) -> pl.DataFrame:
+def _read_table(base_path: Path, required: bool = True) -> pd.DataFrame:
     parquet_path = base_path.with_suffix(".parquet")
     if parquet_path.exists():
-        return pl.read_parquet(parquet_path)
+        return pd.read_parquet(parquet_path)
     if base_path.exists():
-        df = pl.read_csv(base_path)
+        df = pd.read_csv(base_path)
         try:
             parquet_path.parent.mkdir(parents=True, exist_ok=True)
-            df.write_parquet(parquet_path)
+            df.to_parquet(parquet_path, index=False)
         except Exception:
             pass
         return df
     if required:
         raise FileNotFoundError(base_path)
-    return pl.DataFrame()
+    return pd.DataFrame()
 
 
-def _write_csv_and_parquet(df: pl.DataFrame, csv_path: Path) -> None:
+def _write_csv_and_parquet(df: pd.DataFrame, csv_path: Path) -> None:
     csv_path.parent.mkdir(parents=True, exist_ok=True)
-    df.write_csv(csv_path)
-    df.write_parquet(csv_path.with_suffix(".parquet"))
+    df.to_csv(csv_path, index=False)
+    try:
+        df.to_parquet(csv_path.with_suffix(".parquet"), index=False)
+    except Exception:
+        pass
 
 
 def parse_pipe_tokens(value) -> List[str]:
@@ -427,9 +430,9 @@ def _categorize_tokens(tokens: List[str]) -> dict[str, Counter]:
     return cat_counts
 
 
-def _build_brand_map(fda_df: pl.DataFrame) -> list[tuple[re.Pattern, str]]:
+def _build_brand_map(fda_df: pd.DataFrame) -> list[tuple[re.Pattern, str]]:
     patterns: list[tuple[re.Pattern, str]] = []
-    for row in fda_df.to_dicts():
+    for row in fda_df.to_dict(orient="records"):
         brand = _as_str_or_empty(row.get("brand_name")).strip()
         generic = _as_str_or_empty(row.get("generic_name")).strip()
         if not brand or not generic:
@@ -490,9 +493,9 @@ def _normalize_phrase(text: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", text.lower())).strip()
 
 
-def _build_mixture_lookup(mixture_df: pl.DataFrame) -> dict[str, list[dict]]:
+def _build_mixture_lookup(mixture_df: pd.DataFrame) -> dict[str, list[dict]]:
     lookup: dict[str, list[dict]] = {}
-    for row in mixture_df.to_dicts():
+    for row in mixture_df.to_dict(orient="records"):
         raw_key = _as_str_or_empty(row.get("ingredient_components_key"))
         if not raw_key:
             continue
@@ -500,13 +503,13 @@ def _build_mixture_lookup(mixture_df: pl.DataFrame) -> dict[str, list[dict]]:
         if not parts:
             continue
         key = "||".join(sorted(parts))
-        lookup.setdefault(key, []).append(row.to_dict())
+        lookup.setdefault(key, []).append(dict(row))
     return lookup
 
 
-def _build_generic_phrases(drugbank_df: pl.DataFrame) -> list[str]:
+def _build_generic_phrases(drugbank_df: pd.DataFrame) -> list[str]:
     phrases: set[str] = set()
-    for row in drugbank_df.to_dicts():
+    for row in drugbank_df.to_dict(orient="records"):
         for col in ("canonical_generic_name", "lexeme"):
             phrase = _normalize_phrase(_as_str_or_empty(row.get(col)))
             if len(phrase) >= 3:
@@ -514,9 +517,10 @@ def _build_generic_phrases(drugbank_df: pl.DataFrame) -> list[str]:
     return sorted(phrases)
 
 
-def _normalize_annex_df(df: pl.DataFrame, brand_patterns: list[tuple[re.Pattern, str]]) -> pl.DataFrame:
-    if not df.height:
+def _normalize_annex_df(df: pd.DataFrame, brand_patterns: list[tuple[re.Pattern, str]]) -> pd.DataFrame:
+    if df.empty:
         return df
+    df = df.copy()
     descriptions = df["Drug Description"].to_list()
     fuzzy_vals = []
     for desc in descriptions:
@@ -524,7 +528,8 @@ def _normalize_annex_df(df: pl.DataFrame, brand_patterns: list[tuple[re.Pattern,
         base_tokens = split_with_parentheses(description)
         normalized_tokens = _normalize_tokens(base_tokens, drop_stopwords=False)
         fuzzy_vals.append("|".join(normalized_tokens))
-    return df.with_columns(pl.Series("fuzzy_basis", fuzzy_vals))
+    df["fuzzy_basis"] = fuzzy_vals
+    return df
 
 
 def _build_reference_display(raw_ref: dict) -> str | None:
@@ -603,9 +608,9 @@ def _reference_sort_key(rec: dict) -> tuple[int, str, str]:
     return (priority, name, ident)
 
 
-def build_pnf_reference(df: pl.DataFrame) -> list[dict]:
+def build_pnf_reference(df: pd.DataFrame) -> list[dict]:
     rows = []
-    for row in df.to_dicts():
+    for row in df.to_dict(orient="records"):
         lexicon = _as_str_or_empty(row.get("lexicon"))
         lexicon_secondary = _as_str_or_empty(row.get("lexicon_secondary"))
         primary_tokens = _normalize_tokens(parse_pipe_tokens(lexicon), drop_stopwords=True)
@@ -622,15 +627,15 @@ def build_pnf_reference(df: pl.DataFrame) -> list[dict]:
                 "primary_cat_counts": _categorize_tokens(primary_tokens),
                 "secondary_cat_counts": _categorize_tokens(secondary_tokens),
                 "atc_code": _maybe_none(row.get("atc_code")),
-                "raw_reference_row": row.to_dict(),
+                "raw_reference_row": dict(row),
             }
         )
     return rows
 
 
-def build_drugbank_reference(df: pl.DataFrame) -> list[dict]:
+def build_drugbank_reference(df: pd.DataFrame) -> list[dict]:
     rows = []
-    for row in df.to_dicts():
+    for row in df.to_dict(orient="records"):
         primary_tokens: List[str] = []
         for col in ("lexeme", "generic_components_key", "canonical_generic_name"):
             primary_tokens.extend(split_with_parentheses(row.get(col)))
@@ -645,7 +650,7 @@ def build_drugbank_reference(df: pl.DataFrame) -> list[dict]:
             row.get("lexeme")
         )
 
-        raw_reference_row = row.to_dict()
+        raw_reference_row = dict(row)
 
         rows.append(
             {
@@ -665,9 +670,9 @@ def build_drugbank_reference(df: pl.DataFrame) -> list[dict]:
     return rows
 
 
-def build_who_reference(df: pl.DataFrame) -> list[dict]:
+def build_who_reference(df: pd.DataFrame) -> list[dict]:
     rows = []
-    for row in df.to_dicts():
+    for row in df.to_dict(orient="records"):
         primary_tokens = _normalize_tokens(split_with_parentheses(row.get("atc_name")), drop_stopwords=True)
 
         secondary_tokens: List[str] = []
@@ -687,14 +692,14 @@ def build_who_reference(df: pl.DataFrame) -> list[dict]:
                 "primary_cat_counts": _categorize_tokens(primary_tokens),
                 "secondary_cat_counts": _categorize_tokens(secondary_tokens),
                 "atc_code": _maybe_none(row.get("atc_code")),
-                "raw_reference_row": row.to_dict(),
+                "raw_reference_row": dict(row),
             }
         )
     return rows
 
 
 def build_reference_rows(
-    pnf_df: pl.DataFrame, drugbank_df: pl.DataFrame, who_df: pl.DataFrame
+    pnf_df: pd.DataFrame, drugbank_df: pd.DataFrame, who_df: pd.DataFrame
 ) -> list[dict]:
     refs: list[dict] = []
     refs.extend(build_pnf_reference(pnf_df))
@@ -988,7 +993,7 @@ def _process_annex_row_worker(annex_row: dict) -> tuple[dict, list[dict], list[d
 
 
 def match_annex_with_atc(
-    annex_df: pl.DataFrame,
+    annex_df: pd.DataFrame,
     reference_rows: list[dict],
     reference_index: dict[str, list[int]],
     brand_patterns: list[tuple[re.Pattern, str]],
@@ -997,8 +1002,8 @@ def match_annex_with_atc(
     mixture_lookup: dict[str, list[dict]],
     drugbank_refs_by_id: dict[str, list[dict]],
     max_workers: int | None = None,
-) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
-    annex_records = annex_df.to_dicts()
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    annex_records = annex_df.to_dict(orient="records")
     matched_rows: list[dict] = []
     tie_rows: list[dict] = []
     unresolved_rows: list[dict] = []
@@ -1006,6 +1011,7 @@ def match_annex_with_atc(
     worker_count = max_workers
     if worker_count is None:
         worker_count = max(1, min(32, os.cpu_count() or 1))
+    use_threads = False
     if worker_count <= 1:
         for rec in annex_records:
             match_row, ties, unresolved = _score_annex_row(
@@ -1021,9 +1027,9 @@ def match_annex_with_atc(
             tie_rows.extend(ties)
             unresolved_rows.extend(unresolved)
         return (
-            pl.DataFrame(matched_rows),
-            pl.DataFrame(tie_rows),
-            pl.DataFrame(unresolved_rows),
+            pd.DataFrame(matched_rows),
+            pd.DataFrame(tie_rows),
+            pd.DataFrame(unresolved_rows),
         )
 
     if use_threads:
@@ -1057,9 +1063,9 @@ def match_annex_with_atc(
                 unresolved_rows.extend(unresolved)
 
     return (
-        pl.DataFrame(matched_rows),
-        pl.DataFrame(tie_rows),
-        pl.DataFrame(unresolved_rows),
+        pd.DataFrame(matched_rows),
+        pd.DataFrame(tie_rows),
+        pd.DataFrame(unresolved_rows),
     )
 
 
@@ -1089,7 +1095,7 @@ def main() -> None:
 
     generic_phrases = _build_generic_phrases(drugbank_df)
     generic_automaton = _build_aho_automaton(generic_phrases) if generic_phrases else None
-    mixture_lookup = _build_mixture_lookup(mixture_df) if not mixture_df.is_empty() else {}
+    mixture_lookup = _build_mixture_lookup(mixture_df) if not mixture_df.empty else {}
 
     reference_rows = build_reference_rows(pnf_df, drugbank_df, who_df)
     reference_index: dict[str, list[int]] = defaultdict(list)
@@ -1117,7 +1123,7 @@ def main() -> None:
     ties_path = OUTPUTS_DRUGS_DIR / "annex_f_atc_ties.csv"
     unresolved_path = OUTPUTS_DRUGS_DIR / "annex_f_atc_unresolved.csv"
 
-    def reorder(df: pl.DataFrame) -> pl.DataFrame:
+    def reorder(df: pd.DataFrame) -> pd.DataFrame:
         cols = [
             "Drug Code",
             "Drug Description",
@@ -1135,7 +1141,7 @@ def main() -> None:
         ]
         existing = [c for c in cols if c in df.columns]
         remaining = [c for c in df.columns if c not in existing]
-        return df.select(existing + remaining)
+        return df.loc[:, existing + remaining]
 
     _write_csv_and_parquet(reorder(match_df), match_path)
     _write_csv_and_parquet(reorder(tie_df), ties_path)
