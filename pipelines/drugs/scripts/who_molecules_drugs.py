@@ -7,7 +7,7 @@ import re
 from collections import defaultdict
 from typing import Dict, List, Tuple
 
-import pandas as pd
+import polars as pl
 
 from .text_utils_drugs import (
     _base_name,
@@ -17,30 +17,54 @@ from .text_utils_drugs import (
 )
 
 
-def load_who_molecules(who_csv: str) -> Tuple[Dict[str, set], List[str], Dict[str, List[dict]]]:
-    """Load WHO exports, providing lookup dictionaries and candidate name lists."""
-    who = pd.read_csv(who_csv)
-    who["name_base"] = who["atc_name"].fillna("").map(_base_name)
-    who["name_norm"] = who["atc_name"].fillna("").map(_normalize_text_basic)
-    split_vals = who["atc_name"].fillna("").map(extract_base_and_salts)
-    who["salt_form"] = [serialize_salt_list(salts) for _, salts in split_vals]
-    saltless_bases = [base if base else str(original).strip().upper() for (base, _), original in zip(split_vals, who["atc_name"].fillna("").astype(str))]
-    who["name_saltless"] = saltless_bases
-    who["name_base_norm"] = who["name_base"].map(_normalize_text_basic)
-    who["name_saltless_norm"] = [
+def load_who_molecules(who_parquet: str) -> Tuple[Dict[str, set], List[str], Dict[str, List[dict]]]:
+    """Load WHO exports (Parquet/Polars-first), providing lookup dictionaries and candidate name lists."""
+    who = pl.read_parquet(who_parquet)
+    who = who.with_columns(
+        pl.col("atc_name").fill_null("").cast(pl.Utf8).alias("atc_name"),
+        pl.col("atc_code").fill_null("").cast(pl.Utf8).alias("atc_code"),
+        pl.col("ddd"),
+        pl.col("uom"),
+        pl.col("adm_r"),
+        pl.col("note"),
+    )
+    who = who.with_columns(
+        pl.col("atc_name").map_elements(_base_name, return_dtype=pl.Utf8).alias("name_base"),
+        pl.col("atc_name").map_elements(_normalize_text_basic, return_dtype=pl.Utf8).alias("name_norm"),
+        pl.col("atc_name").map_elements(extract_base_and_salts, return_dtype=pl.Struct({"": pl.Utf8})).alias("_split_vals"),
+    )
+    split_vals = who.get_column("_split_vals").to_list()
+    atc_names_list = who.get_column("atc_name").to_list()
+    salt_forms = [serialize_salt_list(salts) for _, salts in split_vals]
+    saltless_bases = [base if base else str(original).strip().upper() for (base, _), original in zip(split_vals, atc_names_list)]
+    name_base_norm = [_normalize_text_basic(n) for n in who.get_column("name_base").to_list()]
+    name_saltless_norm = [
         _normalize_text_basic(name) if name else _normalize_text_basic(str(original))
-        for name, original in zip(saltless_bases, who["atc_name"].fillna("").astype(str))
+        for name, original in zip(saltless_bases, atc_names_list)
     ]
+
+    who = who.with_columns(
+        pl.Series(salt_forms).alias("salt_form"),
+        pl.Series(saltless_bases).alias("name_saltless"),
+        pl.Series(name_base_norm).alias("name_base_norm"),
+        pl.Series(name_saltless_norm).alias("name_saltless_norm"),
+    ).drop("_split_vals")
 
     codes_by_name = defaultdict(set)
     details_by_code: Dict[str, List[dict]] = defaultdict(list)
-    for _, r in who.iterrows():
-        # Store both base and fully normalized variants for lookup flexibility.
-        codes_by_name[r["name_base_norm"]].add(r["atc_code"])
-        codes_by_name[r["name_saltless_norm"]].add(r["atc_code"])
-        codes_by_name[r["name_norm"]].add(r["atc_code"])
+    for r in who.to_dicts():
+        name_base_norm_val = r.get("name_base_norm")
+        name_saltless_norm_val = r.get("name_saltless_norm")
+        name_norm_val = r.get("name_norm")
+        atc_code_val = r.get("atc_code")
+        if name_base_norm_val:
+            codes_by_name[name_base_norm_val].add(atc_code_val)
+        if name_saltless_norm_val:
+            codes_by_name[name_saltless_norm_val].add(atc_code_val)
+        if name_norm_val:
+            codes_by_name[name_norm_val].add(atc_code_val)
 
-        details_by_code[r["atc_code"]].append(
+        details_by_code[atc_code_val].append(
             {
                 "atc_name": r.get("atc_name"),
                 "ddd": r.get("ddd"),
@@ -52,8 +76,11 @@ def load_who_molecules(who_csv: str) -> Tuple[Dict[str, set], List[str], Dict[st
         )
 
     candidate_names = sorted(
-        set(list(who["name_norm"]) + list(who["name_base_norm"]) + list(who["name_saltless_norm"])),
-        key=len, reverse=True
+        set(name_norm_val for name_norm_val in who.get_column("name_norm").to_list())
+        | set(name_base_norm)
+        | set(name_saltless_norm),
+        key=len,
+        reverse=True,
     )
     candidate_names = [n for n in candidate_names if len(n) > 2]
     return codes_by_name, candidate_names, details_by_code

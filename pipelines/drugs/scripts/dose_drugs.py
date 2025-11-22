@@ -1,6 +1,13 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+"""
+Dose parsing utilities built for the Polars/Parquet-first pipeline.
+
+Functions stay pure/Python-only so they can be plugged into Polars expressions via
+pl.col(...).map_elements, with deterministic outputs and no pandas dependencies.
+"""
+
 import re
 from typing import Any, Dict, Optional
 from math import isclose
@@ -38,15 +45,17 @@ _SPECIAL_AMOUNT_EQUIVALENCE = {
 
 def _unmask_pack_strength(s_norm: str) -> str:
     """Convert '10 x 500 mg'/'10×500 mg' to just '500 mg' for dose parsing."""
-    def repl(m: re.Match):
+
+    def repl(m: re.Match) -> str:
         amt = m.group(2)
         unit = m.group(3)
         return f"{amt}{unit}"
+
     # Replace pack descriptors with a single strength to simplify downstream regexes.
     return PACK_RX.sub(repl, s_norm)
 
 
-def parse_dose_struct_from_text(s_norm: str) -> Dict[str, Any]:
+def parse_dose_struct_from_text(s_norm: str | None) -> Dict[str, Any]:
     """Extract a structured dose payload describing amounts, ratios (mg per mL or per unit-dose noun), packs (10×500 mg → 500 mg), and percent strengths, normalizing units as detailed in README."""
     if not isinstance(s_norm, str) or not s_norm:
         return {}
@@ -135,8 +144,8 @@ def safe_ratio_mg_per_ml(strength, unit, per_val):
     return mg / pv
 
 
-def extract_dosage(s_norm: str):
-    """Parse normalized text into a compact dosage dict tailored for features."""
+def extract_dosage(s_norm: str | None):
+    """Parse normalized text into a compact dosage dict tailored for features (Polars-safe)."""
     if not isinstance(s_norm, str) or not s_norm:
         return None
     s_proc = _unmask_pack_strength(s_norm)

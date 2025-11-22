@@ -31,6 +31,16 @@ ATCD_SUBDIR = Path("dependencies") / "atcd"
 ATCD_SCRIPTS: tuple[str, ...] = ("atcd.R", "export.R", "filter.R")
 
 
+def _require_parquet(path: Path, *, label: str) -> Path:
+    """Ensure callers pass parquet inputs; prefer an existing parquet sibling when given CSV."""
+    if path.suffix.lower() == ".parquet":
+        return path
+    parquet_peer = path.with_suffix(".parquet")
+    if parquet_peer.is_file():
+        return parquet_peer
+    raise ValueError(f"{label} must be a parquet file (got {path}). Please provide/parquet-export this input.")
+
+
 @register_pipeline
 class DrugsAndMedicinePipeline(BasePipeline):
     """Concrete pipeline for the existing drug matching workflow."""
@@ -87,15 +97,19 @@ class DrugsAndMedicinePipeline(BasePipeline):
         prepared_paths: Dict[str, Path] = {}
 
         def _prepare() -> None:
-            annex_path = Path(params.annex_csv)
+            annex_path = _require_parquet(Path(params.annex_csv), label="Annex F prepared input")
             if not annex_path.is_file():
                 raise FileNotFoundError(
-                    f"Annex CSV not found: {annex_path} (expected a prepared Annex F dataset)."
+                    f"Annex parquet not found: {annex_path} (expected a prepared Annex F dataset)."
                 )
             prepared_paths["annex"] = annex_path.resolve()
-            pnf_prep, esoa_prep = prepare(str(params.pnf_csv), str(params.esoa_csv), str(context.inputs_dir))
-            prepared_paths["pnf"] = Path(pnf_prep).resolve()
-            prepared_paths["esoa"] = Path(esoa_prep).resolve()
+            pnf_prep, esoa_prep = prepare(
+                str(_require_parquet(Path(params.pnf_csv), label="PNF input")),
+                str(_require_parquet(Path(params.esoa_csv), label="eSOA input")),
+                str(context.inputs_dir),
+            )
+            prepared_paths["pnf"] = Path(_require_parquet(Path(pnf_prep), label="PNF prepared output")).resolve()
+            prepared_paths["esoa"] = Path(_require_parquet(Path(esoa_prep), label="eSOA prepared output")).resolve()
 
         elapsed = self._run_stage(spinner, "Prepare inputs", _prepare)
         if timing_hook:

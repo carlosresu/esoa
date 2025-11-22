@@ -1,15 +1,18 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Output writers for matched eSOA records, summaries, and review artifacts."""
+"""Polars-first outputs for matched eSOA records, summaries, and review artifacts."""
 
 from __future__ import annotations
 import sys, time
 import glob
 import json
-import os, pandas as pd
+import os
 import re
 from pathlib import Path
-from typing import Callable, List, Optional, Set
+from typing import Callable, Iterable, List, Optional, Set
+
+import polars as pl
+import pandas as pd  # TODO(polars): drop once Excel export is replaced with Polars-friendly path
 
 from ..constants import PIPELINE_INPUTS_DIR, PIPELINE_OUTPUTS_DIR, PIPELINE_WHO_ATC_DIR, PROJECT_ROOT
 from .reference_data_drugs import load_drugbank_generics, load_ignore_words
@@ -187,58 +190,50 @@ def _known_tokens() -> Set[str]:
     project_root = PROJECT_ROOT
     inputs_dir = PIPELINE_INPUTS_DIR
 
-    # PNF prepared
-    pnf_prepared = inputs_dir / "pnf_prepared.csv"
-    if pnf_prepared.is_file():
+    # PNF prepared (Parquet-first)
+    pnf_parquet = inputs_dir / "pnf_prepared.parquet"
+    if pnf_parquet.is_file():
         try:
-            df_pnf = pd.read_csv(
-                pnf_prepared,
-                usecols=lambda c: c in {"generic_name", "generic_normalized", "synonyms"},
-                dtype=str,
-            )
-            tokens.update(_extract_tokens(df_pnf.get("generic_normalized", [])))
-            tokens.update(_extract_tokens(df_pnf.get("generic_name", [])))
-            tokens.update(_extract_tokens(df_pnf.get("synonyms", [])))
+            df_pnf = pl.read_parquet(pnf_parquet, columns=["generic_name", "generic_normalized", "synonyms"])
+            tokens.update(_extract_tokens(df_pnf.get_column("generic_normalized")))
+            tokens.update(_extract_tokens(df_pnf.get_column("generic_name")))
+            tokens.update(_extract_tokens(df_pnf.get_column("synonyms")))
         except Exception:
             pass
 
     # FDA brand map (latest)
-    brand_maps = sorted(glob.glob(str(inputs_dir / "fda_drug_*.csv")) or glob.glob(str(inputs_dir / "fda_brand_map_*.csv")))
+    brand_maps = sorted(glob.glob(str(inputs_dir / "fda_drug_*.parquet")) or glob.glob(str(inputs_dir / "fda_brand_map_*.parquet")))
     if brand_maps:
         try:
-            df_brand = pd.read_csv(brand_maps[-1], usecols=["brand_name", "generic_name"], dtype=str)
-            tokens.update(_extract_tokens(df_brand.get("brand_name", [])))
-            tokens.update(_extract_tokens(df_brand.get("generic_name", [])))
+            df_brand = pl.read_parquet(brand_maps[-1], columns=["brand_name", "generic_name"])
+            tokens.update(_extract_tokens(df_brand.get_column("brand_name")))
+            tokens.update(_extract_tokens(df_brand.get_column("generic_name")))
         except Exception:
             pass
 
     # FDA food catalog (optional)
-    food_candidates = sorted(glob.glob(str(inputs_dir / "fda_food_*.csv")))
+    food_candidates = sorted(glob.glob(str(inputs_dir / "fda_food_*.parquet")))
     if not food_candidates:
-        legacy_food = inputs_dir / "fda_food_products.csv"
+        legacy_food = inputs_dir / "fda_food_products.parquet"
         if legacy_food.is_file():
             legacy_food.unlink(missing_ok=True)
     if food_candidates:
         food_catalog = Path(food_candidates[-1])
         try:
-            df_food = pd.read_csv(
-                food_catalog,
-                usecols=["brand_name", "product_name", "company_name"],
-                dtype=str,
-            )
-            tokens.update(_extract_tokens(df_food.get("brand_name", [])))
-            tokens.update(_extract_tokens(df_food.get("product_name", [])))
-            tokens.update(_extract_tokens(df_food.get("company_name", [])))
+            df_food = pl.read_parquet(food_catalog, columns=["brand_name", "product_name", "company_name"])
+            tokens.update(_extract_tokens(df_food.get_column("brand_name")))
+            tokens.update(_extract_tokens(df_food.get_column("product_name")))
+            tokens.update(_extract_tokens(df_food.get_column("company_name")))
         except Exception:
             pass
 
     # WHO molecules (latest)
     who_dir = PIPELINE_WHO_ATC_DIR
-    who_files = sorted(glob.glob(str(who_dir / "who_atc_*_molecules.csv")))
+    who_files = sorted(glob.glob(str(who_dir / "who_atc_*_molecules.parquet")))
     if who_files:
         try:
-            df_who = pd.read_csv(who_files[-1], usecols=["atc_name"], dtype=str)
-            tokens.update(_extract_tokens(df_who.get("atc_name", [])))
+            df_who = pl.read_parquet(who_files[-1], columns=["atc_name"])
+            tokens.update(_extract_tokens(df_who.get_column("atc_name")))
         except Exception:
             pass
 
@@ -250,109 +245,86 @@ def _known_tokens() -> Set[str]:
     return _KNOWN_TOKENS_CACHE
 
 
-def _write_csv_and_parquet(frame: pd.DataFrame, csv_path: str) -> None:
-    """Persist a dataframe to both CSV and Parquet with matching stems."""
-    frame.to_csv(csv_path, index=False, encoding="utf-8")
+def _write_csv_and_parquet(frame: pl.DataFrame, csv_path: str) -> None:
+    """Persist a Polars dataframe to both CSV and Parquet with matching stems."""
+    frame.write_csv(csv_path)
     parquet_path = Path(csv_path).with_suffix(".parquet")
-    frame.to_parquet(parquet_path, index=False)
+    frame.write_parquet(parquet_path)
 
-def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
-    """Produce human-readable distribution summaries for review files."""
-    total = len(out_small)
+def _generate_summary_lines(out_small: pl.DataFrame, mode: str) -> List[str]:
+    """Produce human-readable distribution summaries for review files (Polars-first)."""
+    total = out_small.height
     bucket_order = ["Auto-Accept", "Candidates", "Needs review", "Unknown"]
+
+    def _col_as_list(df: pl.DataFrame, col: str, fallback: str) -> List[str]:
+        if col not in df.columns:
+            return [fallback] * df.height
+        return [
+            (val.strip() if isinstance(val, str) else str(val).strip()) or fallback
+            for val in df.get_column(col).to_list()
+        ]
 
     if mode == "default":
         lines: List[str] = []
         seen: Set[str] = set()
 
-        def _normalize(series: pd.Series, fallback: str) -> pd.Series:
-            normalized = (
-                series.fillna("")
-                .astype(str)
-                .str.strip()
-                .replace({"": fallback})
-            )
-            return normalized
-
-        def _emit_bucket(bucket: str, bucket_rows: pd.DataFrame) -> None:
-            if bucket_rows.empty:
+        def _emit_bucket(bucket: str, bucket_rows: pl.DataFrame) -> None:
+            if bucket_rows.is_empty():
                 return
-            count = int(len(bucket_rows))
+            count = int(bucket_rows.height)
             pct_bucket = round(count / float(total) * 100, 2) if total else 0.0
             lines.append(f"{bucket}: {count:,} ({pct_bucket}%)")
-            match_molecule = _normalize(
-                bucket_rows.get("match_molecule(s)", pd.Series(["N/A"] * len(bucket_rows), index=bucket_rows.index)),
-                "N/A",
-            )
-            match_quality = _normalize(
-                bucket_rows.get("match_quality", pd.Series(["N/A"] * len(bucket_rows), index=bucket_rows.index)),
-                "N/A",
-            )
-            match_molecule = match_molecule.map(lambda val: _friendly_label(val, FRIENDLY_MOLECULE_LABELS))
-            match_quality = match_quality.map(lambda val: _friendly_label(val, FRIENDLY_MATCH_QUALITY_LABELS))
-            grouped = (
-                pd.DataFrame(
-                    {
-                        "match_molecule": match_molecule,
-                        "match_quality": match_quality,
-                    }
-                )
-                .groupby(["match_molecule", "match_quality"], dropna=False)
-                .size()
-                .reset_index(name="n")
-                .sort_values(by=["n", "match_molecule", "match_quality"], ascending=[False, True, True])
-            )
-            for _, row in grouped.iterrows():
-                pct_total = round(row["n"] / float(total) * 100, 2) if total else 0.0
-                lines.append(
-                    f"  {row['match_molecule']}: {row['match_quality']}: {int(row['n']):,} "
-                    f"({pct_total}%)"
-                )
+            match_molecule = [
+                _friendly_label(val, FRIENDLY_MOLECULE_LABELS)
+                for val in _col_as_list(bucket_rows, "match_molecule(s)", "N/A")
+            ]
+            match_quality = [
+                _friendly_label(val, FRIENDLY_MATCH_QUALITY_LABELS)
+                for val in _col_as_list(bucket_rows, "match_quality", "N/A")
+            ]
+            counts: dict[tuple[str, str], int] = {}
+            for mm, mq in zip(match_molecule, match_quality):
+                key = (mm, mq)
+                counts[key] = counts.get(key, 0) + 1
+            for (mm, mq), n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0][0], kv[0][1])):
+                pct_total = round(n / float(total) * 100, 2) if total else 0.0
+                lines.append(f"  {mm}: {mq}: {int(n):,} ({pct_total}%)")
 
         for bucket in bucket_order:
-            bucket_rows = out_small.loc[out_small["bucket_final"].eq(bucket)].copy()
+            bucket_rows = out_small.filter(pl.col("bucket_final") == bucket)
             _emit_bucket(bucket, bucket_rows)
             seen.add(bucket)
 
         extra_buckets = [
-            bucket
-            for bucket in out_small.get("bucket_final", pd.Series(dtype=str)).dropna().unique()
-            if bucket not in seen
+            b for b in out_small.get_column("bucket_final").drop_nulls().unique().to_list() if b not in seen
         ]
         for bucket in sorted(extra_buckets):
-            bucket_rows = out_small.loc[out_small["bucket_final"].eq(bucket)].copy()
+            bucket_rows = out_small.filter(pl.col("bucket_final") == bucket)
             _emit_bucket(bucket, bucket_rows)
 
         return lines
 
     lines = ["Distribution Summary"]
-    qty_columns = ["qty_pnf", "qty_who", "qty_fda_drug", "qty_drugbank", "qty_fda_food", "qty_unknown"]
 
-    def _append_top_values(bucket_df: pd.DataFrame, column: str, label: str, limit: int = 5) -> None:
-        if column not in bucket_df.columns:
+    def _append_top_values(bucket_df: pl.DataFrame, column: str, label: str, limit: int = 5) -> None:
+        if column not in bucket_df.columns or bucket_df.is_empty():
             return
-        series = (
-            bucket_df[column]
-            .fillna("N/A")
-            .astype(str)
-            .str.strip()
-            .replace({"": "N/A"})
-        )
-        if column == "match_molecule(s)":
-            series = series.map(lambda val: _friendly_label(val, FRIENDLY_MOLECULE_LABELS))
-        elif column == "match_quality":
-            series = series.map(lambda val: _friendly_label(val, FRIENDLY_MATCH_QUALITY_LABELS))
-        counts = series.value_counts()
-        for value, count in counts.items():
-            pct_total = round(count / float(total) * 100, 2) if total else 0.0
-            lines.append(
-                f"    {label}: {value}: {int(count):,} "
-                f"({pct_total}%)"
-            )
+        series = bucket_df.get_column(column).fill_null("N/A").cast(pl.Utf8).str.strip_chars()
+        series = series.fill_null("N/A").replace("", "N/A")
+        values = [
+            _friendly_label(val, FRIENDLY_MOLECULE_LABELS if column == "match_molecule(s)" else FRIENDLY_MATCH_QUALITY_LABELS)
+            for val in series.to_list()
+        ]
+        counts: dict[str, int] = {}
+        for val in values:
+            counts[val] = counts.get(val, 0) + 1
+        for val, cnt in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:limit]:
+            pct_total = round(cnt / float(total) * 100, 2) if total else 0.0
+            lines.append(f"    {label}: {val}: {int(cnt):,} ({pct_total}%)")
 
     for bucket in bucket_order:
-        bucket_rows = out_small.loc[out_small["bucket_final"].eq(bucket)].copy()
-        count = int(len(bucket_rows))
+        bucket_rows = out_small.filter(pl.col("bucket_final") == bucket)
+        count = int(bucket_rows.height)
         pct = round(count / float(total) * 100, 2) if total else 0.0
         lines.append(f"{bucket}: {count:,} ({pct}%)")
         if count:
@@ -362,33 +334,33 @@ def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
                 _append_top_values(bucket_rows, "match_quality", "Match quality")
 
     remaining = [
-        bucket
-        for bucket in out_small.get("bucket_final", pd.Series(dtype=str)).dropna().unique()
-        if bucket not in bucket_order
+        b for b in out_small.get_column("bucket_final").drop_nulls().unique().to_list() if b not in bucket_order
     ]
     for bucket in sorted(remaining):
-        bucket_rows = out_small.loc[out_small["bucket_final"].eq(bucket)].copy()
-        count = int(len(bucket_rows))
+        bucket_rows = out_small.filter(pl.col("bucket_final") == bucket)
+        count = int(bucket_rows.height)
         pct = round(count / float(total) * 100, 2) if total else 0.0
         lines.append(f"{bucket}: {count:,} ({pct}%)")
-        if count:
-            if "why_final" in bucket_rows.columns and "reason_final" in bucket_rows.columns:
-                grouped = (
-                    bucket_rows.groupby(["why_final", "reason_final"], dropna=False)
-                    .size()
-                    .reset_index(name="n")
-                    .sort_values(by=["n", "why_final", "reason_final"], ascending=[False, True, True])
-                )
-                for _, row in grouped.head(5).iterrows():
-                    pct_local = round(row["n"] / float(count) * 100, 2) if count else 0.0
-                    reason = _friendly_label(str(row["reason_final"]), FRIENDLY_MATCH_QUALITY_LABELS)
-                    lines.append(f"    {row['why_final']}: {reason}: {int(row['n']):,} ({pct_local}%)")
+        if count and {"why_final", "reason_final"} <= set(bucket_rows.columns):
+            grouped = (
+                bucket_rows
+                .select("why_final", "reason_final")
+                .group_by(["why_final", "reason_final"])
+                .len()
+                .sort(by=["len", "why_final", "reason_final"], descending=[True, False, False])
+                .head(5)
+                .to_dicts()
+            )
+            for row in grouped:
+                pct_local = round(row["len"] / float(count) * 100, 2) if count else 0.0
+                reason = _friendly_label(str(row["reason_final"]), FRIENDLY_MATCH_QUALITY_LABELS)
+                lines.append(f"    {row['why_final']}: {reason}: {int(row['len']):,} ({pct_local}%)")
 
     return lines
 
 
 
-def _write_summary_text(out_small: pd.DataFrame, out_csv: str) -> None:
+def _write_summary_text(out_small: pl.DataFrame, out_csv: str) -> None:
     """Write multiple summary text files that slice the results by molecule or match quality."""
     base_dir = os.path.dirname(out_csv)
     summaries = [
@@ -404,7 +376,7 @@ def _write_summary_text(out_small: pd.DataFrame, out_csv: str) -> None:
             f.write("\n".join(lines) + "\n")
 
 def write_outputs(
-    out_df: pd.DataFrame,
+    out_df: pl.DataFrame,
     out_csv: str,
     *,
     timing_hook: Callable[[str, float], None] | None = None,
@@ -418,7 +390,7 @@ def write_outputs(
             timing_hook(label, elapsed)
         return elapsed
 
-    out_small = out_df.copy()
+    out_small = out_df.clone()
     list_to_pipe = ["fda_generics_list", "drugbank_generics_list", "non_therapeutic_tokens"]
     json_columns = ["non_therapeutic_hits", "non_therapeutic_best"]
 
@@ -447,16 +419,18 @@ def write_outputs(
 
     for col in list_to_pipe:
         if col in out_small.columns:
-            out_small[col] = out_small[col].map(_join_list)
+            out_small = out_small.with_columns(pl.col(col).map_elements(_join_list, return_dtype=pl.Utf8).alias(col))
 
     for col in json_columns:
         if col in out_small.columns:
-            out_small[col] = out_small[col].map(_jsonify)
-    if "match_basis" not in out_small.columns:
-        out_small["match_basis"] = out_small.get("normalized", "")
-    out_small = out_small[[c for c in OUTPUT_COLUMNS if c in out_small.columns]].copy()
+            out_small = out_small.with_columns(pl.col(col).map_elements(_jsonify, return_dtype=pl.Utf8).alias(col))
 
-    friendly_out = out_small.copy()
+    if "match_basis" not in out_small.columns:
+        out_small = out_small.with_columns(pl.col("normalized").alias("match_basis"))
+
+    out_small = out_small.select([c for c in OUTPUT_COLUMNS if c in out_small.columns])
+
+    friendly_out = out_small
     friendly_column_mappings = {
         "match_molecule(s)": FRIENDLY_MOLECULE_LABELS,
         "match_quality": FRIENDLY_MATCH_QUALITY_LABELS,
@@ -464,7 +438,11 @@ def write_outputs(
     }
     for col, mapping in friendly_column_mappings.items():
         if col in friendly_out.columns:
-            friendly_out[col] = friendly_out[col].map(lambda val: _friendly_label(val, mapping))
+            friendly_out = friendly_out.with_columns(
+                pl.col(col).map_elements(lambda val: _friendly_label(val, mapping), return_dtype=pl.Utf8).alias(col)
+            )
+
+    friendly_out = friendly_out.rechunk()
 
     _timed("Write matched CSV/Parquet", lambda: _write_csv_and_parquet(friendly_out, out_csv))
 
@@ -472,17 +450,18 @@ def write_outputs(
         xlsx_out = os.path.splitext(out_csv)[0] + ".xlsx"
 
         def _to_excel():
+            # TODO(polars): replace Excel path with Polars/pyarrow-only writer if needed.
+            friendly_pd = friendly_out.to_pandas()
             try:
                 with pd.ExcelWriter(xlsx_out, engine="xlsxwriter") as writer:
-                    friendly_out.to_excel(writer, index=False, sheet_name="matched")
+                    friendly_pd.to_excel(writer, index=False, sheet_name="matched")
                     ws = writer.sheets["matched"]
-                    # Freeze the top row to keep headers visible during review.
                     ws.freeze_panes(1, 0)
-                    nrows, ncols = friendly_out.shape
+                    nrows, ncols = friendly_pd.shape
                     ws.autofilter(0, 0, nrows, ncols - 1)
             except Exception:
                 with pd.ExcelWriter(xlsx_out, engine="openpyxl") as writer:
-                    friendly_out.to_excel(writer, index=False, sheet_name="matched")
+                    friendly_pd.to_excel(writer, index=False, sheet_name="matched")
                     ws = writer.sheets["matched"]
                     try:
                         ws.freeze_panes = "A2"
@@ -492,14 +471,16 @@ def write_outputs(
 
         _timed("Write Excel", _to_excel)
 
-    def _write_unknowns():
-        unknown = out_small.loc[
-            out_small["unknown_kind"].ne("None") & out_small["unknown_words"].astype(str).ne(""),
-            ["unknown_words"]
-        ].copy()
+    def _write_unknowns() -> None:
+        if {"unknown_kind", "unknown_words"} <= set(out_small.columns):
+            unknown = out_small.filter(
+                (pl.col("unknown_kind") != "None") & (pl.col("unknown_words").cast(pl.Utf8).fill_null("") != "")
+            ).select("unknown_words")
+        else:
+            unknown = pl.DataFrame({"unknown_words": []})
         words: List[str] = []
         known_tokens = _known_tokens()
-        for s in unknown["unknown_words"]:
+        for s in unknown.get_column("unknown_words").to_list():
             for w in str(s).split("|"):
                 w = w.strip()
                 if not w:
@@ -512,15 +493,15 @@ def write_outputs(
                 words.append(w)
         unk_path = os.path.join(os.path.dirname(out_csv), "unknown_words.csv")
         if words:
-            unk_df = pd.DataFrame({"word": words})
+            unk_df = pl.DataFrame({"word": words})
             unk_df = (
-                unk_df.groupby("word")
-                .size()
-                .reset_index(name="count")
-                .sort_values("count", ascending=False)
+                unk_df.group_by("word")
+                .len()
+                .sort(by="len", descending=True)
+                .rename({"len": "count"})
             )
         else:
-            unk_df = pd.DataFrame(columns=["word", "count"])
+            unk_df = pl.DataFrame({"word": [], "count": []})
         _write_csv_and_parquet(unk_df, unk_path)
         # Feeds resolve_unknowns.py to produce the missed_generics report highlighted in README.
     _timed("Write unknown words CSV/Parquet", _write_unknowns)

@@ -2,6 +2,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+"""
+Combination parsing helpers intended for Polars pipelines (usable via pl.col().map_elements) where
+Parquet is the default format. Functions stay pure/Python-only to plug into Polars expressions.
+"""
+
 import re
 from typing import List
 
@@ -33,8 +38,9 @@ def _is_measurement_token(token: str) -> bool:
         return True
     return False
 
-def split_combo_segments(s: str) -> List[str]:
-    """Split combo-looking strings using context-aware separators."""
+
+def split_combo_segments(s: str | None) -> List[str]:
+    """Split combo-looking strings using context-aware separators (Polars map_elements friendly)."""
     if not isinstance(s, str) or not s:
         return []
 
@@ -118,8 +124,17 @@ def _looks_like_oxygen_flow(s_norm: str) -> bool:
     s = s_norm.lower()
     return bool(re.search(r"\boxygen\s*(?:/|(?:\s+per\s+))\s*(?:l|liter|litre|minute|min|hr|hour|ml)\b", s))
 
-def looks_like_combination(s_norm: str, pnf_hit_count: int, who_hit_count: int) -> bool:
-    """Heuristically flag whether a normalized string represents a multi-ingredient product."""
+def looks_like_combination(s_norm: str | None, pnf_hit_count: int | None, who_hit_count: int | None) -> bool:
+    """
+    Heuristically flag whether a normalized string represents a multi-ingredient product.
+
+    Designed for Polars usage (e.g., pl.col("norm").map_elements(looks_like_combination, return_dtype=pl.Boolean))
+    where counts may arrive as scalars or nulls.
+    """
+    if not isinstance(s_norm, str) or not s_norm:
+        return False
+    pnf_hit_count = pnf_hit_count or 0
+    who_hit_count = who_hit_count or 0
     # Bypass cases
     if _looks_like_oxygen_flow(s_norm):
         return False

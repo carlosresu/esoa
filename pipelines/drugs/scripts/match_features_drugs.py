@@ -5,9 +5,10 @@
 from __future__ import annotations
 import sys, time, glob, os, re
 from collections import defaultdict
+from math import isnan
 from typing import Tuple, Optional, List, Dict, Set, Callable, Any
 import difflib
-import numpy as np, pandas as pd
+import polars as pl
 import ahocorasick  # type: ignore
 from ..constants import PIPELINE_INPUTS_DIR, PIPELINE_WHO_ATC_DIR
 from .aho_drugs import build_molecule_automata, scan_pnf_all
@@ -137,7 +138,7 @@ def _string_or_empty(value: object) -> str:
     if value is None:
         return ""
     try:
-        if pd.isna(value):
+        if isinstance(value, float) and isnan(value):
             return ""
     except Exception:
         pass
@@ -162,8 +163,8 @@ def _prepare_brand_context_from_records(
     """Build brand automata inside worker processes from serialized records."""
     if not records:
         return None
-    brand_df = pd.DataFrame.from_records(records)
-    if brand_df.empty:
+    brand_df = pl.DataFrame(records)
+    if brand_df.is_empty():
         return None
     norm_auto, comp_auto, brand_lookup = build_brand_automata(brand_df)
     return {
@@ -623,14 +624,14 @@ def _who_detect_core(
     for code in sorted_codes:
         for detail in details_by_code.get(code, []):
             ddd_val = detail.get("ddd")
-            if pd.notna(ddd_val) and str(ddd_val).strip():
+            if _has_value(ddd_val):
                 has_ddd = True
             uom_val = detail.get("uom")
-            if pd.notna(uom_val):
+            if _has_value(uom_val):
                 uom_key = str(uom_val).strip().lower()
                 form_tokens.update(WHO_UOM_TO_CANONICAL.get(uom_key, set()))
             adm_r_val = detail.get("adm_r")
-            if pd.notna(adm_r_val):
+            if _has_value(adm_r_val):
                 adm_r_text = str(adm_r_val).strip()
                 if adm_r_text:
                     adm_key = adm_r_text.lower()
@@ -731,12 +732,12 @@ def _segment_norm(seg: str) -> str:
     return s
 
 def load_latest_who_file(root_dir: str) -> str | None:
-    """Return the freshest WHO ATC CSV path, preferring the pipeline-specific inputs directory."""
-    who_candidates = glob.glob(os.path.join(str(PIPELINE_WHO_ATC_DIR), "who_atc_*_molecules.csv"))
+    """Return the freshest WHO ATC parquet path, preferring the pipeline-specific inputs directory."""
+    who_candidates = glob.glob(os.path.join(str(PIPELINE_WHO_ATC_DIR), "who_atc_*_molecules.parquet"))
     if who_candidates:
         return max(who_candidates, key=os.path.getmtime)
     legacy_dir = os.path.join(root_dir, "dependencies", "atcd", "output")
-    legacy_candidates = glob.glob(os.path.join(legacy_dir, "who_atc_*_molecules.csv"))
+    legacy_candidates = glob.glob(os.path.join(legacy_dir, "who_atc_*_molecules.parquet"))
     if legacy_candidates:
         return max(legacy_candidates, key=os.path.getmtime)
     return None
@@ -746,17 +747,27 @@ def _tokenize_unknowns(s_norm: str) -> List[str]:
     return [m.group(0) for m in GENERIC_TOKEN_RX.finditer(s_norm)]
 
 def build_features(
-    pnf_df: pd.DataFrame,
-    esoa_df: pd.DataFrame,
+    pnf_df: pl.DataFrame | pl.LazyFrame,
+    esoa_df: pl.DataFrame | pl.LazyFrame,
     *,
     timing_hook: Callable[[str, float], None] | None = None,
-) -> pd.DataFrame:
-    """Derive the expansive feature frame used downstream for scoring: validation, vocabulary indexing, brand swaps, re-parsed dose/route/form, molecule detection, combo flags, and unknown token extraction."""
+) -> pl.DataFrame:
+    """
+    Derive the expansive feature frame used downstream for scoring: validation, vocabulary indexing,
+    brand swaps, re-parsed dose/route/form, molecule detection, combo flags, and unknown token
+    extraction.
+
+    Polars/Parquet-first implementation; returns a Polars DataFrame (convert to pandas only where
+    downstream components still expect it until they are migrated).
+    """
     def _timed(label: str, func: Callable[[], None]) -> float:
         elapsed = _run_with_spinner(label, func)
         if timing_hook:
             timing_hook(label, elapsed)
         return elapsed
+
+    pnf_df = pnf_df.collect(streaming=True) if isinstance(pnf_df, pl.LazyFrame) else pnf_df.clone()
+    esoa_df = esoa_df.collect(streaming=True) if isinstance(esoa_df, pl.LazyFrame) else esoa_df.clone()
 
     ignore_words = load_ignore_words()
     stopword_tokens_all: Set[str] = set(STOPWORD_TOKENS) | ignore_words
@@ -818,8 +829,7 @@ def build_features(
         }
     )
 
-    # 1) Validate inputs
-    def _validate():
+    def _validate() -> None:
         required_pnf = {
             "generic_id",
             "generic_name",
@@ -845,7 +855,7 @@ def build_features(
         if missing:
             raise ValueError(f"reference catalogue missing columns: {missing}")
         if "raw_text" not in esoa_df.columns:
-            raise ValueError("esoa_prepared.csv must contain a 'raw_text' column")
+            raise ValueError("eSOA prepared input must contain a 'raw_text' column")
     _timed("Validate inputs", _validate)
 
     gid_to_source: Dict[str, str] = {}
@@ -853,8 +863,8 @@ def build_features(
     gid_to_primary_code: Dict[str, str] = {}
     gid_to_drug_code: Dict[str, str] = {}
     gid_to_route_ref: Dict[str, str] = {}
-    for row in (
-        pnf_df[
+    gid_meta_rows = (
+        pnf_df.select(
             [
                 "generic_id",
                 "source",
@@ -863,46 +873,47 @@ def build_features(
                 "drug_code",
                 "route_evidence_reference",
             ]
-        ]
-        .dropna(subset=["generic_id"])
-        .drop_duplicates()
-        .itertuples(index=False)
-    ):
-        gid = str(row.generic_id)
+        )
+        .drop_nulls(subset=["generic_id"])
+        .unique()
+        .to_dicts()
+    )
+    for row in gid_meta_rows:
+        gid = _string_or_empty(row.get("generic_id"))
         if not gid:
             continue
-        if gid not in gid_to_source:
-            gid_to_source[gid] = str(row.source) if isinstance(row.source, str) else ""
-        if gid not in gid_to_priority:
-            try:
-                gid_to_priority[gid] = int(row.source_priority)
-            except Exception:
-                gid_to_priority[gid] = 99
-        if gid not in gid_to_primary_code:
-            code = str(row.primary_code) if isinstance(row.primary_code, str) else ""
-            gid_to_primary_code[gid] = code
-        if gid not in gid_to_drug_code:
-            drug_code = str(row.drug_code) if isinstance(row.drug_code, str) else ""
-            gid_to_drug_code[gid] = drug_code
-        if gid not in gid_to_route_ref:
-            ref = str(row.route_evidence_reference) if isinstance(row.route_evidence_reference, str) else ""
-            gid_to_route_ref[gid] = ref
+        gid_to_source.setdefault(gid, _string_or_empty(row.get("source")))
+        try:
+            gid_to_priority.setdefault(gid, int(row.get("source_priority")))
+        except Exception:
+            gid_to_priority.setdefault(gid, 99)
+        gid_to_primary_code.setdefault(gid, _string_or_empty(row.get("primary_code")))
+        gid_to_drug_code.setdefault(gid, _string_or_empty(row.get("drug_code")))
+        gid_to_route_ref.setdefault(gid, _string_or_empty(row.get("route_evidence_reference")))
 
-    # 2) Map normalized PNF names to gid + original name
+    name_col = "generic_normalized" if "generic_normalized" in pnf_df.columns else "generic_name"
+    synonyms_map: Dict[str, List[str]] = {}
+    if "synonyms" in pnf_df.columns:
+        for row in pnf_df.select(["generic_id", "synonyms"]).drop_nulls().to_dicts():
+            gid = _string_or_empty(row.get("generic_id"))
+            syn_val = _string_or_empty(row.get("synonyms"))
+            if gid and syn_val:
+                synonyms_map.setdefault(gid, []).extend([s for s in syn_val.split("|") if s])
+
     pnf_name_to_gid: Dict[str, Tuple[str, str]] = {}
-
-    def _pnf_map():
-        name_col = "generic_normalized" if "generic_normalized" in pnf_df.columns else "generic_name"
-        for gid, gname in pnf_df[["generic_id", name_col]].drop_duplicates().itertuples(index=False):
-            alias_set = expand_generic_aliases(str(gname))
+    def _pnf_map() -> None:
+        for row in pnf_df.select(["generic_id", name_col]).drop_nulls().unique().to_dicts():
+            gid = _string_or_empty(row.get("generic_id"))
+            gname = _string_or_empty(row.get(name_col))
+            if not gid or not gname:
+                continue
+            alias_set = expand_generic_aliases(gname)
             alias_set |= SPECIAL_GENERIC_ALIASES.get(gid, set())
-            syns = pnf_df.loc[pnf_df["generic_id"] == gid, "synonyms"].dropna().astype(str)
-            for syn in syns:
+            for syn in synonyms_map.get(gid, []):
                 alias_set |= expand_generic_aliases(syn)
             for alias in alias_set:
                 key = _normalize_text_basic(alias)
                 if key and key not in pnf_name_to_gid:
-                    # Store the first-seen generic mapping so duplicates do not overwrite earlier entries.
                     pnf_name_to_gid[key] = (gid, gname)
     _timed("Index PNF names", _pnf_map)
     pnf_name_set: Set[str] = set(pnf_name_to_gid.keys())
@@ -910,12 +921,11 @@ def build_features(
     for name in pnf_name_set:
         pnf_tokens.update(_tokenize_unknowns(name))
 
-    # 3) WHO molecules (names + regex)
     codes_by_name, candidate_names = ({}, [])
     who_details_by_code: Dict[str, List[dict]] = {}
     who_name_set: Set[str] = set()
     who_regex_box = [None]
-    def _load_who():
+    def _load_who() -> None:
         root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
         who_file = load_latest_who_file(root_dir)
         if who_file and os.path.exists(who_file):
@@ -925,7 +935,6 @@ def build_features(
             who_name_set.update(cbn.keys())
             who_details_by_code.update(details)
             if candidate_names:
-                # Compile a single regex that captures any candidate name at word boundaries.
                 who_regex_box[0] = re.compile(r"\b(" + "|".join(map(re.escape, candidate_names)) + r")\b")
     _timed("Load WHO molecules", _load_who)
     who_regex = who_regex_box[0]
@@ -933,30 +942,25 @@ def build_features(
     for name in who_name_set:
         who_tokens.update(_tokenize_unknowns(name))
 
-    # 4) Brand map & FDA generics
-    brand_df = [None]
-    def _load_brand():
-        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+    brand_df_box: List[pl.DataFrame | None] = [None]
+    def _load_brand() -> None:
         inputs_dir = str(PIPELINE_INPUTS_DIR)
-        # Attempt to load the newest brand map for downstream substitutions.
-        brand_df[0] = load_latest_brandmap(inputs_dir)
+        brand_df_box[0] = load_latest_brandmap(inputs_dir)
     _timed("Load FDA brand map", _load_brand)
-    has_brandmap = brand_df[0] is not None and not brand_df[0].empty
+    brand_df = brand_df_box[0]
+    has_brandmap = brand_df is not None and not brand_df.is_empty() if brand_df is not None else False
     brand_token_lookup: Set[str] = set()
     if has_brandmap:
-        B_norm = [None]; B_comp = [None]; brand_lookup = [{}]; fda_gens = [set()]
+        B_norm = [None]; B_comp = [None]; brand_lookup = [{}]; fda_gens_box = [set()]
         _timed("Build brand automata", lambda: (
-            (lambda r: (B_norm.__setitem__(0, r[0]), B_comp.__setitem__(0, r[1]), brand_lookup.__setitem__(0, r[2])))(build_brand_automata(brand_df[0]))
+            (lambda r: (B_norm.__setitem__(0, r[0]), B_comp.__setitem__(0, r[1]), brand_lookup.__setitem__(0, r[2])))(build_brand_automata(brand_df))  # type: ignore[arg-type]
         ))
-        _timed("Index FDA generics", lambda: fda_gens.__setitem__(0, fda_generics_set(brand_df[0])))
-        B_norm, B_comp, brand_lookup, fda_gens = B_norm[0], B_comp[0], brand_lookup[0], fda_gens[0]
-
-        brand_series = brand_df[0].get("brand_name")
-        if brand_series is not None:
-            for name in brand_series.fillna("").astype(str):
-                norm = _normalize_text_basic(_base_name(name))
-                if norm:
-                    brand_token_lookup.update(_tokenize_unknowns(norm))
+        _timed("Index FDA generics", lambda: fda_gens_box.__setitem__(0, fda_generics_set(brand_df)))  # type: ignore[arg-type]
+        B_norm, B_comp, brand_lookup, fda_gens = B_norm[0], B_comp[0], brand_lookup[0], fda_gens_box[0]
+        for name in brand_df.select("brand_name").fill_null("").to_series().to_list():  # type: ignore[arg-type]
+            norm = _normalize_text_basic(_base_name(_string_or_empty(name)))
+            if norm:
+                brand_token_lookup.update(_tokenize_unknowns(norm))
     else:
         B_norm = B_comp = None
         brand_lookup = {}
@@ -1084,35 +1088,32 @@ def build_features(
         fuzzy_context_box[0] = context
         return context  # type: ignore[return-value]
 
-    # 4b) FDA food/non-therapeutic catalog (optional, may not exist locally)
     nonthera_lookup: Dict[str, List[Dict[str, str]]] = {}
     nonthera_token_lookup: Dict[str, Set[str]] = {}
     nonthera_loaded = [False]
     nonthera_automaton = [None]
 
-    def _load_nontherapeutic_catalog():
-        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
-        inputs_dir = str(PIPELINE_INPUTS_DIR)
-        food_candidates = sorted((PIPELINE_INPUTS_DIR).glob("fda_food_*.csv"))
+    def _load_nontherapeutic_catalog() -> None:
+        food_candidates = sorted((PIPELINE_INPUTS_DIR).glob("fda_food_*.parquet"))
         if not food_candidates:
-            legacy_path = PIPELINE_INPUTS_DIR / "fda_food_products.csv"
+            legacy_path = PIPELINE_INPUTS_DIR / "fda_food_products.parquet"
             if legacy_path.exists():
                 legacy_path.unlink(missing_ok=True)
             return
         catalog_path = str(food_candidates[-1])
         try:
-            df_catalog = pd.read_csv(catalog_path)
+            df_catalog = pl.read_parquet(catalog_path)
         except Exception:
             return
-        if df_catalog.empty:
+        if df_catalog.is_empty():
             return
 
         keys: Set[str] = set()
-        for row in df_catalog.fillna("").to_dict("records"):
-            brand = str(row.get("brand_name", "") or "").strip()
-            product = str(row.get("product_name", "") or "").strip()
-            company = str(row.get("company_name", "") or "").strip()
-            regno = str(row.get("registration_number", "") or "").strip()
+        for row in df_catalog.fill_null("").to_dicts():
+            brand = _string_or_empty(row.get("brand_name")).strip()
+            product = _string_or_empty(row.get("product_name")).strip()
+            company = _string_or_empty(row.get("company_name")).strip()
+            regno = _string_or_empty(row.get("registration_number")).strip()
 
             for field_name, raw_value in (("brand_name", brand), ("product_name", product)):
                 if not raw_value:
@@ -1141,8 +1142,7 @@ def build_features(
                     "match_value": raw_value,
                 }
                 nonthera_lookup.setdefault(norm, []).append(detail)
-                existing = nonthera_token_lookup.setdefault(norm, set())
-                existing.update(filtered_tokens)
+                nonthera_token_lookup.setdefault(norm, set()).update(filtered_tokens)
 
         if keys:
             auto = ahocorasick.Automaton()
@@ -1154,7 +1154,6 @@ def build_features(
 
     _timed("Load FDA non-therapeutic catalog", _load_nontherapeutic_catalog)
 
-    # 5) PNF automata + partial index
     A_norm = [None]; A_comp = [None]
     _timed("Build PNF automata", lambda: (
         (lambda r: (A_norm.__setitem__(0, r[0]), A_comp.__setitem__(0, r[1])))(build_molecule_automata(pnf_df))
@@ -1166,31 +1165,33 @@ def build_features(
         if key:
             pnf_partial_idx.add(gid, key)
 
-    # 6) Base ESOA frame and text normalization
-    df = [None]
-    def _mk_base():
-        base_cols = ["raw_text"]
-        if "ITEM_NUMBER" in esoa_df.columns:
-            base_cols = ["ITEM_NUMBER"] + base_cols
-        tmp = esoa_df[base_cols].copy()
-        raw_values = tmp["raw_text"].tolist()
-        tmp["parentheticals"] = maybe_parallel_map(raw_values, extract_parenthetical_phrases)
-        tmp["esoa_idx"] = tmp.index
-        normalized_full_values = maybe_parallel_map(raw_values, normalize_text)
-        normalized_generic_values = [strip_after_as(val) for val in normalized_full_values]
-        tmp["normalized_full"] = normalized_full_values
-        tmp["normalized"] = normalized_generic_values
-        tmp["norm_compact"] = [re.sub(r"[ \-]", "", s) for s in normalized_generic_values]
-        df.append(tmp)
-    _timed("Normalize ESOA text", _mk_base)
-    df = df[-1]
+    base_cols = ["raw_text"]
+    if "ITEM_NUMBER" in esoa_df.columns:
+        base_cols = ["ITEM_NUMBER"] + base_cols
+    raw_text = esoa_df.get_column("raw_text").to_list()
+    parentheticals = maybe_parallel_map(raw_text, extract_parenthetical_phrases)
+    normalized_full = maybe_parallel_map(raw_text, normalize_text)
+    normalized = [strip_after_as(val) for val in normalized_full]
+    norm_compact = [re.sub(r"[\s-]", "", s) for s in normalized]
+    n_rows = len(raw_text)
+    data: Dict[str, List[Any]] = {
+        "raw_text": raw_text,
+        "parentheticals": parentheticals,
+        "esoa_idx": list(range(n_rows)),
+        "normalized_full": normalized_full,
+        "normalized": normalized,
+        "norm_compact": norm_compact,
+    }
+    if "ITEM_NUMBER" in esoa_df.columns:
+        data["ITEM_NUMBER"] = esoa_df.get_column("ITEM_NUMBER").to_list()
 
-    def _detect_non_therapeutic():
+    def _detect_non_therapeutic() -> None:
         if not nonthera_loaded[0] or not nonthera_automaton[0]:
-            df["non_therapeutic_hits"] = [[] for _ in range(len(df))]
-            df["non_therapeutic_tokens"] = [[] for _ in range(len(df))]
-            df["non_therapeutic_summary"] = ["" for _ in range(len(df))]
-            df["non_therapeutic_detail"] = ["" for _ in range(len(df))]
+            data["non_therapeutic_hits"] = [[] for _ in range(n_rows)]
+            data["non_therapeutic_tokens"] = [[] for _ in range(n_rows)]
+            data["non_therapeutic_summary"] = ["" for _ in range(n_rows)]
+            data["non_therapeutic_detail"] = ["" for _ in range(n_rows)]
+            data["non_therapeutic_best"] = [{} for _ in range(n_rows)]
             return
 
         auto = nonthera_automaton[0]
@@ -1199,15 +1200,10 @@ def build_features(
         summary_col: List[str] = []
         detail_col: List[str] = []
 
-        norm_series = df.get("normalized_full", df["normalized"])
-        for norm_text in norm_series.astype(str).tolist():
+        for norm_text in data["normalized_full"]:
             if not norm_text:
-                hits_col.append([])
-                tokens_col.append([])
-                summary_col.append("")
-                detail_col.append("")
+                hits_col.append([]); tokens_col.append([]); summary_col.append(""); detail_col.append("")
                 continue
-
             matched_keys: Set[str] = set()
             for end_idx, key in auto.iter(norm_text):  # type: ignore[attr-defined]
                 if key not in nonthera_token_lookup:
@@ -1219,12 +1215,8 @@ def build_features(
                     continue
                 matched_keys.add(key)
             if not matched_keys:
-                hits_col.append([])
-                tokens_col.append([])
-                summary_col.append("")
-                detail_col.append("")
+                hits_col.append([]); tokens_col.append([]); summary_col.append(""); detail_col.append("")
                 continue
-
             details: List[Dict[str, str]] = []
             token_set: Set[str] = set()
             summary_parts: List[str] = []
@@ -1240,20 +1232,18 @@ def build_features(
                         summary_parts.append(f"{display} [Reg {regno}]")
                     else:
                         summary_parts.append(display)
-
             unique_parts = list(dict.fromkeys(part for part in summary_parts if part))
             summary = "Matches FDA PH food catalog: " + "; ".join(unique_parts) if unique_parts else ""
-
             hits_col.append(details)
             tokens_col.append(sorted(token_set))
             summary_col.append(summary)
             detail_col.append(summary)
 
-        df["non_therapeutic_hits"] = hits_col
-        df["non_therapeutic_tokens"] = tokens_col
-        df["non_therapeutic_summary"] = summary_col
-        df["non_therapeutic_detail"] = detail_col
-
+        data["non_therapeutic_hits"] = hits_col
+        data["non_therapeutic_tokens"] = tokens_col
+        data["non_therapeutic_summary"] = summary_col
+        data["non_therapeutic_detail"] = detail_col
+        data["non_therapeutic_best"] = [{} for _ in range(n_rows)]
     _timed("Detect non-therapeutic brands", _detect_non_therapeutic)
 
     def _score_food_entry(entry: Dict[str, str], norm_text: str, form_raw: Optional[str], route_raw: Optional[str]) -> float:
@@ -1302,42 +1292,35 @@ def build_features(
         return score
 
     def _choose_best_nonthera() -> None:
-        if "non_therapeutic_hits" not in df.columns:
-            df["non_therapeutic_best"] = [{} for _ in range(len(df))]
+        if "non_therapeutic_hits" not in data:
+            data["non_therapeutic_best"] = [{} for _ in range(n_rows)]
             return
-
-        existing_summary = df.get("non_therapeutic_summary", pd.Series(["" for _ in range(len(df))])).tolist()
         best_entries: List[Dict[str, str]] = []
         summaries: List[str] = []
         details: List[str] = []
-
-        norm_series = df.get("normalized_full", df["normalized"])
-        for idx, (hits, norm_text, form_raw, route_raw) in enumerate(
-            zip(
-                df["non_therapeutic_hits"],
-                norm_series,
-                df.get("form_raw", [None] * len(df)),
-                df.get("route_raw", [None] * len(df)),
-            )
+        norm_series = data.get("normalized_full", data["normalized"])
+        form_raw_series = data.get("form_raw", [None] * n_rows)
+        route_raw_series = data.get("route_raw", [None] * n_rows)
+        for hits, norm_text, form_raw, route_raw, existing_summary in zip(
+            data["non_therapeutic_hits"],
+            norm_series,
+            form_raw_series,
+            route_raw_series,
+            data.get("non_therapeutic_summary", [""] * n_rows),
         ):
             if not hits:
                 best_entries.append({})
-                summaries.append(existing_summary[idx] if idx < len(existing_summary) else "")
+                summaries.append(existing_summary if isinstance(existing_summary, str) else "")
                 details.append("")
                 continue
-
-            scores = []
-            for entry in hits:
-                scores.append((entry, _score_food_entry(entry, str(norm_text), form_raw, route_raw)))
+            scores = [(entry, _score_food_entry(entry, str(norm_text), form_raw, route_raw)) for entry in hits]
             scores.sort(key=lambda item: (-item[1], item[0].get("brand_name", ""), item[0].get("product_name", "")))
             best_entry, best_score = scores[0] if scores else ({}, 0.0)
-
             if best_score <= 0.0:
                 best_entries.append(best_entry)
-                summaries.append(existing_summary[idx] if idx < len(existing_summary) else "")
+                summaries.append(existing_summary if isinstance(existing_summary, str) else "")
                 details.append("")
                 continue
-
             display = best_entry.get("brand_name") or best_entry.get("product_name") or best_entry.get("company_name") or "FDA Food item"
             detail_parts = []
             if best_entry.get("product_name") and best_entry.get("product_name").strip().lower() != display.strip().lower():
@@ -1348,48 +1331,45 @@ def build_features(
                 detail_parts.append(f"Reg {best_entry['registration_number'].strip()}")
             detail = "; ".join(part for part in detail_parts if part)
             detail_string = f"FDA Food match: {display}" + (f" ({detail})" if detail else "")
-
             best_entries.append(best_entry)
             summaries.append("non_therapeutic_detected")
             details.append(detail_string)
+        data["non_therapeutic_best"] = best_entries
+        data["non_therapeutic_summary"] = summaries
+        data["non_therapeutic_detail"] = details
 
-        df["non_therapeutic_best"] = best_entries
-        df["non_therapeutic_summary"] = summaries
-        df["non_therapeutic_detail"] = details
-
-    # 7) Dose/route/form on original normalized text
-    def _dose_route_form_raw():
+    def _dose_route_form_raw() -> None:
         from .dose_drugs import extract_dosage as _extract_dosage
-        norm_values = df.get("normalized_full", df["normalized"]).tolist()
+        norm_values = data["normalized_full"]
         dosage_parsed = maybe_parallel_map(norm_values, _extract_dosage)
-        df["dosage_parsed_raw"] = dosage_parsed
-        df["dose_recognized"] = [_friendly_dose(item) for item in dosage_parsed]
+        data["dosage_parsed_raw"] = dosage_parsed
+        data["dose_recognized"] = [_friendly_dose(item) for item in dosage_parsed]
         route_triplets = maybe_parallel_map(norm_values, extract_route_and_form)
         if route_triplets:
             routes, forms, evidences = zip(*route_triplets)
-            df["route_raw"] = list(routes)
-            df["form_raw"] = list(forms)
-            df["route_evidence_raw"] = list(evidences)
+            data["route_raw"] = list(routes)
+            data["form_raw"] = list(forms)
+            data["route_evidence_raw"] = list(evidences)
         else:
-            df["route_raw"] = []
-            df["form_raw"] = []
-            df["route_evidence_raw"] = []
+            data["route_raw"] = ["" for _ in range(n_rows)]
+            data["form_raw"] = ["" for _ in range(n_rows)]
+            data["route_evidence_raw"] = ["" for _ in range(n_rows)]
     _timed("Parse dose/route/form (raw)", _dose_route_form_raw)
 
-    # 8) Brand → Generic swap (if brand map available)
-    def _brand_swap():
+    def _brand_swap() -> None:
         if not has_brandmap:
-            df["match_basis"] = df["normalized"]
-            df["did_brand_swap"] = False
-            df["brand_swap_added_generic"] = False
-            df["fda_dose_corroborated"] = False
-            df["probable_brands"] = ""
-            df["fda_generics_list"] = [[] for _ in range(len(df))]
+            data["match_basis"] = list(data["normalized"])
+            data["did_brand_swap"] = [False for _ in range(n_rows)]
+            data["brand_swap_added_generic"] = [False for _ in range(n_rows)]
+            data["fda_dose_corroborated"] = [False for _ in range(n_rows)]
+            data["probable_brands"] = ["" for _ in range(n_rows)]
+            data["fda_generics_list"] = [[] for _ in range(n_rows)]
             return
-        normalized_values = df["normalized"].tolist()
-        compact_values = df["norm_compact"].tolist()
-        form_values = df["form_raw"].tolist() if "form_raw" in df.columns else [""] * len(df)
-        dose_values = df["dose_recognized"].tolist()
+
+        normalized_values = data["normalized"]
+        compact_values = [re.sub(r"[\s-]", "", s) for s in normalized_values]
+        form_values = data.get("form_raw", [""] * n_rows)
+        dose_values = data.get("dose_recognized", [""] * n_rows)
         payload = list(zip(normalized_values, compact_values, form_values, dose_values))
 
         worker_count = resolve_worker_count(task_size=len(payload))
@@ -1408,7 +1388,7 @@ def build_features(
                 for norm, comp, form, friendly in payload
             ]
         else:
-            brand_records = brand_df[0].fillna("").to_dict("records")
+            brand_records = brand_df.fill_null("").to_dicts()  # type: ignore[union-attr]
             init_payload = {
                 "brand_records": brand_records,
                 "pnf_name_set": list(pnf_name_set),
@@ -1430,22 +1410,22 @@ def build_features(
         else:
             mb_list = swapped = swap_inserted_flags = fda_hits = probable_brand_hits = fda_generics_lists = ()
 
-        df["match_basis"] = list(mb_list)
-        df["did_brand_swap"] = [bool(x) for x in swapped]
-        df["brand_swap_added_generic"] = [bool(x) for x in swap_inserted_flags]
-        df["fda_dose_corroborated"] = [bool(x) for x in fda_hits]
-        df["probable_brands"] = list(probable_brand_hits)
-        df["fda_generics_list"] = [list(x) for x in fda_generics_lists]
+        data["match_basis"] = list(mb_list)
+        data["did_brand_swap"] = [bool(x) for x in swapped]
+        data["brand_swap_added_generic"] = [bool(x) for x in swap_inserted_flags]
+        data["fda_dose_corroborated"] = [bool(x) for x in fda_hits]
+        data["probable_brands"] = list(probable_brand_hits)
+        data["fda_generics_list"] = [list(x) for x in fda_generics_lists]
     _timed("Apply brand→generic swaps", _brand_swap)
 
-    def _drugbank_hits():
+    def _drugbank_hits() -> None:
         if not drugbank_token_index:
-            df["drugbank_generics_list"] = [[] for _ in range(len(df))]
-            df["present_in_drugbank"] = False
+            data["drugbank_generics_list"] = [[] for _ in range(n_rows)]
+            data["present_in_drugbank"] = [False for _ in range(n_rows)]
             return
         hits_list: List[List[str]] = []
         present_flags: List[bool] = []
-        for basis in df["match_basis"]:
+        for basis in data["match_basis"]:
             norm = _normalize_text_basic(str(basis))
             if not norm:
                 hits_list.append([])
@@ -1483,50 +1463,50 @@ def build_features(
                         candidate_norm = " ".join(cand_tokens)
                         _record_match(candidate_norm)
 
-            # Fallback for spaced tokens whose reference form is compacted (e.g., acetyl + cysteine => acetylcysteine).
             for start in range(token_count):
                 for end in range(start + 2, min(token_count, start + 6) + 1):
                     segment_compact = "".join(tokens[start:end])
                     if segment_compact in drugbank_display_lookup:
                         _record_match(segment_compact)
 
-            # Whole-string compact lookup as final fallback.
             whole_compact = norm.replace(" ", "")
             if whole_compact in drugbank_display_lookup:
                 _record_match(whole_compact)
 
             hits_list.append(matches)
             present_flags.append(bool(matches))
-        df["drugbank_generics_list"] = hits_list
-        df["present_in_drugbank"] = present_flags
+        data["drugbank_generics_list"] = hits_list
+        data["present_in_drugbank"] = present_flags
 
     _timed("Detect DrugBank generics", _drugbank_hits)
-
     _timed("Summarize non-therapeutic", _choose_best_nonthera)
-    df["match_basis_norm_basic"] = df["match_basis"].map(_normalize_text_basic)
+    data["match_basis_norm_basic"] = [_normalize_text_basic(val) for val in data["match_basis"]]
+    data["norm_compact"] = [re.sub(r"[\s-]", "", s) for s in data["match_basis"]]
 
-    # 9) Dose/route/form on match_basis
-    def _dose_route_form_basis():
+    def _dose_route_form_basis() -> None:
         from .dose_drugs import extract_dosage as _extract_dosage
-        basis_values = df["match_basis"].tolist()
+        basis_values = data["match_basis"]
         dosage_parsed = maybe_parallel_map(basis_values, _extract_dosage)
-        df["dosage_parsed"] = dosage_parsed
+        data["dosage_parsed"] = dosage_parsed
         route_triplets = maybe_parallel_map(basis_values, extract_route_and_form)
         if route_triplets:
             routes, forms, evidences = zip(*route_triplets)
-            df["route"] = list(routes)
-            df["form"] = list(forms)
-            df["route_evidence"] = list(evidences)
+            data["route"] = list(routes)
+            data["form"] = list(forms)
+            data["route_evidence"] = list(evidences)
         else:
-            df["route"] = []
-            df["form"] = []
-            df["route_evidence"] = []
+            data["route"] = ["" for _ in range(n_rows)]
+            data["form"] = ["" for _ in range(n_rows)]
+            data["route_evidence"] = ["" for _ in range(n_rows)]
     _timed("Parse dose/route/form (basis)", _dose_route_form_basis)
 
-    # 10) PNF hits (Aho-Corasick) on match_basis
-    def _pnf_hits():
-        primary_gid, primary_token, pnf_hits_gids, pnf_hits_tokens, pnf_hits_count = [], [], [], [], []
-        for s_norm, s_comp in zip(df["match_basis"], df["norm_compact"]):
+    def _pnf_hits() -> None:
+        primary_gid: List[Optional[str]] = []
+        primary_token: List[Optional[str]] = []
+        pnf_hits_gids: List[List[str]] = []
+        pnf_hits_tokens: List[List[str]] = []
+        pnf_hits_count: List[int] = []
+        for s_norm, s_comp in zip(data["match_basis"], data["norm_compact"]):
             gids, tokens = scan_pnf_all(s_norm, s_comp, A_norm, A_comp)
             if tokens:
                 salt_flags = []
@@ -1545,17 +1525,18 @@ def build_features(
                 gids = [g for g, _ in ordered]
                 tokens = [t for _, t in ordered]
             pnf_hits_gids.append(gids); pnf_hits_tokens.append(tokens); pnf_hits_count.append(len(gids))
-            if gids: primary_gid.append(gids[0]); primary_token.append(tokens[0])
-            else: primary_gid.append(None); primary_token.append(None)
-        df["pnf_hits_gids"] = pnf_hits_gids; df["pnf_hits_tokens"] = pnf_hits_tokens; df["pnf_hits_count"] = pnf_hits_count
-        df["generic_id"] = primary_gid; df["molecule_token"] = primary_token
+            if gids:
+                primary_gid.append(gids[0]); primary_token.append(tokens[0])
+            else:
+                primary_gid.append(None); primary_token.append(None)
+        data["pnf_hits_gids"] = pnf_hits_gids; data["pnf_hits_tokens"] = pnf_hits_tokens; data["pnf_hits_count"] = pnf_hits_count
+        data["generic_id"] = primary_gid; data["molecule_token"] = primary_token
     _timed("Scan PNF hits", _pnf_hits)
 
-    # 11) Partial PNF fallback
-    def _pnf_partial():
-        partial_gids: List[Optional[str]] = [None] * len(df)
-        partial_tokens: List[Optional[str]] = [None] * len(df)
-        for i, (gid, txt) in enumerate(zip(df["generic_id"].tolist(), df["match_basis"].tolist())):
+    def _pnf_partial() -> None:
+        partial_gids: List[Optional[str]] = [None] * n_rows
+        partial_tokens: List[Optional[str]] = [None] * n_rows
+        for i, (gid, txt) in enumerate(zip(data["generic_id"], data["match_basis"])):
             if gid is not None:
                 continue
             res = pnf_partial_idx.best_partial_in_text(str(txt))
@@ -1563,42 +1544,39 @@ def build_features(
                 pgid, matched_span = res
                 partial_gids[i] = pgid
                 partial_tokens[i] = matched_span
-        mask_partial = pd.Series([g is not None for g in partial_gids])
-        if mask_partial.any():
-            df.loc[mask_partial, "generic_id"] = [g for g in partial_gids if g is not None]
-            df.loc[mask_partial, "molecule_token"] = [t for t in partial_tokens if t is not None]
-            df.loc[mask_partial, "pnf_hits_count"] = df.loc[mask_partial, "pnf_hits_count"].fillna(0).astype(int) + 1
+        for i, gid in enumerate(partial_gids):
+            if gid is None:
+                continue
+            data["generic_id"][i] = gid
+            data["molecule_token"][i] = partial_tokens[i]
+            current_count = data["pnf_hits_count"][i] if i < len(data["pnf_hits_count"]) else 0
+            try:
+                data["pnf_hits_count"][i] = int(current_count) + 1
+            except Exception:
+                data["pnf_hits_count"][i] = 1
     _timed("Partial PNF fallback", _pnf_partial)
 
-    # 12) WHO molecule detection
-    def _who_detect():
+    def _who_detect() -> None:
         if who_regex is None:
-            df["who_molecules_list"] = [[] for _ in range(len(df))]
-            df["who_atc_codes_list"] = [[] for _ in range(len(df))]
-            df["who_molecules"] = ""
-            df["who_atc_codes"] = ""
-            df["who_atc_has_ddd"] = False
-            df["who_atc_adm_r"] = ""
-            df["who_route_tokens"] = [[] for _ in range(len(df))]
-            df["who_form_tokens"] = [[] for _ in range(len(df))]
+            data["who_molecules_list"] = [[] for _ in range(n_rows)]
+            data["who_atc_codes_list"] = [[] for _ in range(n_rows)]
+            data["who_molecules"] = ["" for _ in range(n_rows)]
+            data["who_atc_codes"] = ["" for _ in range(n_rows)]
+            data["who_atc_has_ddd"] = [False for _ in range(n_rows)]
+            data["who_atc_adm_r"] = ["" for _ in range(n_rows)]
+            data["who_route_tokens"] = [[] for _ in range(n_rows)]
+            data["who_form_tokens"] = [[] for _ in range(n_rows)]
             return
 
-        basis_values = df["match_basis"].tolist()
-        norm_basic_values = df["match_basis_norm_basic"].tolist()
-        payload = list(zip(basis_values, norm_basic_values))
-
+        payload = list(zip(data["match_basis"], data["match_basis_norm_basic"]))
         worker_count = resolve_worker_count(task_size=len(payload))
         local_context = {
             "regex": who_regex,
             "codes_by_name": codes_by_name,
             "details_by_code": who_details_by_code,
         }
-
         if worker_count <= 1:
-            results = [
-                _who_detect_core(text, norm_text, local_context)
-                for text, norm_text in payload
-            ]
+            results = [_who_detect_core(text, norm_text, local_context) for text, norm_text in payload]
         else:
             init_payload = {
                 "pattern": who_regex.pattern,
@@ -1629,49 +1607,35 @@ def build_features(
             who_route_cols = who_form_cols = []
             who_ddd_flags = []
 
-        pnf_counts = pd.to_numeric(
-            df.get("pnf_hits_count", pd.Series([0] * len(df))),
-            errors="coerce",
-        ).fillna(0).astype(int)
-        skip_who = pnf_counts.gt(0).tolist()
-        if any(skip_who):
-            who_names_all = [list() if skip else list(names) for names, skip in zip(who_names_all, skip_who)]
-            who_atc_all = [list() if skip else list(codes) for codes, skip in zip(who_atc_all, skip_who)]
-            who_ddd_flags = [False if skip else bool(flag) for flag, skip in zip(who_ddd_flags, skip_who)]
-            who_adm_r_cols = ["" if skip else adm for adm, skip in zip(who_adm_r_cols, skip_who)]
-            who_route_cols = [list() if skip else list(routes) for routes, skip in zip(who_route_cols, skip_who)]
-            who_form_cols = [list() if skip else list(forms) for forms, skip in zip(who_form_cols, skip_who)]
+        skip_who = [cnt > 0 for cnt in data["pnf_hits_count"]]
+        who_names_all = [list() if skip else list(names) for names, skip in zip(who_names_all, skip_who)]
+        who_atc_all = [list() if skip else list(codes) for codes, skip in zip(who_atc_all, skip_who)]
+        who_ddd_flags = [False if skip else bool(flag) for flag, skip in zip(who_ddd_flags, skip_who)]
+        who_adm_r_cols = ["" if skip else adm for adm, skip in zip(who_adm_r_cols, skip_who)]
+        who_route_cols = [list() if skip else list(routes) for routes, skip in zip(who_route_cols, skip_who)]
+        who_form_cols = [list() if skip else list(forms) for forms, skip in zip(who_form_cols, skip_who)]
 
-        df["who_molecules_list"] = who_names_all
-        df["who_atc_codes_list"] = who_atc_all
-        df["who_molecules"] = df["who_molecules_list"].map(lambda xs: "|".join(xs) if xs else "")
-        df["who_atc_codes"] = df["who_atc_codes_list"].map(lambda xs: "|".join(xs) if xs else "")
-        df["who_atc_has_ddd"] = who_ddd_flags
-        df["who_atc_adm_r"] = who_adm_r_cols
-        df["who_route_tokens"] = who_route_cols
-        df["who_form_tokens"] = who_form_cols
+        data["who_molecules_list"] = who_names_all
+        data["who_atc_codes_list"] = who_atc_all
+        data["who_molecules"] = ["|".join(xs) if xs else "" for xs in who_names_all]
+        data["who_atc_codes"] = ["|".join(xs) if xs else "" for xs in who_atc_all]
+        data["who_atc_has_ddd"] = who_ddd_flags
+        data["who_atc_adm_r"] = who_adm_r_cols
+        data["who_route_tokens"] = who_route_cols
+        data["who_form_tokens"] = who_form_cols
     _timed("Detect WHO molecules", _who_detect)
 
-    def _fuzzy_reference():
+    def _fuzzy_reference() -> None:
         context = _ensure_fuzzy_context()
         entries_map: Dict[str, List[Dict[str, Any]]] = context.get("entries", {})
         trigram_index_lists: Dict[str, List[str]] = context.get("trigram_index", {})
         trigram_index_sets: Dict[str, Set[str]] = context.get("trigram_index_sets", {})
         if not entries_map or not trigram_index_lists:
-            if "fuzzy_matches" not in df.columns:
-                df["fuzzy_matches"] = [[] for _ in range(len(df))]
+            data["fuzzy_matches"] = [[] for _ in range(n_rows)]
             return
+        data["fuzzy_matches"] = [[] for _ in range(n_rows)]
 
-        df["fuzzy_matches"] = [[] for _ in range(len(df))]
-
-        unresolved_mask = df["generic_id"].isna()
-        if not unresolved_mask.any():
-            return
-
-        if trigram_index_sets:
-            trigram_lookup = trigram_index_sets
-        else:
-            trigram_lookup = {tri: set(keys) for tri, keys in trigram_index_lists.items()}
+        trigram_lookup = trigram_index_sets if trigram_index_sets else {tri: set(keys) for tri, keys in trigram_index_lists.items()}
         skip_tokens = set(non_molecule_tokens) | set(brand_token_lookup)
         salt_skip = set(salt_tokens)
 
@@ -1700,10 +1664,10 @@ def build_features(
                     return True
             return False
 
-        tasks: List[Tuple[object, str]] = []
-        unresolved_indices = df.index[unresolved_mask]
-        for idx in unresolved_indices:
-            basis = df.at[idx, "match_basis_norm_basic"]
+        tasks: List[Tuple[int, str]] = []
+        for idx, (gid, basis) in enumerate(zip(data["generic_id"], data["match_basis_norm_basic"])):
+            if gid is not None:
+                continue
             if not isinstance(basis, str) or not basis:
                 continue
             if not _looks_suspicious(basis):
@@ -1754,24 +1718,20 @@ def build_features(
 
         for idx, match_list in results:
             matches: List[Dict[str, Any]] = match_list or []
-            df.at[idx, "fuzzy_matches"] = matches
+            data["fuzzy_matches"][idx] = matches
             if not matches:
                 continue
 
             best = matches[0]
             best_gid = best.get("gid")
-            if best_gid is not None:
-                current_gid = df.at[idx, "generic_id"]
-                if current_gid is None or (isinstance(current_gid, float) and pd.isna(current_gid)):
-                    df.at[idx, "generic_id"] = best_gid
-                    span = best.get("span")
-                    if span:
-                        df.at[idx, "molecule_token"] = span
+            if best_gid is not None and data["generic_id"][idx] is None:
+                data["generic_id"][idx] = best_gid
+                span = best.get("span")
+                if span:
+                    data["molecule_token"][idx] = span
 
-            current_gids_raw = df.at[idx, "pnf_hits_gids"] if "pnf_hits_gids" in df.columns else None
-            current_tokens_raw = df.at[idx, "pnf_hits_tokens"] if "pnf_hits_tokens" in df.columns else None
-            current_gids = list(current_gids_raw) if isinstance(current_gids_raw, list) else []
-            current_tokens = list(current_tokens_raw) if isinstance(current_tokens_raw, list) else []
+            current_gids = list(data["pnf_hits_gids"][idx]) if idx < len(data["pnf_hits_gids"]) else []
+            current_tokens = list(data["pnf_hits_tokens"][idx]) if idx < len(data["pnf_hits_tokens"]) else []
 
             for match in matches:
                 source = str(match.get("source", "")).lower()
@@ -1788,48 +1748,38 @@ def build_features(
                         current_tokens.append(span)
 
                 if source == "who":
-                    names_list = df.at[idx, "who_molecules_list"] if "who_molecules_list" in df.columns else []
-                    if not isinstance(names_list, list):
-                        names_list = []
-                    codes_list = df.at[idx, "who_atc_codes_list"] if "who_atc_codes_list" in df.columns else []
-                    if not isinstance(codes_list, list):
-                        codes_list = []
+                    names_list = list(data["who_molecules_list"][idx])
+                    codes_list = list(data["who_atc_codes_list"][idx])
                     if display and display not in names_list:
-                        names_list = names_list + [display]
+                        names_list.append(display)
                     for code in metadata.get("codes", []):
                         if code and code not in codes_list:
                             codes_list.append(code)
-                    df.at[idx, "who_molecules_list"] = names_list
-                    df.at[idx, "who_atc_codes_list"] = codes_list
-                    df.at[idx, "who_molecules"] = "|".join(names_list) if names_list else ""
-                    df.at[idx, "who_atc_codes"] = "|".join(codes_list) if codes_list else ""
+                    data["who_molecules_list"][idx] = names_list
+                    data["who_atc_codes_list"][idx] = codes_list
+                    data["who_molecules"][idx] = "|".join(names_list) if names_list else ""
+                    data["who_atc_codes"][idx] = "|".join(codes_list) if codes_list else ""
                 elif source == "drugbank":
-                    db_list = df.at[idx, "drugbank_generics_list"] if "drugbank_generics_list" in df.columns else []
-                    if not isinstance(db_list, list):
-                        db_list = []
+                    db_list = list(data["drugbank_generics_list"][idx])
                     if display and display not in db_list:
-                        db_list = db_list + [display]
-                    df.at[idx, "drugbank_generics_list"] = db_list
-                    if "present_in_drugbank" in df.columns:
-                        df.at[idx, "present_in_drugbank"] = bool(db_list)
+                        db_list.append(display)
+                    data["drugbank_generics_list"][idx] = db_list
+                    data["present_in_drugbank"][idx] = bool(db_list)
                 elif source == "fda":
-                    fda_list = df.at[idx, "fda_generics_list"] if "fda_generics_list" in df.columns else []
-                    if not isinstance(fda_list, list):
-                        fda_list = []
+                    fda_list = list(data["fda_generics_list"][idx])
                     if display and display not in fda_list:
-                        fda_list = fda_list + [display]
-                    df.at[idx, "fda_generics_list"] = fda_list
+                        fda_list.append(display)
+                    data["fda_generics_list"][idx] = fda_list
 
             if current_gids:
-                df.at[idx, "pnf_hits_gids"] = current_gids
-                df.at[idx, "pnf_hits_count"] = len(current_gids)
+                data["pnf_hits_gids"][idx] = current_gids
+                data["pnf_hits_count"][idx] = len(current_gids)
             if current_tokens:
-                df.at[idx, "pnf_hits_tokens"] = current_tokens
+                data["pnf_hits_tokens"][idx] = current_tokens
 
     _timed("Fuzzy reference fallback", _fuzzy_reference)
 
-    # 13) Unknown tokens extraction
-    def _unknowns():
+    def _unknowns() -> None:
         def _token_set_from_phrase_list(values: object) -> set[str]:
             tokens: set[str] = set()
             if isinstance(values, list):
@@ -1875,20 +1825,13 @@ def build_features(
             return "Multiple - Some Unknown", unknowns_uniq
 
         results: list[Tuple[str, List[str]]] = []
-        if "non_therapeutic_tokens" in df.columns:
-            nonthera_seq = df["non_therapeutic_tokens"].tolist()
-        else:
-            nonthera_seq = [[] for _ in range(len(df))]
-
-        if "fuzzy_matches" in df.columns:
-            fuzzy_seq = df["fuzzy_matches"].tolist()
-        else:
-            fuzzy_seq = [[] for _ in range(len(df))]
+        nonthera_seq = data.get("non_therapeutic_tokens", [[] for _ in range(n_rows)])
+        fuzzy_seq = data.get("fuzzy_matches", [[] for _ in range(n_rows)])
 
         for text_norm, p_hits, who_hits, fuzzy_hits, nonthera_tokens in zip(
-            df["match_basis"],
-            df["pnf_hits_tokens"],
-            df["who_molecules_list"],
+            data["match_basis"],
+            data["pnf_hits_tokens"],
+            data["who_molecules_list"],
             fuzzy_seq,
             nonthera_seq,
         ):
@@ -1907,32 +1850,39 @@ def build_features(
                 tokens_for_row = {str(t) for t in nonthera_tokens if isinstance(t, str)}
             else:
                 tokens_for_row = set()
-            results.append(_unknown_kind_and_list(text_norm, matched_tokens, tokens_for_row))
+            results.append(
+                _unknown_kind_and_list(
+                    text_norm,
+                    matched_tokens,
+                    tokens_for_row,
+                )
+            )
 
         if results:
             kinds, lists_ = zip(*results)
         else:
             kinds, lists_ = (), ()
-        df["unknown_kind"] = list(kinds)
-        df["unknown_words_list"] = list(lists_)
-        df["unknown_words"] = df["unknown_words_list"].map(lambda xs: "|".join(xs) if xs else "")
+        data["unknown_kind"] = list(kinds)
+        data["unknown_words_list"] = list(lists_)
+        data["unknown_words"] = ["|".join(xs) if xs else "" for xs in lists_]
     _timed("Extract unknown tokens", _unknowns)
 
-    # 15) Presence flags
-    def _presence_flags():
-        df["present_in_pnf"] = df["pnf_hits_count"].astype(int).gt(0)
-        df["present_in_who"] = df["who_atc_codes"].astype(str).str.len().gt(0)
-        df["present_in_fda_generic"] = df["match_basis"].map(lambda s: any(tok in fda_gens for tok in _tokenize_unknowns(_segment_norm(s))))
-        if "drugbank_generics_list" in df.columns:
-            df["present_in_drugbank"] = df["drugbank_generics_list"].map(lambda xs: bool(xs))
-        else:
-            df["present_in_drugbank"] = False
-        df["reference_source"] = df["generic_id"].map(lambda gid: gid_to_source.get(str(gid), "") if gid is not None else "")
-        df["reference_priority"] = df["generic_id"].map(lambda gid: gid_to_priority.get(str(gid), 99) if gid is not None else 99)
-        df["reference_primary_code"] = df["generic_id"].map(lambda gid: gid_to_primary_code.get(str(gid), "") if gid is not None else "")
-        df["reference_drug_code"] = df["generic_id"].map(lambda gid: gid_to_drug_code.get(str(gid), "") if gid is not None else "")
-        df["reference_route_details"] = df["generic_id"].map(lambda gid: gid_to_route_ref.get(str(gid), "") if gid is not None else "")
-        df["present_in_annex"] = df["reference_source"].str.lower().eq("annex_f") & df["generic_id"].notna()
+    def _presence_flags() -> None:
+        data["present_in_pnf"] = [int(c) > 0 for c in data["pnf_hits_count"]]
+        data["present_in_who"] = [bool(str(v)) for v in data["who_atc_codes"]]
+        data["present_in_fda_generic"] = [
+            any(tok in fda_gens for tok in _tokenize_unknowns(_segment_norm(s))) for s in data["match_basis"]
+        ]
+        if "present_in_drugbank" not in data:
+            data["present_in_drugbank"] = [bool(lst) for lst in data.get("drugbank_generics_list", [[] for _ in range(n_rows)])]
+        data["reference_source"] = [gid_to_source.get(str(gid), "") if gid is not None else "" for gid in data["generic_id"]]
+        data["reference_priority"] = [gid_to_priority.get(str(gid), 99) if gid is not None else 99 for gid in data["generic_id"]]
+        data["reference_primary_code"] = [gid_to_primary_code.get(str(gid), "") if gid is not None else "" for gid in data["generic_id"]]
+        data["reference_drug_code"] = [gid_to_drug_code.get(str(gid), "") if gid is not None else "" for gid in data["generic_id"]]
+        data["reference_route_details"] = [gid_to_route_ref.get(str(gid), "") if gid is not None else "" for gid in data["generic_id"]]
+        data["present_in_annex"] = [
+            str(src).lower() == "annex_f" and gid is not None for src, gid in zip(data["reference_source"], data["generic_id"])
+        ]
     _timed("Compute presence flags", _presence_flags)
 
-    return df
+    return pl.DataFrame(data)

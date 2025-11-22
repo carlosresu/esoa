@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Profile run_drugs_all_parts.main_entry with pyinstrument and write reports under ./outputs.
+"""
+Profile the Polars/Parquet-first drugs pipeline (run_drugs_all_parts.main_entry) with pyinstrument.
 
-Usage mirrors run_drugs_all_parts; pass the same CLI flags. Produces HTML and text
-profiling artifacts timestamped inside the DrugsAndMedicine outputs directory so
-teams can inspect the hottest sections of the pipeline end-to-end.
+Usage mirrors run_drugs_all_parts; pass the same CLI flags. Produces HTML and text profiling
+artifacts timestamped inside the DrugsAndMedicine outputs directory so teams can inspect the
+hottest sections of the Polars pipeline end-to-end.
 """
 from __future__ import annotations
 
 from datetime import datetime
-from pathlib import Path
 import subprocess
 import sys
 
