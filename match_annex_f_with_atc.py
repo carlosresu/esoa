@@ -5,11 +5,12 @@ from __future__ import annotations
 import concurrent.futures
 import math
 import os
-from collections import Counter
+import re
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Iterable, List
 
-import pandas as pd
+import polars as pl
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -17,6 +18,12 @@ DRUGS_DIR = BASE_DIR / "inputs" / "drugs"
 OUTPUTS_DIR = BASE_DIR / "outputs"
 OUTPUTS_DRUGS_DIR = OUTPUTS_DIR / "drugs"
 _REFERENCE_ROWS_SHARED: list[dict] | None = None
+_REFERENCE_INDEX_SHARED: dict[str, list[int]] | None = None
+_BRAND_PATTERNS_SHARED: list[tuple[re.Pattern, str]] | None = None
+_GENERIC_PHRASES_SHARED: list[str] | None = None
+_GENERIC_AUTOMATON_SHARED = None
+_MIXTURE_LOOKUP_SHARED: dict[str, list[dict]] | None = None
+_DRUGBANK_BY_ID_SHARED: dict[str, list[dict]] | None = None
 
 
 def _strip_commas(token: str) -> str:
@@ -80,6 +87,29 @@ def tokens_from_field(value) -> List[str]:
     return split_with_parentheses(text)
 
 
+def _read_table(base_path: Path, required: bool = True) -> pl.DataFrame:
+    parquet_path = base_path.with_suffix(".parquet")
+    if parquet_path.exists():
+        return pl.read_parquet(parquet_path)
+    if base_path.exists():
+        df = pl.read_csv(base_path)
+        try:
+            parquet_path.parent.mkdir(parents=True, exist_ok=True)
+            df.write_parquet(parquet_path)
+        except Exception:
+            pass
+        return df
+    if required:
+        raise FileNotFoundError(base_path)
+    return pl.DataFrame()
+
+
+def _write_csv_and_parquet(df: pl.DataFrame, csv_path: Path) -> None:
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    df.write_csv(csv_path)
+    df.write_parquet(csv_path.with_suffix(".parquet"))
+
+
 def parse_pipe_tokens(value) -> List[str]:
     if value is None:
         return []
@@ -116,6 +146,455 @@ def _ordered_overlap(
     return overlap
 
 
+_NUMERIC_RX = re.compile(r"^-?\d+(?:\.\d+)?$")
+_COMBINED_WEIGHT_RX = re.compile(r"^(-?[\d,.]+)\s*(MG|G|MCG|UG|KG)$", re.IGNORECASE)
+_WEIGHT_UNIT_FACTORS = {
+    "MG": 1.0,
+    "G": 1000.0,
+    "MCG": 0.001,
+    "UG": 0.001,
+    "KG": 1_000_000.0,
+}
+_UNIT_TOKENS = {"MG", "G", "MCG", "UG", "KG", "ML", "L"}
+
+NATURAL_STOPWORDS = {
+    "AS",
+    "IN",
+    "FOR",
+    "TO",
+    "WITH",
+    "EQUIV",
+    "EQUIV.",
+    "AND",
+    "OF",
+    "OR",
+    "NOT",
+    "THAN",
+    "HAS",
+    "DURING",
+    "THIS",
+    "W/",
+    "W",
+    "PLUS",
+    "APPROX",
+    "APPROXIMATELY",
+    "PRE",
+    "FILLED",
+    "PRE-FILLED",
+}
+
+FORM_CANON = {
+    "TAB": "TABLET",
+    "TABS": "TABLET",
+    "TABLET": "TABLET",
+    "TABLETS": "TABLET",
+    "CAP": "CAPSULE",
+    "CAPS": "CAPSULE",
+    "CAPSULE": "CAPSULE",
+    "CAPSULES": "CAPSULE",
+    "BOT": "BOTTLE",
+    "BOTT": "BOTTLE",
+    "BOTTLE": "BOTTLE",
+    "BOTTLES": "BOTTLE",
+    "VIAL": "VIAL",
+    "VIALS": "VIAL",
+    "INJ": "INJECTION",
+    "INJECTABLE": "INJECTION",
+    "SYR": "SYRUP",
+    "SYRUP": "SYRUP",
+}
+
+ROUTE_CANON = {
+    "PO": "ORAL",
+    "OR": "ORAL",
+    "ORAL": "ORAL",
+    "IV": "INTRAVENOUS",
+    "INTRAVENOUS": "INTRAVENOUS",
+    "IM": "INTRAMUSCULAR",
+    "INTRAMUSCULAR": "INTRAMUSCULAR",
+    "SC": "SUBCUTANEOUS",
+    "SUBCUTANEOUS": "SUBCUTANEOUS",
+    "SUBCUT": "SUBCUTANEOUS",
+    "NASAL": "NASAL",
+    "TOPICAL": "TOPICAL",
+    "RECTAL": "RECTAL",
+    "OPHTHALMIC": "OPHTHALMIC",
+    "BUCCAL": "BUCCAL",
+}
+
+SALT_TOKENS = {
+    "CALCIUM",
+    "SODIUM",
+    "POTASSIUM",
+    "MAGNESIUM",
+    "ZINC",
+    "AMMONIUM",
+    "MEGLUMINE",
+    "ALUMINUM",
+    "HYDROCHLORIDE",
+    "NITRATE",
+    "NITRITE",
+    "SULFATE",
+    "SULPHATE",
+    "PHOSPHATE",
+    "DIHYDROGEN PHOSPHATE",
+    "HYDROXIDE",
+    "DIPROPIONATE",
+    "ACETATE",
+    "TARTRATE",
+    "FUMARATE",
+    "OXALATE",
+    "MALEATE",
+    "MESYLATE",
+    "TOSYLATE",
+    "BESYLATE",
+    "BESILATE",
+    "BITARTRATE",
+    "SUCCINATE",
+    "CITRATE",
+    "LACTATE",
+    "GLUCONATE",
+    "BICARBONATE",
+    "CARBONATE",
+    "BROMIDE",
+    "CHLORIDE",
+    "IODIDE",
+    "SELENITE",
+    "THIOSULFATE",
+    "DIHYDRATE",
+    "TRIHYDRATE",
+    "MONOHYDRATE",
+    "HYDRATE",
+    "HEMIHYDRATE",
+    "ANHYDROUS",
+    "DECANOATE",
+    "PALMITATE",
+    "STEARATE",
+    "PAMOATE",
+    "BENZOATE",
+    "VALERATE",
+    "PROPIONATE",
+    "HYDROBROMIDE",
+    "DOCUSATE",
+    "HEMISUCCINATE",
+}
+
+CATEGORY_GENERIC = "generic"
+CATEGORY_SALT = "salt"
+CATEGORY_DOSE = "dose"
+CATEGORY_FORM = "form"
+CATEGORY_ROUTE = "route"
+CATEGORY_OTHER = "other"
+
+PRIMARY_WEIGHTS = {
+    CATEGORY_GENERIC: 5,
+    CATEGORY_SALT: 4,
+    CATEGORY_DOSE: 4,
+    CATEGORY_FORM: 3,
+    CATEGORY_ROUTE: 3,
+    CATEGORY_OTHER: 1,
+}
+SECONDARY_WEIGHTS = {
+    CATEGORY_GENERIC: 3,
+    CATEGORY_SALT: 3,
+    CATEGORY_DOSE: 3,
+    CATEGORY_FORM: 4,
+    CATEGORY_ROUTE: 4,
+    CATEGORY_OTHER: 1,
+}
+
+
+def _is_numeric_token(token: str) -> bool:
+    if not isinstance(token, str):
+        return False
+    return bool(_NUMERIC_RX.match(token.strip()))
+
+
+def _format_number_text(value) -> str:
+    formatted = format_number_token(value)
+    return formatted if formatted is not None else ""
+
+
+def _convert_to_mg(number_text: str, unit: str) -> str | None:
+    try:
+        num = float(str(number_text).replace(",", ""))
+    except Exception:
+        return None
+    factor = _WEIGHT_UNIT_FACTORS.get(unit.upper())
+    if factor is None:
+        return None
+    mg_val = num * factor
+    return _format_number_text(mg_val)
+
+
+def _normalize_tokens(tokens: List[str], drop_stopwords: bool = False) -> List[str]:
+    expanded: List[str] = []
+    for tok in tokens:
+        if tok is None:
+            continue
+        expanded.extend(str(tok).split())
+
+    normalized: List[str] = []
+    i = 0
+    while i < len(expanded):
+        raw_tok = expanded[i]
+        tok_clean = raw_tok.replace(",", "").strip("()").strip()
+        tok_upper = tok_clean.upper()
+
+        if tok_upper.endswith("%") and _is_numeric_token(tok_upper.rstrip("%")):
+            pct_val = _format_number_text(tok_upper.rstrip("%"))
+            if pct_val:
+                normalized.append(pct_val)
+                normalized.append("PCT")
+            i += 1
+            continue
+
+        combined_match = _COMBINED_WEIGHT_RX.match(tok_upper)
+        if combined_match:
+            mg_val = _convert_to_mg(combined_match.group(1), combined_match.group(2))
+            if mg_val:
+                normalized.append(mg_val)
+                normalized.append("MG")
+            i += 1
+            continue
+
+        if _is_numeric_token(tok_upper) and i + 1 < len(expanded):
+            next_clean = expanded[i + 1].replace(",", "").strip("()").strip().upper()
+            if next_clean in _WEIGHT_UNIT_FACTORS:
+                mg_val = _convert_to_mg(tok_upper, next_clean)
+                if mg_val:
+                    normalized.append(mg_val)
+                    normalized.append("MG")
+                    i += 2
+                    continue
+
+        if _is_numeric_token(tok_upper):
+            tok_upper = _format_number_text(tok_upper)
+
+        tok_upper = FORM_CANON.get(tok_upper, tok_upper)
+        tok_upper = ROUTE_CANON.get(tok_upper, tok_upper)
+
+        # Always drop purely natural-language stopwords.
+        if tok_upper == "PER":
+            prev = normalized[-1] if normalized else None
+            next_tok = (
+                expanded[i + 1].replace(",", "").strip("()").strip().upper()
+                if i + 1 < len(expanded)
+                else None
+            )
+            if not (
+                (prev and (_is_numeric_token(prev) or prev in _UNIT_TOKENS))
+                or (next_tok and (_is_numeric_token(next_tok) or next_tok in _UNIT_TOKENS))
+            ):
+                i += 1
+                continue
+        if tok_upper in NATURAL_STOPWORDS or not tok_upper:
+            i += 1
+            continue
+
+        normalized.append(tok_upper)
+        i += 1
+    return normalized
+
+
+def _classify_token(token: str) -> str:
+    tok = token.upper()
+    if tok in FORM_CANON.values():
+        return CATEGORY_FORM
+    if tok in ROUTE_CANON.values():
+        return CATEGORY_ROUTE
+    if tok in SALT_TOKENS:
+        return CATEGORY_SALT
+    if tok in {"MG", "G", "MCG", "UG", "KG", "ML", "L", "PCT"} or _is_numeric_token(tok):
+        return CATEGORY_DOSE
+    return CATEGORY_GENERIC
+
+
+def _categorize_tokens(tokens: List[str]) -> dict[str, Counter]:
+    cat_counts: dict[str, Counter] = {
+        CATEGORY_GENERIC: Counter(),
+        CATEGORY_SALT: Counter(),
+        CATEGORY_DOSE: Counter(),
+        CATEGORY_FORM: Counter(),
+        CATEGORY_ROUTE: Counter(),
+        CATEGORY_OTHER: Counter(),
+    }
+    for tok in tokens:
+        cat = _classify_token(tok)
+        if cat not in cat_counts:
+            cat = CATEGORY_OTHER
+        cat_counts[cat][tok] += 1
+    return cat_counts
+
+
+def _build_brand_map(fda_df: pl.DataFrame) -> list[tuple[re.Pattern, str]]:
+    patterns: list[tuple[re.Pattern, str]] = []
+    for row in fda_df.to_dicts():
+        brand = _as_str_or_empty(row.get("brand_name")).strip()
+        generic = _as_str_or_empty(row.get("generic_name")).strip()
+        if not brand or not generic:
+            continue
+        pat = re.compile(rf"(?i)\b{re.escape(brand)}\b")
+        patterns.append((pat, generic))
+    return patterns
+
+
+def _apply_brand_swaps(text: str, brand_patterns: list[tuple[re.Pattern, str]]) -> str:
+    if not isinstance(text, str):
+        return ""
+    updated = text
+    for pat, repl in brand_patterns:
+        updated = pat.sub(repl, updated)
+    return updated
+
+
+def _build_aho_automaton(phrases: list[str]):
+    root = {"next": {}, "fail": None, "out": []}
+    for phrase in phrases:
+        node = root
+        for ch in phrase:
+            node = node["next"].setdefault(ch, {"next": {}, "fail": None, "out": []})
+        node["out"].append(phrase)
+    queue = []
+    for child in root["next"].values():
+        child["fail"] = root
+        queue.append(child)
+    while queue:
+        current = queue.pop(0)
+        for ch, nxt in current["next"].items():
+            queue.append(nxt)
+            f = current["fail"]
+            while f and ch not in f["next"]:
+                f = f["fail"]
+            nxt["fail"] = f["next"][ch] if f and ch in f["next"] else root
+            nxt["out"].extend(nxt["fail"]["out"] if nxt["fail"] else [])
+    return root
+
+
+def _aho_find(text: str, automaton) -> set[str]:
+    node = automaton
+    matches: set[str] = set()
+    for ch in text:
+        while node and ch not in node["next"]:
+            node = node["fail"]
+        if not node:
+            node = automaton
+            continue
+        node = node["next"][ch]
+        for out in node.get("out", []):
+            matches.add(out)
+    return matches
+
+
+def _normalize_phrase(text: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", text.lower())).strip()
+
+
+def _build_mixture_lookup(mixture_df: pl.DataFrame) -> dict[str, list[dict]]:
+    lookup: dict[str, list[dict]] = {}
+    for row in mixture_df.to_dicts():
+        raw_key = _as_str_or_empty(row.get("ingredient_components_key"))
+        if not raw_key:
+            continue
+        parts = [_normalize_phrase(part) for part in raw_key.split("||") if part]
+        if not parts:
+            continue
+        key = "||".join(sorted(parts))
+        lookup.setdefault(key, []).append(row.to_dict())
+    return lookup
+
+
+def _build_generic_phrases(drugbank_df: pl.DataFrame) -> list[str]:
+    phrases: set[str] = set()
+    for row in drugbank_df.to_dicts():
+        for col in ("canonical_generic_name", "lexeme"):
+            phrase = _normalize_phrase(_as_str_or_empty(row.get(col)))
+            if len(phrase) >= 3:
+                phrases.add(phrase)
+    return sorted(phrases)
+
+
+def _normalize_annex_df(df: pl.DataFrame, brand_patterns: list[tuple[re.Pattern, str]]) -> pl.DataFrame:
+    if not df.height:
+        return df
+    descriptions = df["Drug Description"].to_list()
+    fuzzy_vals = []
+    for desc in descriptions:
+        description = _apply_brand_swaps(_as_str_or_empty(desc), brand_patterns)
+        base_tokens = split_with_parentheses(description)
+        normalized_tokens = _normalize_tokens(base_tokens, drop_stopwords=False)
+        fuzzy_vals.append("|".join(normalized_tokens))
+    return df.with_columns(pl.Series("fuzzy_basis", fuzzy_vals))
+
+
+def _build_reference_display(raw_ref: dict) -> str | None:
+    if not raw_ref:
+        return None
+    parts: list[str] = []
+
+    generic = None
+    for key in ("canonical_generic_name", "generic_name", "atc_name", "lexeme", "generic_components"):
+        text = _as_str_or_empty(raw_ref.get(key))
+        if text:
+            generic = text
+            break
+    if generic:
+        parts.append(generic)
+
+    dose_piece = None
+    for key in ("dose_norm", "raw_dose", "strength_mg", "strength", "pct", "per_val"):
+        text = _as_str_or_empty(raw_ref.get(key))
+        if text:
+            dose_piece = text
+            break
+
+    unit_piece = None
+    for key in ("unit", "per_unit"):
+        text = _as_str_or_empty(raw_ref.get(key))
+        if text:
+            unit_piece = text
+            break
+
+    if dose_piece:
+        parts.append(dose_piece)
+    if unit_piece:
+        parts.append(unit_piece)
+
+    salt = None
+    for key in ("salt_names", "salt_form"):
+        text = _as_str_or_empty(raw_ref.get(key))
+        if text:
+            salt = text
+            break
+    if salt:
+        parts.append(salt)
+
+    form = None
+    for key in ("form_norm", "raw_form", "form_token"):
+        text = _as_str_or_empty(raw_ref.get(key))
+        if text:
+            form = text
+            break
+    if form:
+        parts.append(form)
+
+    route = None
+    for key in ("route_norm", "raw_route", "route_allowed", "adm_r"):
+        text = _as_str_or_empty(raw_ref.get(key))
+        if text:
+            route = text
+            break
+    if route:
+        parts.append(route)
+
+    display = " ".join(part for part in parts if part).strip()
+    if display:
+        return display
+
+    lex = _as_str_or_empty(raw_ref.get("lexicon"))
+    return lex or None
+
+
 def _reference_sort_key(rec: dict) -> tuple[int, str, str]:
     source_priority = {"pnf": 0, "drugbank": 1, "who": 2}
     priority = source_priority.get(rec.get("source"), 99)
@@ -124,11 +603,13 @@ def _reference_sort_key(rec: dict) -> tuple[int, str, str]:
     return (priority, name, ident)
 
 
-def build_pnf_reference(df: pd.DataFrame) -> list[dict]:
+def build_pnf_reference(df: pl.DataFrame) -> list[dict]:
     rows = []
-    for _, row in df.iterrows():
+    for row in df.to_dicts():
         lexicon = _as_str_or_empty(row.get("lexicon"))
         lexicon_secondary = _as_str_or_empty(row.get("lexicon_secondary"))
+        primary_tokens = _normalize_tokens(parse_pipe_tokens(lexicon), drop_stopwords=True)
+        secondary_tokens = _normalize_tokens(parse_pipe_tokens(lexicon_secondary), drop_stopwords=False)
         rows.append(
             {
                 "source": "pnf",
@@ -136,28 +617,35 @@ def build_pnf_reference(df: pd.DataFrame) -> list[dict]:
                 "name": _maybe_none(row.get("generic_name")),
                 "lexicon": lexicon,
                 "lexicon_secondary": lexicon_secondary,
-                "primary_tokens": parse_pipe_tokens(lexicon),
-                "secondary_tokens": parse_pipe_tokens(lexicon_secondary),
+                "primary_tokens": primary_tokens,
+                "secondary_tokens": secondary_tokens,
+                "primary_cat_counts": _categorize_tokens(primary_tokens),
+                "secondary_cat_counts": _categorize_tokens(secondary_tokens),
                 "atc_code": _maybe_none(row.get("atc_code")),
+                "raw_reference_row": row.to_dict(),
             }
         )
     return rows
 
 
-def build_drugbank_reference(df: pd.DataFrame) -> list[dict]:
+def build_drugbank_reference(df: pl.DataFrame) -> list[dict]:
     rows = []
-    for _, row in df.iterrows():
+    for row in df.to_dicts():
         primary_tokens: List[str] = []
         for col in ("lexeme", "generic_components_key", "canonical_generic_name"):
             primary_tokens.extend(split_with_parentheses(row.get(col)))
+        primary_tokens = _normalize_tokens(primary_tokens, drop_stopwords=True)
 
         secondary_tokens: List[str] = []
         for col in ("route_norm", "form_norm", "salt_names", "dose_norm"):
             secondary_tokens.extend(split_with_parentheses(row.get(col)))
+        secondary_tokens = _normalize_tokens(secondary_tokens, drop_stopwords=False)
 
         name = _maybe_none(row.get("canonical_generic_name")) or _maybe_none(
             row.get("lexeme")
         )
+
+        raw_reference_row = row.to_dict()
 
         rows.append(
             {
@@ -168,20 +656,24 @@ def build_drugbank_reference(df: pd.DataFrame) -> list[dict]:
                 "lexicon_secondary": "|".join(secondary_tokens),
                 "primary_tokens": primary_tokens,
                 "secondary_tokens": secondary_tokens,
+                "primary_cat_counts": _categorize_tokens(primary_tokens),
+                "secondary_cat_counts": _categorize_tokens(secondary_tokens),
                 "atc_code": _maybe_none(row.get("atc_code")),
+                "raw_reference_row": raw_reference_row,
             }
         )
     return rows
 
 
-def build_who_reference(df: pd.DataFrame) -> list[dict]:
+def build_who_reference(df: pl.DataFrame) -> list[dict]:
     rows = []
-    for _, row in df.iterrows():
-        primary_tokens = split_with_parentheses(row.get("atc_name"))
+    for row in df.to_dicts():
+        primary_tokens = _normalize_tokens(split_with_parentheses(row.get("atc_name")), drop_stopwords=True)
 
         secondary_tokens: List[str] = []
         for col in ("adm_r", "uom"):
             secondary_tokens.extend(split_with_parentheses(row.get(col)))
+        secondary_tokens = _normalize_tokens(secondary_tokens, drop_stopwords=False)
 
         rows.append(
             {
@@ -192,14 +684,17 @@ def build_who_reference(df: pd.DataFrame) -> list[dict]:
                 "lexicon_secondary": "|".join(secondary_tokens),
                 "primary_tokens": primary_tokens,
                 "secondary_tokens": secondary_tokens,
+                "primary_cat_counts": _categorize_tokens(primary_tokens),
+                "secondary_cat_counts": _categorize_tokens(secondary_tokens),
                 "atc_code": _maybe_none(row.get("atc_code")),
+                "raw_reference_row": row.to_dict(),
             }
         )
     return rows
 
 
 def build_reference_rows(
-    pnf_df: pd.DataFrame, drugbank_df: pd.DataFrame, who_df: pd.DataFrame
+    pnf_df: pl.DataFrame, drugbank_df: pl.DataFrame, who_df: pl.DataFrame
 ) -> list[dict]:
     refs: list[dict] = []
     refs.extend(build_pnf_reference(pnf_df))
@@ -208,11 +703,12 @@ def build_reference_rows(
     return refs
 
 
-def _empty_match_record(annex_row: pd.Series) -> dict:
+def _empty_match_record(annex_row: dict) -> dict:
     return {
         "Drug Code": annex_row.get("Drug Code"),
         "Drug Description": annex_row.get("Drug Description"),
         "fuzzy_basis": _as_str_or_empty(annex_row.get("fuzzy_basis")),
+        "matched_reference_raw": None,
         "matched_source": None,
         "matched_generic_name": None,
         "matched_lexicon": None,
@@ -220,16 +716,23 @@ def _empty_match_record(annex_row: pd.Series) -> dict:
         "matched_secondary_lexicon": None,
         "secondary_match_count": None,
         "atc_code": None,
+        "primary_matching_tokens": None,
+        "secondary_matching_tokens": None,
     }
 
 
 def _build_match_record(
-    annex_row: pd.Series, ref: dict, primary_score: int, secondary_score: int
+    annex_row: dict, ref: dict, primary_score: int, secondary_score: int
 ) -> dict:
+    primary_overlap = ref.get("primary_overlap") or []
+    secondary_overlap = ref.get("secondary_overlap") or []
+    raw_ref = ref.get("raw_reference_row") or {}
+    raw_display = _build_reference_display(raw_ref)
     return {
         "Drug Code": annex_row.get("Drug Code"),
         "Drug Description": annex_row.get("Drug Description"),
         "fuzzy_basis": _as_str_or_empty(annex_row.get("fuzzy_basis")),
+        "matched_reference_raw": raw_display,
         "matched_source": ref.get("source"),
         "matched_generic_name": ref.get("name"),
         "matched_lexicon": ref.get("lexicon"),
@@ -237,30 +740,98 @@ def _build_match_record(
         "matched_secondary_lexicon": ref.get("lexicon_secondary"),
         "secondary_match_count": secondary_score,
         "atc_code": ref.get("atc_code"),
+        "primary_matching_tokens": "|".join(primary_overlap) if primary_overlap else None,
+        "secondary_matching_tokens": "|".join(secondary_overlap) if secondary_overlap else None,
     }
 
 
 def _score_annex_row(
-    annex_row: dict, reference_rows: list[dict]
+    annex_row: dict,
+    reference_rows: list[dict],
+    reference_index: dict[str, list[int]],
+    brand_patterns: list[tuple[re.Pattern, str]],
+    generic_automaton,
+    mixture_lookup: dict[str, list[dict]],
+    drugbank_refs_by_id: dict[str, list[dict]],
 ) -> tuple[dict, list[dict], list[dict]]:
     matched_rows: list[dict] = []
     tie_rows: list[dict] = []
     unresolved_rows: list[dict] = []
 
-    fuzzy_tokens = parse_pipe_tokens(annex_row.get("fuzzy_basis"))
-    fuzzy_counts = Counter(fuzzy_tokens)
-    if not fuzzy_tokens:
+    description = _apply_brand_swaps(_as_str_or_empty(annex_row.get("Drug Description")), brand_patterns)
+    base_tokens = split_with_parentheses(description)
+    fuzzy_tokens_primary = _normalize_tokens(base_tokens, drop_stopwords=True)
+    fuzzy_tokens_secondary = _normalize_tokens(base_tokens, drop_stopwords=False)
+    fuzzy_basis_val = "|".join(fuzzy_tokens_secondary)
+    annex_row["fuzzy_basis"] = fuzzy_basis_val
+
+    fuzzy_counts_primary = Counter(fuzzy_tokens_primary)
+    fuzzy_counts_secondary = Counter(fuzzy_tokens_secondary)
+    annex_cat_primary = _categorize_tokens(fuzzy_tokens_primary)
+    annex_cat_secondary = _categorize_tokens(fuzzy_tokens_secondary)
+
+    if not fuzzy_tokens_primary:
         matched_rows.append(_empty_match_record(annex_row))
         return matched_rows[0], tie_rows, unresolved_rows
 
-    best_primary = 0
+    candidate_indices: set[int] = set()
+    for tok in fuzzy_tokens_primary:
+        for idx in reference_index.get(tok, ()):
+            candidate_indices.add(idx)
+    if not candidate_indices:
+        candidate_refs = list(reference_rows)
+    else:
+        candidate_refs = [reference_rows[i] for i in sorted(candidate_indices)]
+
+    # Mixture detection via Aho-Corasick on normalized phrase.
+    norm_desc = _normalize_phrase(description)
+    generic_hits = _aho_find(norm_desc, generic_automaton) if generic_automaton else set()
+    if len(generic_hits) >= 2:
+        component_key = "||".join(sorted(generic_hits))
+        mixture_rows = mixture_lookup.get(component_key, [])
+        for mix in mixture_rows:
+            mix_id = _as_str_or_empty(mix.get("mixture_drugbank_id")) or _as_str_or_empty(mix.get("mixture_id"))
+            mix_name = _as_str_or_empty(mix.get("mixture_name"))
+            attached = False
+            if mix_id and mix_id in drugbank_refs_by_id:
+                candidate_refs.extend(drugbank_refs_by_id[mix_id])
+                attached = True
+            if not attached:
+                primary_tokens = _normalize_tokens(split_with_parentheses(mix_name), drop_stopwords=True)
+                secondary_tokens = _normalize_tokens(split_with_parentheses(mix_name), drop_stopwords=False)
+                candidate_refs.append(
+                    {
+                        "source": "drugbank_mixture",
+                        "id": mix_id or mix.get("mixture_id"),
+                        "name": mix_name,
+                        "lexicon": "|".join(primary_tokens),
+                        "lexicon_secondary": "|".join(secondary_tokens),
+                        "primary_tokens": primary_tokens,
+                        "secondary_tokens": secondary_tokens,
+                        "primary_cat_counts": _categorize_tokens(primary_tokens),
+                        "secondary_cat_counts": _categorize_tokens(secondary_tokens),
+                        "atc_code": None,
+                        "raw_reference_row": mix,
+                    }
+                )
+
+    best_primary = -10**9
     best_primary_records: list[dict] = []
-    for ref in reference_rows:
+    for ref in candidate_refs:
         primary_overlap = _ordered_overlap(
-            fuzzy_tokens, fuzzy_counts, ref.get("primary_tokens", ())
+            fuzzy_tokens_primary, fuzzy_counts_primary, ref.get("primary_tokens", ())
         )
-        primary_score = len(primary_overlap)
-        if primary_score == 0 or primary_score < best_primary:
+        ref_primary_counts = ref.get("primary_cat_counts", {})
+        cat_scores = []
+        for cat, ref_counts in ref_primary_counts.items():
+            match_count = sum((annex_cat_primary.get(cat, Counter()) & ref_counts).values())
+            mismatch = max(0, sum(ref_counts.values()) - match_count)
+            weight = PRIMARY_WEIGHTS.get(cat, 1)
+            cat_scores.append(weight * match_count - mismatch)
+        primary_score = sum(cat_scores)
+        if primary_score == 0:
+            continue
+        if primary_score < best_primary:
             continue
         if primary_score > best_primary:
             best_primary_records = []
@@ -273,17 +844,30 @@ def _score_annex_row(
             }
         )
 
-    if not best_primary_records or best_primary == 0:
+    if not best_primary_records or best_primary == -10**9:
         matched_rows.append(_empty_match_record(annex_row))
         return matched_rows[0], tie_rows, unresolved_rows
 
-    best_secondary = -1
+    best_secondary = -10**9
     finalists: list[dict] = []
     for rec in best_primary_records:
         secondary_overlap = _ordered_overlap(
-            fuzzy_tokens, fuzzy_counts, rec.get("secondary_tokens", ())
+            fuzzy_tokens_secondary, fuzzy_counts_secondary, rec.get("secondary_tokens", ())
         )
-        secondary_score = len(secondary_overlap)
+        ref_secondary_counts = rec.get("secondary_cat_counts", {})
+        cat_scores = []
+        for cat, ref_counts in ref_secondary_counts.items():
+            match_count = sum((annex_cat_secondary.get(cat, Counter()) & ref_counts).values())
+            mismatch = max(0, sum(ref_counts.values()) - match_count)
+            weight = SECONDARY_WEIGHTS.get(cat, 1)
+            bonus = 0
+            if cat == CATEGORY_DOSE:
+                numeric_match = sum(
+                    (annex_cat_secondary.get(cat, Counter()) & ref_counts).values()
+                )
+                bonus = numeric_match
+            cat_scores.append(weight * match_count + bonus - mismatch)
+        secondary_score = sum(cat_scores)
         if secondary_score > best_secondary:
             finalists = []
             best_secondary = secondary_score
@@ -310,6 +894,24 @@ def _score_annex_row(
     sorted_finalists = sorted(finalists, key=_reference_sort_key)
     atc_set = {_as_str_or_empty(rec.get("atc_code")) for rec in sorted_finalists}
     if len(atc_set) == 1:
+        def _form_route_score(rec: dict) -> tuple[int, int]:
+            sec_counts = rec.get("secondary_cat_counts", {})
+            form_match = sum(
+                (annex_cat_secondary.get(CATEGORY_FORM, Counter()) & sec_counts.get(CATEGORY_FORM, Counter())).values()
+            )
+            route_match = sum(
+                (annex_cat_secondary.get(CATEGORY_ROUTE, Counter()) & sec_counts.get(CATEGORY_ROUTE, Counter())).values()
+            )
+            return (route_match, form_match)
+
+        sorted_finalists = sorted(
+            sorted_finalists,
+            key=lambda rec: (
+                -_form_route_score(rec)[0],
+                -_form_route_score(rec)[1],
+                _reference_sort_key(rec),
+            ),
+        )
         winner = sorted_finalists[0]
         matched_rows.append(
             _build_match_record(annex_row, winner, best_primary, best_secondary)
@@ -343,15 +945,60 @@ def _init_reference_rows(reference_rows: list[dict]) -> None:
     _REFERENCE_ROWS_SHARED = reference_rows
 
 
+def _init_shared(
+    reference_rows: list[dict],
+    reference_index: dict[str, list[int]],
+    brand_patterns: list[tuple[re.Pattern, str]],
+    generic_phrases: list[str],
+    mixture_lookup: dict[str, list[dict]],
+    drugbank_refs_by_id: dict[str, list[dict]],
+) -> None:
+    global _REFERENCE_ROWS_SHARED
+    global _REFERENCE_INDEX_SHARED
+    global _BRAND_PATTERNS_SHARED
+    global _GENERIC_PHRASES_SHARED
+    global _GENERIC_AUTOMATON_SHARED
+    global _MIXTURE_LOOKUP_SHARED
+    global _DRUGBANK_BY_ID_SHARED
+    _REFERENCE_ROWS_SHARED = reference_rows
+    _REFERENCE_INDEX_SHARED = reference_index
+    _BRAND_PATTERNS_SHARED = brand_patterns
+    _GENERIC_PHRASES_SHARED = generic_phrases
+    _GENERIC_AUTOMATON_SHARED = _build_aho_automaton(generic_phrases) if generic_phrases else None
+    _MIXTURE_LOOKUP_SHARED = mixture_lookup
+    _DRUGBANK_BY_ID_SHARED = drugbank_refs_by_id
+
+
 def _process_annex_row_worker(annex_row: dict) -> tuple[dict, list[dict], list[dict]]:
     reference_rows = _REFERENCE_ROWS_SHARED or []
-    return _score_annex_row(annex_row, reference_rows)
+    reference_index = _REFERENCE_INDEX_SHARED or {}
+    brand_patterns = _BRAND_PATTERNS_SHARED or []
+    generic_automaton = _GENERIC_AUTOMATON_SHARED
+    mixture_lookup = _MIXTURE_LOOKUP_SHARED or {}
+    drugbank_refs_by_id = _DRUGBANK_BY_ID_SHARED or {}
+    return _score_annex_row(
+        annex_row,
+        reference_rows,
+        reference_index,
+        brand_patterns,
+        generic_automaton,
+        mixture_lookup,
+        drugbank_refs_by_id,
+    )
 
 
 def match_annex_with_atc(
-    annex_df: pd.DataFrame, reference_rows: list[dict], max_workers: int | None = None
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    annex_records = annex_df.to_dict(orient="records")
+    annex_df: pl.DataFrame,
+    reference_rows: list[dict],
+    reference_index: dict[str, list[int]],
+    brand_patterns: list[tuple[re.Pattern, str]],
+    generic_automaton,
+    generic_phrases: list[str],
+    mixture_lookup: dict[str, list[dict]],
+    drugbank_refs_by_id: dict[str, list[dict]],
+    max_workers: int | None = None,
+) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
+    annex_records = annex_df.to_dicts()
     matched_rows: list[dict] = []
     tie_rows: list[dict] = []
     unresolved_rows: list[dict] = []
@@ -361,57 +1008,138 @@ def match_annex_with_atc(
         worker_count = max(1, min(32, os.cpu_count() or 1))
     if worker_count <= 1:
         for rec in annex_records:
-            match_row, ties, unresolved = _score_annex_row(rec, reference_rows)
+            match_row, ties, unresolved = _score_annex_row(
+                rec,
+                reference_rows,
+                reference_index,
+                brand_patterns,
+                generic_automaton,
+                mixture_lookup,
+                drugbank_refs_by_id,
+            )
             matched_rows.append(match_row)
             tie_rows.extend(ties)
             unresolved_rows.extend(unresolved)
         return (
-            pd.DataFrame(matched_rows),
-            pd.DataFrame(tie_rows),
-            pd.DataFrame(unresolved_rows),
+            pl.DataFrame(matched_rows),
+            pl.DataFrame(tie_rows),
+            pl.DataFrame(unresolved_rows),
         )
 
-    with concurrent.futures.ProcessPoolExecutor(
-        max_workers=worker_count,
-        initializer=_init_reference_rows,
-        initargs=(reference_rows,),
-    ) as executor:
-        for match_row, ties, unresolved in executor.map(
-            _process_annex_row_worker, annex_records, chunksize=25
-        ):
-            matched_rows.append(match_row)
-            tie_rows.extend(ties)
-            unresolved_rows.extend(unresolved)
+    if use_threads:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
+            for match_row, ties, unresolved in executor.map(
+                lambda rec: _score_annex_row(
+                    rec,
+                    reference_rows,
+                    reference_index,
+                    brand_patterns,
+                    generic_automaton,
+                    mixture_lookup,
+                    drugbank_refs_by_id,
+                ),
+                annex_records,
+            ):
+                matched_rows.append(match_row)
+                tie_rows.extend(ties)
+                unresolved_rows.extend(unresolved)
+    else:
+        with concurrent.futures.ProcessPoolExecutor(
+            max_workers=worker_count,
+            initializer=_init_shared,
+            initargs=(reference_rows, reference_index, brand_patterns, generic_phrases, mixture_lookup, drugbank_refs_by_id),
+        ) as executor:
+            for match_row, ties, unresolved in executor.map(
+                _process_annex_row_worker, annex_records, chunksize=25
+            ):
+                matched_rows.append(match_row)
+                tie_rows.extend(ties)
+                unresolved_rows.extend(unresolved)
 
     return (
-        pd.DataFrame(matched_rows),
-        pd.DataFrame(tie_rows),
-        pd.DataFrame(unresolved_rows),
+        pl.DataFrame(matched_rows),
+        pl.DataFrame(tie_rows),
+        pl.DataFrame(unresolved_rows),
     )
 
 
 def main() -> None:
-    annex_path = DRUGS_DIR / "annex_f_lexicon.csv"
-    pnf_path = DRUGS_DIR / "pnf_lexicon.csv"
+    annex_lex_path = DRUGS_DIR / "annex_f_lexicon.csv"
+    annex_raw_path = DRUGS_DIR / "annex_f.csv"
     drugbank_path = DRUGS_DIR / "drugbank_generics_master.csv"
+    pnf_path = DRUGS_DIR / "pnf_lexicon.csv"
     who_path = DRUGS_DIR / "who_atc_2025-11-20.csv"
+    fda_brand_path = DRUGS_DIR / "fda_drug_2025-11-12.csv"
+    mixture_path = DRUGS_DIR / "drugbank_mixtures_master.csv"
 
-    annex_df = pd.read_csv(annex_path)
-    pnf_df = pd.read_csv(pnf_path)
-    drugbank_df = pd.read_csv(drugbank_path)
-    who_df = pd.read_csv(who_path)
+    fda_df = _read_table(fda_brand_path, required=False)
+    brand_patterns = _build_brand_map(fda_df)
+
+    annex_source_df = _read_table(annex_raw_path, required=False)
+    if annex_source_df.empty:
+        annex_source_df = _read_table(annex_lex_path, required=True)
+
+    annex_df = _normalize_annex_df(annex_source_df, brand_patterns)
+    _write_csv_and_parquet(annex_df, annex_lex_path)
+
+    mixture_df = _read_table(mixture_path, required=False)
+    pnf_df = _read_table(pnf_path, required=True)
+    who_df = _read_table(who_path, required=True)
+    drugbank_df = _read_table(drugbank_path, required=True)
+
+    generic_phrases = _build_generic_phrases(drugbank_df)
+    generic_automaton = _build_aho_automaton(generic_phrases) if generic_phrases else None
+    mixture_lookup = _build_mixture_lookup(mixture_df) if not mixture_df.is_empty() else {}
 
     reference_rows = build_reference_rows(pnf_df, drugbank_df, who_df)
-    match_df, tie_df, unresolved_df = match_annex_with_atc(annex_df, reference_rows)
+    reference_index: dict[str, list[int]] = defaultdict(list)
+    for idx, ref in enumerate(reference_rows):
+        for tok in ref.get("primary_tokens", ()):
+            reference_index[tok].append(idx)
+    drugbank_refs_by_id: dict[str, list[dict]] = defaultdict(list)
+    for ref in reference_rows:
+        if ref.get("source") == "drugbank" and ref.get("id"):
+            drugbank_refs_by_id[str(ref["id"])].append(ref)
+
+    match_df, tie_df, unresolved_df = match_annex_with_atc(
+        annex_df,
+        reference_rows,
+        reference_index,
+        brand_patterns,
+        generic_automaton,
+        generic_phrases,
+        mixture_lookup,
+        drugbank_refs_by_id,
+    )
 
     OUTPUTS_DRUGS_DIR.mkdir(parents=True, exist_ok=True)
     match_path = OUTPUTS_DRUGS_DIR / "annex_f_with_atc.csv"
     ties_path = OUTPUTS_DRUGS_DIR / "annex_f_atc_ties.csv"
     unresolved_path = OUTPUTS_DRUGS_DIR / "annex_f_atc_unresolved.csv"
 
-    match_df.to_csv(match_path, index=False)
-    tie_df.to_csv(ties_path, index=False)
-    unresolved_df.to_csv(unresolved_path, index=False)
+    def reorder(df: pl.DataFrame) -> pl.DataFrame:
+        cols = [
+            "Drug Code",
+            "Drug Description",
+            "fuzzy_basis",
+            "matched_reference_raw",
+            "matched_source",
+            "matched_generic_name",
+            "matched_lexicon",
+            "match_count",
+            "matched_secondary_lexicon",
+            "secondary_match_count",
+            "atc_code",
+            "primary_matching_tokens",
+            "secondary_matching_tokens",
+        ]
+        existing = [c for c in cols if c in df.columns]
+        remaining = [c for c in df.columns if c not in existing]
+        return df.select(existing + remaining)
+
+    _write_csv_and_parquet(reorder(match_df), match_path)
+    _write_csv_and_parquet(reorder(tie_df), ties_path)
+    _write_csv_and_parquet(reorder(unresolved_df), unresolved_path)
 
     print(f"Annex F ATC matches saved to {match_path}")
     print(f"Acceptable ties saved to {ties_path}")
