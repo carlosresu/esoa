@@ -7,6 +7,7 @@ import concurrent.futures
 import math
 import os
 import re
+import time
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Iterable, List
@@ -1002,7 +1003,8 @@ def _init_shared(
     _REFERENCE_INDEX_SHARED = reference_index
     _BRAND_PATTERNS_SHARED = brand_patterns
     _GENERIC_PHRASES_SHARED = generic_phrases
-    _GENERIC_AUTOMATON_SHARED = _build_aho_automaton(generic_phrases) if generic_phrases else None
+    # Annex rows already carry generic_hits; avoid building automaton per worker.
+    _GENERIC_AUTOMATON_SHARED = None
     _MIXTURE_LOOKUP_SHARED = mixture_lookup
     _DRUGBANK_BY_ID_SHARED = drugbank_refs_by_id
 
@@ -1122,8 +1124,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--backend",
         choices=["process", "thread", "auto"],
-        default="process",
-        help="Backend to use for scoring; auto benchmarks a sample to pick process or thread.",
+        default="auto",
+        help="Backend to use for scoring; auto benchmarks a sample to pick process or thread (default).",
     )
     parser.add_argument(
         "--benchmark-rows",
@@ -1194,7 +1196,7 @@ def main() -> None:
                 reference_rows,
                 reference_index,
                 brand_patterns,
-                generic_automaton if not thread_flag else None,
+                None if thread_flag else generic_automaton,
                 generic_phrases,
                 mixture_lookup,
                 drugbank_refs_by_id,
@@ -1214,7 +1216,7 @@ def main() -> None:
         reference_rows,
         reference_index,
         brand_patterns,
-        generic_automaton if not use_threads else None,
+        None if use_threads else generic_automaton,
         generic_phrases,
         mixture_lookup,
         drugbank_refs_by_id,
