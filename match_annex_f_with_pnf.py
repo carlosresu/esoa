@@ -123,7 +123,7 @@ def build_annex_fuzzy(df: pd.DataFrame) -> pd.DataFrame:
 
 def best_matches(
     annex_df: pd.DataFrame, pnf_df: pd.DataFrame
-) -> tuple[pd.DataFrame, pd.DataFrame]:
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     pnf_rows = []
     for _, row in pnf_df.iterrows():
         primary_tokens = parse_pipe_tokens(row.get("lexicon", ""))
@@ -140,25 +140,26 @@ def best_matches(
         )
 
     matched_rows = []
+    unmatched_rows = []
     tied_rows = []
     for _, annex_row in annex_df.iterrows():
         fuzzy_tokens = parse_pipe_tokens(annex_row.get("fuzzy_basis", ""))
         fuzzy_counts = Counter(fuzzy_tokens)
         if not fuzzy_tokens:
-            matched_rows.append(
-                {
-                    "Drug Code": annex_row.get("Drug Code"),
-                    "Drug Description": annex_row.get("Drug Description"),
-                    "matched_generic_name": None,
-                    "matching_tokens": None,
-                    "secondary_matching_tokens": None,
-                    "fuzzy_basis": None,
-                    "matched_lexicon": None,
-                    "match_count": None,
-                    "matched_secondary_lexicon": None,
-                    "secondary_match_count": None,
-                }
-            )
+            record = {
+                "Drug Code": annex_row.get("Drug Code"),
+                "Drug Description": annex_row.get("Drug Description"),
+                "matched_generic_name": None,
+                "matching_tokens": None,
+                "secondary_matching_tokens": None,
+                "fuzzy_basis": None,
+                "matched_lexicon": None,
+                "match_count": None,
+                "matched_secondary_lexicon": None,
+                "secondary_match_count": None,
+            }
+            matched_rows.append(record)
+            unmatched_rows.append(record)
             continue
 
         best_primary = 0
@@ -182,20 +183,20 @@ def best_matches(
             )
 
         if not best_primary_records or best_primary == 0:
-            matched_rows.append(
-                {
-                    "Drug Code": annex_row.get("Drug Code"),
-                    "Drug Description": annex_row.get("Drug Description"),
-                    "matched_generic_name": None,
-                    "matching_tokens": None,
-                    "secondary_matching_tokens": None,
-                    "fuzzy_basis": None,
-                    "matched_lexicon": None,
-                    "match_count": None,
-                    "matched_secondary_lexicon": None,
-                    "secondary_match_count": None,
-                }
-            )
+            record = {
+                "Drug Code": annex_row.get("Drug Code"),
+                "Drug Description": annex_row.get("Drug Description"),
+                "matched_generic_name": None,
+                "matching_tokens": None,
+                "secondary_matching_tokens": None,
+                "fuzzy_basis": None,
+                "matched_lexicon": None,
+                "match_count": None,
+                "matched_secondary_lexicon": None,
+                "secondary_match_count": None,
+            }
+            matched_rows.append(record)
+            unmatched_rows.append(record)
             continue
 
         best_secondary = -1
@@ -271,7 +272,11 @@ def best_matches(
             }
         )
 
-    return pd.DataFrame(matched_rows), pd.DataFrame(tied_rows)
+    return (
+        pd.DataFrame(matched_rows),
+        pd.DataFrame(tied_rows),
+        pd.DataFrame(unmatched_rows),
+    )
 
 
 def main() -> None:
@@ -295,17 +300,20 @@ def main() -> None:
         columns=["fuzzy_basis_tokens"], errors="ignore"
     ).to_csv(annex_lex_path, index=False)
 
-    match_df, tie_df = best_matches(annex_with_basis, pnf_with_lex)
+    match_df, tie_df, no_match_df = best_matches(annex_with_basis, pnf_with_lex)
     OUTPUTS_DRUGS_DIR.mkdir(parents=True, exist_ok=True)
     match_path = OUTPUTS_DRUGS_DIR / "annex_f_pnf_matches.csv"
     match_df.to_csv(match_path, index=False)
     tie_path = OUTPUTS_DRUGS_DIR / "annex_f_pnf_ties.csv"
     tie_df.to_csv(tie_path, index=False)
+    no_match_path = OUTPUTS_DRUGS_DIR / "annex_f_pnf_no_matches.csv"
+    no_match_df.to_csv(no_match_path, index=False)
 
     print(f"PNF lexicon saved to {pnf_lex_path}")
     print(f"Annex F lexicon saved to {annex_lex_path}")
     print(f"Match results saved to {match_path}")
     print(f"Tied matches saved to {tie_path}")
+    print(f"No-match rows saved to {no_match_path}")
 
 
 if __name__ == "__main__":
