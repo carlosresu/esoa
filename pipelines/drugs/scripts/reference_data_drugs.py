@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Lightweight loaders for reusable reference datasets (DrugBank generics, ignore-word lists)."""
+"""Lightweight Polars-first loaders for reusable reference datasets (DrugBank generics, ignore-word lists)."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Dict, Iterable, List, Set, Tuple
 
-import pandas as pd
+import polars as pl
 
 from ..constants import PIPELINE_INPUTS_DIR, PROJECT_ROOT
 from .text_utils_drugs import _normalize_text_basic, extract_base_and_salts, serialize_salt_list
@@ -26,16 +26,19 @@ def _project_root(project_root: str | Path | None = None) -> Path:
     return Path(project_root).resolve()
 
 
-def _iter_csv_column(frame: pd.DataFrame, candidates: Iterable[str]) -> Iterable[str]:
+def _iter_csv_column(frame: pl.DataFrame, candidates: Iterable[str]) -> Iterable[str]:
     """Yield trimmed strings from the first matching column name, or the first column as fallback."""
     selected: List[str] = []
+    cols = frame.columns
     for name in candidates:
-        if name in frame.columns:
-            selected = frame[name].dropna().astype(str).tolist()
+        if name in cols:
+            selected = frame.get_column(name).drop_nulls().cast(pl.Utf8).to_list()
             break
-    if not selected and len(frame.columns):
-        selected = frame.iloc[:, 0].dropna().astype(str).tolist()
+    if not selected and cols:
+        selected = frame.select(pl.all()).to_series().drop_nulls().cast(pl.Utf8).to_list()
     for value in selected:
+        if not isinstance(value, str):
+            value = str(value)
         clean = value.strip()
         if clean:
             yield clean
@@ -72,7 +75,10 @@ def load_drugbank_generics(
         if not path.is_file():
             continue
         try:
-            frame = pd.read_csv(path, dtype=str)
+            if path.suffix.lower() == ".parquet":
+                frame = pl.read_parquet(path)
+            else:
+                frame = pl.read_csv(path)
         except Exception:
             continue
         for raw in _iter_csv_column(frame, ("name", "generic")):
@@ -163,7 +169,7 @@ def load_ignore_words(project_root: str | Path | None = None) -> Set[str]:
             if path.suffix.lower() == ".txt":
                 _consume(_iter_txt_words(path))
             else:
-                frame = pd.read_csv(path, dtype=str)
+                frame = pl.read_csv(path)
                 _consume(_iter_csv_column(frame, ("word", "token", "value")))
         except Exception:
             continue

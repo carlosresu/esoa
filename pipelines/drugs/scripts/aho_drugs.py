@@ -5,26 +5,56 @@
 from typing import Dict, List, Tuple
 
 import ahocorasick  # type: ignore
+import polars as pl
 
 from .text_utils_drugs import normalize_compact, normalize_text
 from .pnf_aliases_drugs import expand_generic_aliases, SPECIAL_GENERIC_ALIASES
 
 
-def build_molecule_automata(pnf_df) -> Tuple[ahocorasick.Automaton, ahocorasick.Automaton]:
-    """Create normalized and compact automatons for PNF generics plus their synonyms."""
+def build_molecule_automata(pnf_df: pl.DataFrame | pl.LazyFrame) -> Tuple[ahocorasick.Automaton, ahocorasick.Automaton]:
+    """
+    Create normalized and compact automatons for PNF generics plus their synonyms.
+
+    Expects Polars DataFrame/LazyFrame inputs (Parquet-first pipelines) and keeps processing in
+    Polars until emitting the automata.
+    """
+    lf = pnf_df.lazy() if isinstance(pnf_df, pl.DataFrame) else pnf_df
     A_norm = ahocorasick.Automaton()
     A_comp = ahocorasick.Automaton()
     seen_norm = set()
     seen_comp = set()
     name_col = "generic_normalized" if "generic_normalized" in pnf_df.columns else "generic_name"
-    for gid, gname in pnf_df[["generic_id", name_col]].drop_duplicates().itertuples(index=False):
+    synonyms_map: Dict[str, List[str]] = {}
+    base_rows = (
+        lf.select([pl.col("generic_id"), pl.col(name_col)])
+        .unique()
+        .collect()
+        .to_dicts()
+    )
+    if "synonyms" in pnf_df.columns:
+        synonyms_df = (
+            lf.select(pl.col("generic_id"), pl.col("synonyms"))
+            .drop_nulls()
+            .with_columns(pl.col("synonyms").str.split("|"))
+            .explode("synonyms")
+            .with_columns(pl.col("synonyms").str.strip())
+            .filter(pl.col("synonyms") != "")
+            .group_by("generic_id")
+            .agg(pl.col("synonyms").unique())
+            .collect()
+        )
+        synonyms_map = {
+            str(row["generic_id"]): [syn for syn in row["synonyms"] if syn]
+            for row in synonyms_df.to_dicts()
+        }
+
+    for row in base_rows:
+        gid = str(row["generic_id"])
+        gname = str(row.get(name_col) or "")
         alias_set = expand_generic_aliases(gname)
         alias_set.update(SPECIAL_GENERIC_ALIASES.get(gid, set()))
-        if "synonyms" in pnf_df.columns:
-            syns = pnf_df.loc[pnf_df["generic_id"] == gid, "synonyms"].dropna().astype(str)
-            for syn in syns:
-                for alias in syn.split("|"):
-                    alias_set.update(expand_generic_aliases(alias))
+        for syn in synonyms_map.get(gid, []):
+            alias_set.update(expand_generic_aliases(syn))
         for alias in alias_set:
             key_norm = normalize_text(alias)
             key_comp = normalize_compact(alias)

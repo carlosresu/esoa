@@ -1,7 +1,7 @@
 
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Shared text normalization helpers used across preparation and matching."""
+"""Shared text normalization helpers (Polars-first, expression-friendly)."""
 
 import re
 import unicodedata
@@ -102,7 +102,7 @@ def _token_core(token: str) -> str:
 PAREN_CONTENT_RX = re.compile(r"\(([^)]+)\)")
 
 def _normalize_text_basic(s: str) -> str:
-    """Lowercase and collapse whitespace, leaving only alphanumeric tokens."""
+    """Lowercase and collapse whitespace, leaving only alphanumeric tokens (safe for pl.col().map_elements)."""
     s = s.lower().strip()
     s = re.sub(r"[^a-z0-9]+", " ", s)
     return re.sub(r"\s+", " ", s).strip()
@@ -114,7 +114,7 @@ def _base_name(name: str) -> str:
     return re.sub(r"\s+", " ", name).strip()
 
 def normalize_text(s: str) -> str:
-    """Produce the canonical normalized text used for matching and parsing routines."""
+    """Produce the canonical normalized text used for matching and parsing routines (Polars-friendly)."""
     if not isinstance(s, str):
         return ""
     s = unicodedata.normalize("NFKD", s)

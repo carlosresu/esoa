@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Helpers for expanding PNF generic name aliases and special abbreviations."""
+"""Helpers for expanding PNF generic name aliases and special abbreviations (Polars-friendly/pure)."""
 from __future__ import annotations
 
 import re
@@ -101,7 +101,7 @@ def _strip_parentheses(text: str) -> str:
 
 
 def expand_generic_aliases(name: str) -> Set[str]:
-    """Generate a set of lowercase alias strings for a PNF generic name."""
+    """Generate a set of lowercase alias strings for a PNF generic name (safe for pl.col().map_elements)."""
     variants: Set[str] = set()
     if not isinstance(name, str):
         return variants

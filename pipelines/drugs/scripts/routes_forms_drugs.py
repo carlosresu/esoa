@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+"""Translate/parse routes and forms (Polars expression-friendly)."""
 
 import re
 from typing import List, Optional, Tuple
@@ -69,7 +70,7 @@ ROUTE_ALIASES = {
 }
 
 def map_route_token(r) -> List[str]:
-    """Translate PNF route descriptors into canonical route token lists."""
+    """Translate PNF route descriptors into canonical route token lists (usable via pl.col().map_elements)."""
     if not isinstance(r, str):
         return []
     r = r.strip()
@@ -97,7 +98,7 @@ def map_route_token(r) -> List[str]:
     return table.get(r, [])
 
 def parse_form_from_text(s_norm: str) -> Optional[str]:
-    """Extract a recognized dosage form keyword from normalized text."""
+    """Extract a recognized dosage form keyword from normalized text (Polars map_elements friendly)."""
     for fw in FORM_WORDS:
         if re.search(rf"\b{re.escape(fw)}\b", s_norm):
             # Return the first matching form keyword encountered.
@@ -105,7 +106,7 @@ def parse_form_from_text(s_norm: str) -> Optional[str]:
     return None
 
 def extract_route_and_form(s_norm: str) -> Tuple[Optional[str], Optional[str], str]:
-    """Simultaneously infer route, form, and evidence strings from normalized text, honoring the alias/whitelist logic described in README (route evidences plus imputed route from form when allowed)."""
+    """Infer route, form, and evidence strings from normalized text (works cleanly with pl.col().map_elements)."""
     route_found = None
     form_found = None
     evidence = []

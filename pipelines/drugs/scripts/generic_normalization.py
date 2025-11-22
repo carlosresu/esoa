@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Drug normalization helpers encoding the explicit raw_description -> generic_name rules.
+"""
+Drug normalization helpers encoding the explicit raw_description -> generic_name rules,
+built for Polars/Parquet-first pipelines (expression-friendly, no pandas usage).
 
 This implements the precise algorithm described in the provided ruleset:
 - Tokenization that respects molecule-internal hyphens.
 - Classification of each token (uppercase words, numerics, connectors, etc.).
 - Molecule boundary detection, salt pair preservation, formulation stripping, and combination formatting.
 
-All helper functions referenced within the spec are provided explicitly.
+All helper functions referenced within the spec are provided explicitly and remain pure so they can
+be invoked from Polars via `pl.col(...).map_elements(...)` where needed.
 """
 
 from __future__ import annotations
 
-import unicodedata
 import re
+import unicodedata
 from typing import List, Tuple
 
 from pipelines.drugs.scripts.text_utils_drugs import extract_base_and_salts

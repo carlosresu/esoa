@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Exports convenience aliases for DrugsAndMedicine pipeline modules."""
+"""Polars-first, Parquet-default exports for DrugsAndMedicine pipeline modules."""
 
 from .prepare_drugs import prepare
 from .match_drugs import match

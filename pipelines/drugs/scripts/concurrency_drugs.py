@@ -1,6 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Minimal concurrency helpers for cpu-bound row-wise transforms."""
+"""
+Minimal concurrency helpers for CPU-bound row-wise transforms in the Polars/Parquet-first pipeline.
+
+These utilities are designed to parallelize pure Python work that is invoked from Polars contexts
+via `map_elements` or after materializing columns/rows to Python lists, without any pandas coupling.
+"""
 
 from __future__ import annotations
 
@@ -70,12 +75,15 @@ def maybe_parallel_map(
     initargs: tuple | tuple[object, ...] = (),
     chunksize: int | None = None,
 ) -> List[R]:
-    """Apply func across seq, using a process pool when the workload is large enough.
+    """
+    Apply func across seq, using a process pool when the workload is large enough.
 
     The ESOA_MAX_WORKERS env var can pin the worker count (set to 1 to disable
     parallelism). On small workloads the function falls back to serial execution.
     Optional initializer/initargs mirror `concurrent.futures.ProcessPoolExecutor`
-    so callers can hydrate per-process state (e.g., heavy lookup tables).
+    so callers can hydrate per-process state (e.g., heavy lookup tables). Safe for Polars
+    pipelines: pass iterables derived from Polars columns/rows (e.g., `df["col"].to_list()`)
+    when vectorized expressions are insufficient.
     """
     values = list(seq)
     count = len(values)

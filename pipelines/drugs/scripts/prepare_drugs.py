@@ -1,17 +1,14 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Pre-processing helpers that normalize PNF and eSOA inputs for the matcher.
+"""Pre-processing helpers for PNF and eSOA inputs (Polars/Parquet-first)."""
 
-The preparation stage is intentionally verbose because it shoulders the
-responsibility of turning raw spreadsheets into a predictable schema used by the
-rest of the pipeline.  Rich inline comments call out the expectations we enforce
-and why particular derived columns exist so future maintainers do not need to
-reverse engineer the data frame mutations.
-"""
+from __future__ import annotations
 
 import os
 from pathlib import Path
-import pandas as pd
+from typing import List
+
+import polars as pl
 
 from .routes_forms_drugs import map_route_token, parse_form_from_text
 from .dose_drugs import parse_dose_struct_from_text, to_mg, safe_ratio_mg_per_ml
@@ -28,9 +25,12 @@ from .concurrency_drugs import maybe_parallel_map
 def _calc_strength_mg(payload: tuple[object, object]) -> float | None:
     """Convert arbitrary (strength, unit) payloads into canonical mg where possible."""
     strength, unit = payload
-    if pd.notna(strength) and isinstance(unit, str) and unit:
+    try:
+        if strength is None or not isinstance(unit, str) or not unit:
+            return None
         return to_mg(strength, unit)
-    return None
+    except Exception:
+        return None
 
 
 def _calc_ratio_mg_per_ml(payload: tuple[object, object, object, object, object]) -> float | None:
@@ -41,95 +41,131 @@ def _calc_ratio_mg_per_ml(payload: tuple[object, object, object, object, object]
     return None
 
 
-def _write_csv_and_parquet(frame: pd.DataFrame, csv_path: str) -> None:
+def _write_csv_and_parquet(frame: pl.DataFrame, csv_path: str) -> None:
     """Persist a dataframe to CSV and Parquet using the same stem."""
-    frame.to_csv(csv_path, index=False, encoding="utf-8")
+    frame.write_csv(csv_path)
     parquet_path = Path(csv_path).with_suffix(".parquet")
-    frame.to_parquet(parquet_path, index=False)
+    frame.write_parquet(parquet_path)
 
 
-def prepare(pnf_csv: str, esoa_csv: str, outdir: str = ".") -> tuple[str, str]:
-    """Normalize PNF and eSOA inputs, deriving helper columns and writing prepared CSVs."""
+def _scan_input(path: str) -> pl.LazyFrame:
+    """Scan CSV/Parquet into a LazyFrame (Parquet preferred)."""
+    lower = path.lower()
+    if lower.endswith(".parquet"):
+        return pl.scan_parquet(path)
+    return pl.scan_csv(path)
+
+
+def _prep_pnf(pnf_path: str) -> pl.DataFrame:
+    """Load and normalize PNF inputs with Polars; return prepared frame."""
+    pnf_scan = _scan_input(pnf_path)
+    required_cols = ["Molecule", "Route", "ATC Code"]
+    missing = [c for c in required_cols if c not in pnf_scan.columns]
+    if missing:
+        raise ValueError(f"pnf input missing required columns: {missing}")
+
+    pnf = pnf_scan.with_columns(
+        pl.col("Molecule").fill_null("").cast(pl.Utf8).alias("raw_molecule"),
+        pl.col("Molecule").fill_null("").cast(pl.Utf8).str.strip().str.to_uppercase().alias("generic_name"),
+        pl.col("Route").fill_null("").cast(pl.Utf8).alias("Route"),
+        pl.col("ATC Code").fill_null("").cast(pl.Utf8).alias("ATC Code"),
+    ).collect(streaming=True)
+
+    molecule_list = pnf.get_column("generic_name").to_list()
+    split_values = maybe_parallel_map(molecule_list, extract_base_and_salts)
+    pnf = pnf.with_columns(
+        pl.Series([base or original.strip().upper() for (base, _), original in zip(split_values, molecule_list)]).alias("generic_normalized"),
+        pl.Series([serialize_salt_list(salts) for _, salts in split_values]).alias("salt_form"),
+        pl.Series(maybe_parallel_map(molecule_list, slug_id)).alias("generic_id"),
+        pl.lit("").alias("synonyms"),
+    )
+
+    route_values: List[str] = pnf.get_column("Route").to_list()
+    atc_values: List[str] = pnf.get_column("ATC Code").to_list()
+    pnf = pnf.with_columns(
+        pl.Series(maybe_parallel_map(route_values, map_route_token)).alias("route_tokens"),
+        pl.Series(maybe_parallel_map(atc_values, clean_atc)).alias("atc_code"),
+    )
+
+    text_cols = [c for c in ["Technical Specifications", "Specs", "Specification"] if c in pnf.columns]
+    tech_vals = pnf.get_column(text_cols[0]).fill_null("").cast(pl.Utf8).to_list() if text_cols else [""] * pnf.height
+    parse_src_list = [f"{gn} {tech}".strip() for gn, tech in zip(pnf.get_column("generic_normalized").to_list(), tech_vals)]
+    parse_normalized = maybe_parallel_map(parse_src_list, normalize_text)
+    pnf = pnf.with_columns(pl.Series(parse_normalized).alias("_parse_src"))
+
+    parsed = maybe_parallel_map(parse_normalized, parse_dose_struct_from_text)
+    pnf = pnf.with_columns(
+        pl.Series([d.get("dose_kind") if isinstance(d, dict) else None for d in parsed]).alias("dose_kind"),
+        pl.Series([d.get("strength") if isinstance(d, dict) else None for d in parsed]).alias("strength"),
+        pl.Series([d.get("unit") if isinstance(d, dict) else None for d in parsed]).alias("unit"),
+        pl.Series([d.get("per_val") if isinstance(d, dict) else None for d in parsed]).alias("per_val"),
+        pl.Series([d.get("per_unit") if isinstance(d, dict) else None for d in parsed]).alias("per_unit"),
+        pl.Series([d.get("pct") if isinstance(d, dict) else None for d in parsed]).alias("pct"),
+        pl.Series(maybe_parallel_map(parse_normalized, parse_form_from_text)).alias("form_token"),
+    )
+
+    strength_inputs = list(zip(pnf.get_column("strength").to_list(), pnf.get_column("unit").to_list()))
+    ratio_inputs = list(
+        zip(
+            pnf.get_column("dose_kind").to_list(),
+            pnf.get_column("strength").to_list(),
+            pnf.get_column("unit").to_list(),
+            pnf.get_column("per_val").to_list(),
+            pnf.get_column("per_unit").to_list(),
+        )
+    )
+    pnf = pnf.with_columns(
+        pl.Series(maybe_parallel_map(strength_inputs, _calc_strength_mg)).alias("strength_mg"),
+        pl.Series(maybe_parallel_map(ratio_inputs, _calc_ratio_mg_per_ml)).alias("ratio_mg_per_ml"),
+    )
+
+    pnf = (
+        pnf.explode("route_tokens")
+        .with_columns(pl.col("route_tokens").alias("route_allowed"))
+        .drop("route_tokens")
+        .filter(pl.col("generic_name").str.strip() != "")
+    )
+
+    return pnf.select(
+        "generic_id",
+        "generic_name",
+        "generic_normalized",
+        "raw_molecule",
+        "salt_form",
+        "synonyms",
+        "atc_code",
+        "route_allowed",
+        "form_token",
+        "dose_kind",
+        "strength",
+        "unit",
+        "per_val",
+        "per_unit",
+        "pct",
+        "strength_mg",
+        "ratio_mg_per_ml",
+    )
+
+
+def _prep_esoa(esoa_path: str) -> pl.DataFrame:
+    """Load and normalize eSOA input with Polars; return prepared frame."""
+    esoa_scan = pl.scan_csv(esoa_path)
+    if "DESCRIPTION" not in esoa_scan.columns:
+        raise ValueError("esoa input is missing required column: DESCRIPTION")
+    return esoa_scan.with_columns(pl.col("DESCRIPTION").alias("raw_text")).select("raw_text").collect(streaming=True)
+
+
+def prepare(pnf_path: str, esoa_path: str, outdir: str = ".") -> tuple[str, str]:
+    """Normalize PNF and eSOA inputs, deriving helper columns and writing prepared Parquet/CSV (Polars-first)."""
     os.makedirs(outdir, exist_ok=True)
 
-    # Load and immediately validate the PNF payload so downstream assumptions
-    # remain explicit and testable.
-    pnf = pd.read_csv(pnf_csv)
-    for col in ["Molecule", "Route", "ATC Code"]:
-        if col not in pnf.columns:
-            raise ValueError(f"pnf.csv is missing required column: {col}")
+    pnf_prepared = _prep_pnf(pnf_path)
+    esoa_prepared = _prep_esoa(esoa_path)
 
-    # Canonicalize the identifying columns that later stages depend on.  These
-    # are split out early so failures surface before any heavy parsing work.
-    molecule_values = pnf["Molecule"].fillna("").astype(str)
-    pnf["raw_molecule"] = molecule_values
-    pnf["generic_name"] = molecule_values.str.strip().str.upper()
-    molecule_list = molecule_values.tolist()
-    split_values = maybe_parallel_map(molecule_list, extract_base_and_salts)
-    pnf["generic_normalized"] = [
-        base or original.strip().upper()
-        for (base, _), original in zip(split_values, molecule_list)
-    ]
-    pnf["salt_form"] = [serialize_salt_list(salts) for _, salts in split_values]
-    generic_names = pnf["generic_normalized"].astype(str).tolist()
-    pnf["generic_id"] = maybe_parallel_map(generic_names, slug_id)
-    pnf["synonyms"] = ""
-    route_values = pnf["Route"].fillna("").astype(str).tolist()
-    pnf["route_tokens"] = maybe_parallel_map(route_values, map_route_token)
-    atc_values = pnf["ATC Code"].fillna("").astype(str).tolist()
-    pnf["atc_code"] = maybe_parallel_map(atc_values, clean_atc)
+    pnf_out_parquet = os.path.join(outdir, "pnf_prepared.parquet")
+    esoa_out_parquet = os.path.join(outdir, "esoa_prepared.parquet")
 
-    # Consolidate all textual dose evidence into a single normalized field that
-    # the dose parser can read once.  The parser expects clean text, hence the
-    # normalization step.
-    text_cols = [c for c in ["Technical Specifications", "Specs", "Specification"] if c in pnf.columns]
-    pnf["_tech"] = pnf[text_cols[0]].fillna("") if text_cols else ""
-    parse_src_raw = (pnf["generic_normalized"].astype(str) + " " + pnf["_tech"].astype(str)).str.strip()
-    parse_src_list = parse_src_raw.tolist()
-    pnf["_parse_src"] = maybe_parallel_map(parse_src_list, normalize_text)
+    _write_csv_and_parquet(pnf_prepared, pnf_out_parquet.replace(".parquet", ".csv"))
+    _write_csv_and_parquet(esoa_prepared, esoa_out_parquet.replace(".parquet", ".csv"))
 
-    # Break the parsed dose payload into explicit columns so the matching stage
-    # can work with scalars instead of repeatedly walking nested dictionaries.
-    parsed = maybe_parallel_map(pnf["_parse_src"], parse_dose_struct_from_text)
-    pnf["dose_kind"] = [d.get("dose_kind") if isinstance(d, dict) else None for d in parsed]
-    pnf["strength"] = [d.get("strength") if isinstance(d, dict) else None for d in parsed]
-    pnf["unit"] = [d.get("unit") if isinstance(d, dict) else None for d in parsed]
-    pnf["per_val"] = [d.get("per_val") if isinstance(d, dict) else None for d in parsed]
-    pnf["per_unit"] = [d.get("per_unit") if isinstance(d, dict) else None for d in parsed]
-    pnf["pct"] = [d.get("pct") if isinstance(d, dict) else None for d in parsed]
-    pnf["form_token"] = maybe_parallel_map(pnf["_parse_src"], parse_form_from_text)
-
-    # Derive canonical strength units for quick equality checks (e.g., mg vs g
-    # conversions) and compute ratio helpers where enough information exists.
-    strength_inputs = list(zip(pnf["strength"], pnf["unit"]))
-    pnf["strength_mg"] = maybe_parallel_map(strength_inputs, _calc_strength_mg)
-    ratio_inputs = list(zip(pnf["dose_kind"], pnf["strength"], pnf["unit"], pnf["per_val"], pnf["per_unit"]))
-    pnf["ratio_mg_per_ml"] = maybe_parallel_map(ratio_inputs, _calc_ratio_mg_per_ml)
-
-    # Expand the multi-route allowances so each row describes a single canonical
-    # route.  This mirrors the matching logic that expects one allowed route per
-    # record when validating compatibility.
-    exploded = pnf.explode("route_tokens", ignore_index=True)
-    exploded.rename(columns={"route_tokens": "route_allowed"}, inplace=True)
-    keep = exploded[exploded["generic_name"].astype(bool)].copy()
-
-    pnf_prepared = keep[[
-        "generic_id", "generic_name", "generic_normalized", "raw_molecule", "salt_form", "synonyms", "atc_code",
-        "route_allowed", "form_token", "dose_kind",
-        "strength", "unit", "per_val", "per_unit", "pct",
-        "strength_mg", "ratio_mg_per_ml",
-    ]].copy()
-
-    pnf_out = os.path.join(outdir, "pnf_prepared.csv")
-    _write_csv_and_parquet(pnf_prepared, pnf_out)
-
-    # eSOA preparation is intentionally light-weight: only rename the primary
-    # text column but still validate that the source CSV carries it.
-    esoa = pd.read_csv(esoa_csv)
-    if "DESCRIPTION" not in esoa.columns:
-        raise ValueError("esoa.csv is missing required column: DESCRIPTION")
-    esoa_prepared = esoa.rename(columns={"DESCRIPTION": "raw_text"}).copy()
-    esoa_out = os.path.join(outdir, "esoa_prepared.csv")
-    _write_csv_and_parquet(esoa_prepared, esoa_out)
-
-    return pnf_out, esoa_out
+    return pnf_out_parquet, esoa_out_parquet

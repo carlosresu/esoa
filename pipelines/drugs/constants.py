@@ -16,6 +16,8 @@ PIPELINE_OUTPUTS_DIR: Path = PROJECT_ROOT / "outputs" / "drugs"
 PIPELINE_RAW_DIR: Path = PROJECT_ROOT / "raw"
 PIPELINE_WHO_ATC_DIR: Path = PIPELINE_INPUTS_DIR
 PIPELINE_DRUGBANK_BRANDS_PATH: Path = PIPELINE_INPUTS_DIR / "drugbank_brands.csv"
+# Parquet-first storage expectation for all drug pipeline intermediates/outputs.
+PIPELINE_PRIMARY_STORAGE_FORMAT: str = "parquet"
 
 __all__ = [
     "ITEM_REF_CODE",
@@ -25,5 +27,6 @@ __all__ = [
     "PIPELINE_RAW_DIR",
     "PIPELINE_WHO_ATC_DIR",
     "PIPELINE_DRUGBANK_BRANDS_PATH",
+    "PIPELINE_PRIMARY_STORAGE_FORMAT",
     "PROJECT_ROOT",
 ]

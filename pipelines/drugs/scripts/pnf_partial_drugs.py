@@ -2,8 +2,12 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+"""Partial matcher over PNF generics (Polars/Parquet-first, map_elements-friendly)."""
+
 import re
 from typing import Dict, List, Tuple, Optional
+
+import polars as pl
 
 Token = str
 
@@ -34,15 +38,30 @@ class PnfTokenIndex:
         # Maintain all variants keyed by the first token for quick lookup.
         self.by_first.setdefault(first, []).append((generic_id, toks, generic_name_norm))
 
-    def build_from_pnf(self, pnf_df) -> "PnfTokenIndex":
-        """Populate the index from the prepared PNF dataframe."""
-        # expects columns: generic_id + generic name (normalized if available)
-        name_col = "generic_normalized" if "generic_normalized" in pnf_df.columns else "generic_name"
-        for gid, gname in pnf_df[["generic_id", name_col]].drop_duplicates().itertuples(index=False):
-            if not isinstance(gname, str):
+    def build_from_pnf(self, pnf_df: pl.DataFrame | pl.LazyFrame) -> "PnfTokenIndex":
+        """Populate the index from the prepared PNF dataframe (Polars/Parquet-first)."""
+        df = pnf_df.collect(streaming=True) if isinstance(pnf_df, pl.LazyFrame) else pnf_df
+        name_col = "generic_normalized" if "generic_normalized" in df.columns else "generic_name"
+        if name_col not in df.columns:
+            raise KeyError(f"Expected {name_col} column in PNF dataframe")
+
+        df_clean = (
+            df.select(
+                pl.col("generic_id").cast(pl.Utf8).alias("generic_id"),
+                pl.col(name_col).cast(pl.Utf8).alias("generic_name_norm"),
+            )
+            .drop_nulls()
+            .with_columns(pl.col("generic_name_norm").str.strip().str.to_lowercase())
+            .filter(pl.col("generic_name_norm") != "")
+            .unique()
+        )
+
+        for row in df_clean.to_dicts():
+            gid = row.get("generic_id")
+            gname = row.get("generic_name_norm")
+            if not isinstance(gid, str) or not isinstance(gname, str):
                 continue
-            name_norm = gname.strip().lower()
-            self.add(str(gid), name_norm)
+            self.add(gid, gname)
         return self
 
     def best_partial_in_text(self, text_norm: str) -> Optional[Tuple[str, str]]:
