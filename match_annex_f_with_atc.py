@@ -541,6 +541,35 @@ def _normalize_annex_df(df: pd.DataFrame, brand_patterns: list[tuple[re.Pattern,
     return df
 
 
+def _precompute_annex_records(
+    annex_df: pd.DataFrame, brand_patterns: list[tuple[re.Pattern, str]], generic_phrases: list[str]
+) -> list[dict]:
+    records = []
+    generic_automaton = _build_aho_automaton(generic_phrases) if generic_phrases else None
+    for row in annex_df.to_dict(orient="records"):
+        description = _apply_brand_swaps(_as_str_or_empty(row.get("Drug Description")), brand_patterns)
+        base_tokens = split_with_parentheses(description)
+        tokens_primary = _normalize_tokens(base_tokens, drop_stopwords=True)
+        tokens_secondary = _normalize_tokens(base_tokens, drop_stopwords=False)
+        row["fuzzy_basis"] = "|".join(tokens_secondary)
+        records.append(
+            row
+            | {
+                "fuzzy_tokens_primary": tokens_primary,
+                "fuzzy_tokens_secondary": tokens_secondary,
+                "fuzzy_counts_primary": Counter(tokens_primary),
+                "fuzzy_counts_secondary": Counter(tokens_secondary),
+                "annex_cat_primary": _categorize_tokens(tokens_primary),
+                "annex_cat_secondary": _categorize_tokens(tokens_secondary),
+                "norm_description": _normalize_phrase(description),
+                "generic_hits": _aho_find(_normalize_phrase(description), generic_automaton)
+                if generic_automaton
+                else set(),
+            }
+        )
+    return records
+
+
 def _build_reference_display(raw_ref: dict) -> str | None:
     if not raw_ref:
         return None
@@ -772,17 +801,12 @@ def _score_annex_row(
     tie_rows: list[dict] = []
     unresolved_rows: list[dict] = []
 
-    description = _apply_brand_swaps(_as_str_or_empty(annex_row.get("Drug Description")), brand_patterns)
-    base_tokens = split_with_parentheses(description)
-    fuzzy_tokens_primary = _normalize_tokens(base_tokens, drop_stopwords=True)
-    fuzzy_tokens_secondary = _normalize_tokens(base_tokens, drop_stopwords=False)
-    fuzzy_basis_val = "|".join(fuzzy_tokens_secondary)
-    annex_row["fuzzy_basis"] = fuzzy_basis_val
-
-    fuzzy_counts_primary = Counter(fuzzy_tokens_primary)
-    fuzzy_counts_secondary = Counter(fuzzy_tokens_secondary)
-    annex_cat_primary = _categorize_tokens(fuzzy_tokens_primary)
-    annex_cat_secondary = _categorize_tokens(fuzzy_tokens_secondary)
+    fuzzy_tokens_primary = annex_row.get("fuzzy_tokens_primary") or []
+    fuzzy_tokens_secondary = annex_row.get("fuzzy_tokens_secondary") or []
+    fuzzy_counts_primary = annex_row.get("fuzzy_counts_primary") or Counter(fuzzy_tokens_primary)
+    fuzzy_counts_secondary = annex_row.get("fuzzy_counts_secondary") or Counter(fuzzy_tokens_secondary)
+    annex_cat_primary = annex_row.get("annex_cat_primary") or _categorize_tokens(fuzzy_tokens_primary)
+    annex_cat_secondary = annex_row.get("annex_cat_secondary") or _categorize_tokens(fuzzy_tokens_secondary)
 
     if not fuzzy_tokens_primary:
         matched_rows.append(_empty_match_record(annex_row))
@@ -798,8 +822,8 @@ def _score_annex_row(
         candidate_refs = [reference_rows[i] for i in sorted(candidate_indices)]
 
     # Mixture detection via Aho-Corasick on normalized phrase.
-    norm_desc = _normalize_phrase(description)
-    generic_hits = _aho_find(norm_desc, generic_automaton) if generic_automaton else set()
+    norm_desc = annex_row.get("norm_description") or ""
+    generic_hits = annex_row.get("generic_hits") or set()
     if len(generic_hits) >= 2:
         component_key = "||".join(sorted(generic_hits))
         mixture_rows = mixture_lookup.get(component_key, [])
@@ -1014,7 +1038,11 @@ def match_annex_with_atc(
     chunk_size: int = 25,
     use_threads: bool = False,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    annex_records = annex_df.to_dict(orient="records")
+    annex_records = (
+        annex_df
+        if isinstance(annex_df, list)
+        else _precompute_annex_records(annex_df, brand_patterns, generic_phrases)
+    )
     matched_rows: list[dict] = []
     tie_rows: list[dict] = []
     unresolved_rows: list[dict] = []
@@ -1092,6 +1120,18 @@ def _parse_args() -> argparse.Namespace:
         help="Use threads instead of processes (handy if process forking is slow).",
     )
     parser.add_argument(
+        "--backend",
+        choices=["process", "thread", "auto"],
+        default="process",
+        help="Backend to use for scoring; auto benchmarks a sample to pick process or thread.",
+    )
+    parser.add_argument(
+        "--benchmark-rows",
+        type=int,
+        default=200,
+        help="Number of Annex F rows to benchmark when backend=auto.",
+    )
+    parser.add_argument(
         "--chunk-size",
         type=int,
         default=25,
@@ -1139,18 +1179,48 @@ def main() -> None:
         if ref.get("source") == "drugbank" and ref.get("id"):
             drugbank_refs_by_id[str(ref["id"])].append(ref)
 
+    annex_records = _precompute_annex_records(annex_df, brand_patterns, generic_phrases)
+
+    backend = args.backend
+    use_threads = args.use_threads
+    if backend == "auto":
+        sample_size = min(len(annex_records), max(10, args.benchmark_rows))
+        sample = annex_records[:sample_size]
+
+        def _time_backend(thread_flag: bool) -> float:
+            start = time.perf_counter()
+            _ = match_annex_with_atc(
+                sample,
+                reference_rows,
+                reference_index,
+                brand_patterns,
+                generic_automaton if not thread_flag else None,
+                generic_phrases,
+                mixture_lookup,
+                drugbank_refs_by_id,
+                max_workers=args.workers,
+                chunk_size=args.chunk_size,
+                use_threads=thread_flag,
+            )
+            return time.perf_counter() - start
+
+        t_thread = _time_backend(True)
+        t_process = _time_backend(False)
+        use_threads = t_thread <= t_process
+        print(f"[auto-backend] thread={t_thread:.2f}s, process={t_process:.2f}s -> using {'threads' if use_threads else 'processes'}")
+
     match_df, tie_df, unresolved_df = match_annex_with_atc(
-        annex_df,
+        annex_records,
         reference_rows,
         reference_index,
         brand_patterns,
-        generic_automaton,
+        generic_automaton if not use_threads else None,
         generic_phrases,
         mixture_lookup,
         drugbank_refs_by_id,
         max_workers=args.workers,
         chunk_size=args.chunk_size,
-        use_threads=args.use_threads,
+        use_threads=use_threads or backend == "thread",
     )
 
     OUTPUTS_DRUGS_DIR.mkdir(parents=True, exist_ok=True)
