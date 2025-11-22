@@ -732,14 +732,23 @@ def _segment_norm(seg: str) -> str:
     return s
 
 def load_latest_who_file(root_dir: str) -> str | None:
-    """Return the freshest WHO ATC parquet path, preferring the pipeline-specific inputs directory."""
-    who_candidates = glob.glob(os.path.join(str(PIPELINE_WHO_ATC_DIR), "who_atc_*_molecules.parquet"))
-    if who_candidates:
-        return max(who_candidates, key=os.path.getmtime)
-    legacy_dir = os.path.join(root_dir, "dependencies", "atcd", "output")
-    legacy_candidates = glob.glob(os.path.join(legacy_dir, "who_atc_*_molecules.parquet"))
-    if legacy_candidates:
-        return max(legacy_candidates, key=os.path.getmtime)
+    """Return the freshest WHO ATC export (prefer parquet, fall back to CSV)."""
+    patterns = [
+        os.path.join(str(PIPELINE_WHO_ATC_DIR), "who_atc_*_molecules.parquet"),
+        os.path.join(str(PIPELINE_WHO_ATC_DIR), "who_atc_*_molecules.csv"),
+    ]
+    legacy_patterns = [
+        os.path.join(root_dir, "dependencies", "atcd", "output", "who_atc_*_molecules.parquet"),
+        os.path.join(root_dir, "dependencies", "atcd", "output", "who_atc_*_molecules.csv"),
+    ]
+    for pattern in patterns:
+        who_candidates = glob.glob(pattern)
+        if who_candidates:
+            return max(who_candidates, key=os.path.getmtime)
+    for pattern in legacy_patterns:
+        legacy_candidates = glob.glob(pattern)
+        if legacy_candidates:
+            return max(legacy_candidates, key=os.path.getmtime)
     return None
 
 def _tokenize_unknowns(s_norm: str) -> List[str]:

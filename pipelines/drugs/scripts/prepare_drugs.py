@@ -149,9 +149,9 @@ def _prep_pnf(pnf_path: str) -> pl.DataFrame:
 
 def _prep_esoa(esoa_path: str) -> pl.DataFrame:
     """Load and normalize eSOA input with Polars; return prepared frame."""
-    esoa_scan = pl.scan_csv(esoa_path)
+    esoa_scan = _scan_input(esoa_path)
     if "DESCRIPTION" not in esoa_scan.columns:
-        raise ValueError("esoa input is missing required column: DESCRIPTION")
+        raise ValueError("eSOA input is missing required column: DESCRIPTION")
     return esoa_scan.with_columns(pl.col("DESCRIPTION").alias("raw_text")).select("raw_text").collect(streaming=True)
 
 

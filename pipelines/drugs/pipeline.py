@@ -32,13 +32,18 @@ ATCD_SCRIPTS: tuple[str, ...] = ("atcd.R", "export.R", "filter.R")
 
 
 def _require_parquet(path: Path, *, label: str) -> Path:
-    """Ensure callers pass parquet inputs; prefer an existing parquet sibling when given CSV."""
+    """
+    Prefer a parquet path, but allow CSV when no parquet sibling exists to preserve legacy inputs.
+
+    If a CSV is provided and a parquet sibling exists, the parquet file is used. Otherwise the
+    original path is returned so callers can continue with CSV inputs.
+    """
     if path.suffix.lower() == ".parquet":
         return path
     parquet_peer = path.with_suffix(".parquet")
     if parquet_peer.is_file():
         return parquet_peer
-    raise ValueError(f"{label} must be a parquet file (got {path}). Please provide/parquet-export this input.")
+    return path
 
 
 @register_pipeline
@@ -100,8 +105,17 @@ class DrugsAndMedicinePipeline(BasePipeline):
             annex_path = _require_parquet(Path(params.annex_csv), label="Annex F prepared input")
             if not annex_path.is_file():
                 raise FileNotFoundError(
-                    f"Annex parquet not found: {annex_path} (expected a prepared Annex F dataset)."
+                    f"Annex input not found: {annex_path} (expected a prepared Annex F dataset)."
                 )
+            if annex_path.suffix.lower() != ".parquet":
+                try:
+                    import polars as pl  # Local import to avoid hard dependency at import time.
+
+                    annex_parquet = annex_path.with_suffix(".parquet")
+                    pl.read_csv(annex_path).write_parquet(annex_parquet)
+                    annex_path = annex_parquet
+                except Exception:
+                    pass
             prepared_paths["annex"] = annex_path.resolve()
             pnf_prep, esoa_prep = prepare(
                 str(_require_parquet(Path(params.pnf_csv), label="PNF input")),
@@ -237,6 +251,13 @@ class DrugsAndMedicinePipeline(BasePipeline):
             parquet_src = source.with_suffix(".parquet")
             if parquet_src.is_file():
                 shutil.copy2(parquet_src, dest.with_suffix(".parquet"))
+            elif dest.suffix.lower() == ".csv":
+                try:
+                    import polars as pl  # Local import to avoid polluting module import time.
+
+                    pl.read_csv(dest).write_parquet(dest.with_suffix(".parquet"))
+                except Exception:
+                    pass
 
         patterns = ("who_atc_*_molecules.csv", "who_atc_*_molecules.parquet")
         for pattern in patterns:
@@ -267,7 +288,12 @@ class DrugsAndMedicinePipeline(BasePipeline):
                 return dated[-1][1]
             return max(paths, key=lambda p: p.stat().st_mtime)
 
-        existing_maps = sorted(list(inputs_dir.glob("fda_drug_*.csv")) + list(inputs_dir.glob("fda_brand_map_*.csv")))
+        existing_maps = sorted(
+            list(inputs_dir.glob("fda_drug_*.parquet"))
+            + list(inputs_dir.glob("fda_brand_map_*.parquet"))
+            + list(inputs_dir.glob("fda_drug_*.csv"))
+            + list(inputs_dir.glob("fda_brand_map_*.csv"))
+        )
         module_output_dir = THIS_DIR / "dependencies" / "fda_ph_scraper" / "output"
         module_output_dir.mkdir(parents=True, exist_ok=True)
         with open(os.devnull, "w") as devnull:
@@ -293,7 +319,12 @@ class DrugsAndMedicinePipeline(BasePipeline):
                     "Building FDA brand map failed and no prior map is available. "
                     "Re-run with --skip-brandmap if the FDA site is unreachable."
                 ) from exc
-        brand_files = sorted(list(module_output_dir.glob("fda_drug_*.csv")) + list(module_output_dir.glob("fda_brand_map_*.csv")))
+        brand_files = sorted(
+            list(module_output_dir.glob("fda_drug_*.parquet"))
+            + list(module_output_dir.glob("fda_brand_map_*.parquet"))
+            + list(module_output_dir.glob("fda_drug_*.csv"))
+            + list(module_output_dir.glob("fda_brand_map_*.csv"))
+        )
         selected = _pick_latest(brand_files)
         if not selected:
             latest_existing = _pick_latest(existing_maps)
@@ -306,9 +337,17 @@ class DrugsAndMedicinePipeline(BasePipeline):
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(selected, dest)
         parquet_src = selected.with_suffix(".parquet")
+        dest_parquet = dest.with_suffix(".parquet")
         if parquet_src.is_file():
-            shutil.copy2(parquet_src, dest.with_suffix(".parquet"))
-        return dest
+            shutil.copy2(parquet_src, dest_parquet)
+        elif dest.suffix.lower() == ".csv":
+            try:
+                import polars as pl  # Local import to avoid imposing a hard dependency at module import time.
+
+                pl.read_csv(dest).write_parquet(dest_parquet)
+            except Exception:
+                pass
+        return dest_parquet if dest_parquet.is_file() else dest
 
     @staticmethod
     def _run_resolve_unknowns(project_root: Path) -> None:
