@@ -111,6 +111,7 @@ def _run_r_script(script_path: Path) -> None:
         )
     env = os.environ.copy()
     env.setdefault("ESOA_DRUGBANK_QUIET", "1")
+    env.setdefault("RSCRIPT_PATH", str(rscript))
     # Allow R helpers to use all local cores by default (tunable via env).
     if "ESOA_DRUGBANK_WORKERS" not in env:
         cpu_count = os.cpu_count() or 13
@@ -132,7 +133,7 @@ def _copy_to_pipeline_inputs(source: Path, dest: Path) -> None:
         shutil.copy2(parquet_src, dest.with_suffix(".parquet"))
 
 
-def _ensure_parquet_sibling(csv_path: Path) -> Optional[Path]:
+def _ensure_parquet_sibling(csv_path: Path, *, verbose: bool = True) -> Optional[Path]:
     """Create a Parquet sibling for a CSV if missing."""
     if csv_path.suffix.lower() != ".csv":
         return None
@@ -145,7 +146,8 @@ def _ensure_parquet_sibling(csv_path: Path) -> Optional[Path]:
         df.to_parquet(parquet_path, index=False)
         return parquet_path
     except Exception as exc:
-        print(f"[parquet] Warning: could not create {parquet_path} from {csv_path}: {exc}")
+        if verbose:
+            print(f"[parquet] Warning: could not create {parquet_path} from {csv_path}: {exc}")
         return None
 
 
@@ -232,21 +234,24 @@ def _find_latest_file(directory: Path, pattern: str) -> Optional[Path]:
     return files[-1] if files else None
 
 
-def refresh_pnf(esoa_hint: Optional[str]) -> Path:
+def refresh_pnf(esoa_hint: Optional[str], *, verbose: bool = True) -> Path:
     """Run pipelines.drugs.scripts.prepare_drugs against the current PNF + eSOA inputs."""
     inputs_dir = _ensure_inputs_dir()
     pnf_csv = _ensure_file(inputs_dir / "pnf.csv", "PNF source CSV")
     esoa_csv = _resolve_esoa_source(inputs_dir, esoa_hint)
-    print(f"[pnf] Preparing PNF dataset from {pnf_csv} and {esoa_csv}")
+    if verbose:
+        print(f"[pnf] Preparing PNF dataset from {pnf_csv} and {esoa_csv}")
     pnf_out, _ = prepare(str(pnf_csv), str(esoa_csv), str(inputs_dir))
     out_path = Path(pnf_out).resolve()
-    print(f"[pnf] Wrote normalized dataset to {out_path}")
+    if verbose:
+        print(f"[pnf] Wrote normalized dataset to {out_path}")
     return out_path
 
 
-def refresh_who(inputs_dir: Path) -> Path:
+def refresh_who(inputs_dir: Path, *, verbose: bool = True) -> Path:
     """Trigger the WHO ATC R scripts and return the freshest molecules export."""
-    print("[who] Running dependencies/atcd R scripts...")
+    if verbose:
+        print("[who] Running dependencies/atcd R scripts...")
     DrugsAndMedicinePipeline._run_r_scripts(PROJECT_DIR, inputs_dir)
     candidates = list(inputs_dir.glob("who_atc_*_molecules.csv"))
     candidates.extend(
@@ -259,19 +264,25 @@ def refresh_who(inputs_dir: Path) -> Path:
         raise FileNotFoundError(
             "WHO ATC export not found after running the R scripts (expected who_atc_<date>.csv)."
         )
-    print(f"[who] Latest molecules export: {latest}")
+    if verbose:
+        print(f"[who] Latest molecules export: {latest}")
     return latest
 
 
-def refresh_fda_brand_map(inputs_dir: Path) -> Path:
-    print("[fda_drug] Building FDA brand map export...")
+def refresh_fda_brand_map(inputs_dir: Path, *, verbose: bool = True) -> Path:
+    if verbose:
+        print("[fda_drug] Building FDA brand map export...")
     path = DrugsAndMedicinePipeline._build_brand_map(inputs_dir)
-    print(f"[fda_drug] Brand map available at {path}")
+    if verbose:
+        print(f"[fda_drug] Brand map available at {path}")
     return path
 
 
-def refresh_fda_food(inputs_dir: Path, quiet: bool = True, *, allow_scrape: bool = False) -> Path:
-    print("[fda_food] Scraping FDA PH food catalog...")
+def refresh_fda_food(
+    inputs_dir: Path, quiet: bool = True, *, allow_scrape: bool = False, verbose: bool = True
+) -> Path:
+    if verbose:
+        print("[fda_food] Scraping FDA PH food catalog...")
     module_name = "dependencies.fda_ph_scraper.food_scraper"
     module_output_dir = PROJECT_DIR / "dependencies" / "fda_ph_scraper" / "output"
     module_output_dir.mkdir(parents=True, exist_ok=True)
@@ -295,13 +306,15 @@ def refresh_fda_food(inputs_dir: Path, quiet: bool = True, *, allow_scrape: bool
     for pattern in ("fda_food_products*.csv", "fda_food_products*.parquet", "fda_food_export_*.csv"):
         for legacy in inputs_dir.glob(pattern):
             legacy.unlink(missing_ok=True)
-    print(f"[fda_food] Catalog refreshed at {dest_path}")
+    if verbose:
+        print(f"[fda_food] Catalog refreshed at {dest_path}")
     return dest_path
 
 
-def refresh_drugbank_generics_exports() -> tuple[Optional[Path], Optional[Path]]:
+def refresh_drugbank_generics_exports(*, verbose: bool = True) -> tuple[Optional[Path], Optional[Path]]:
     """Invoke the DrugBank R helper to regenerate generics + brand exports."""
-    print("[drugbank_generics] Launching dependencies/drugbank_generics/drugbank_all.R...")
+    if verbose:
+        print("[drugbank_generics] Launching dependencies/drugbank_generics/drugbank_all.R...")
     script_path = PROJECT_DIR / "dependencies" / "drugbank_generics" / "drugbank_all.R"
     if not script_path.is_file():
         raise FileNotFoundError(f"DrugBank helper not found at {script_path}")
@@ -317,40 +330,44 @@ def refresh_drugbank_generics_exports() -> tuple[Optional[Path], Optional[Path]]
     inputs_generics_master = DRUGS_INPUTS_DIR / "drugbank_generics_master.csv"
     inputs_brands = DRUGS_INPUTS_DIR / "drugbank_brands.csv"
     if not inputs_generics_master.exists():
-        print(
-            f"[drugbank_generics] Warning: {inputs_generics_master} not found after refresh."
-        )
+        if verbose:
+            print(f"[drugbank_generics] Warning: {inputs_generics_master} not found after refresh.")
     if not inputs_brands.exists():
-        print(
-            "[drugbank_generics] Note: drugbank_brands.csv was not produced. "
-            "Run with --include-drugbank-brands when the placeholder script is implemented."
-        )
+        if verbose:
+            print(
+                "[drugbank_generics] Note: drugbank_brands.csv was not produced. "
+                "Run with --include-drugbank-brands when the placeholder script is implemented."
+            )
     return (
         inputs_generics_master if inputs_generics_master.is_file() else None,
         inputs_brands if inputs_brands.is_file() else None,
     )
 
 
-def ensure_drugbank_mixtures_output() -> Optional[Path]:
+def ensure_drugbank_mixtures_output(*, verbose: bool = True) -> Optional[Path]:
     output_path = DRUGS_INPUTS_DIR / "drugbank_mixtures_master.csv"
     if output_path.is_file():
         return output_path
-    print(f"[drugbank_mixtures] Warning: expected output not found at {output_path}")
+    if verbose:
+        print(f"[drugbank_mixtures] Warning: expected output not found at {output_path}")
     return None
 
 
-def _maybe_run_drugbank_brands_script(include_flag: bool) -> None:
+def _maybe_run_drugbank_brands_script(include_flag: bool, *, verbose: bool = True) -> None:
     if not include_flag:
         return
     script_path = PROJECT_DIR / "dependencies" / "drugbank_generics" / "drugbank_brands.R"
     if not script_path.is_file():
-        print(f"[drugbank_brands] Placeholder script not found at {script_path}; skipping.")
+        if verbose:
+            print(f"[drugbank_brands] Placeholder script not found at {script_path}; skipping.")
         return
     rscript = shutil.which("Rscript")
     if not rscript:
-        print("[drugbank_brands] Rscript executable not found; cannot run placeholder.")
+        if verbose:
+            print("[drugbank_brands] Rscript executable not found; cannot run placeholder.")
         return
-    print(f"[drugbank_brands] Executing placeholder R script {script_path}...")
+    if verbose:
+        print(f"[drugbank_brands] Executing placeholder R script {script_path}...")
     env = os.environ.copy()
     env.setdefault("ESOA_DRUGBANK_QUIET", "1")
     subprocess.run([rscript, str(script_path)], check=True, cwd=str(script_path.parent), env=env)
@@ -359,6 +376,11 @@ def _maybe_run_drugbank_brands_script(include_flag: bool) -> None:
 def main(argv: Optional[Sequence[str]] = None) -> None:
     parser = argparse.ArgumentParser(
         description="Refresh the reference datasets required by the DrugsAndMedicine pipeline."
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Print detailed progress messages in addition to the spinner output.",
     )
     parser.add_argument(
         "--esoa",
@@ -392,38 +414,48 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
 
     inputs_dir = _ensure_inputs_dir()
     artifacts: dict[str, Path] = {}
+    verbose = args.verbose
 
-    artifacts["pnf_prepared"] = _run_with_spinner("Prepare PNF dataset", lambda: refresh_pnf(args.esoa))
-    artifacts["who_molecules"] = _run_with_spinner("Refresh WHO ATC exports", lambda: refresh_who(inputs_dir))
+    artifacts["pnf_prepared"] = _run_with_spinner(
+        "Prepare PNF dataset", lambda: refresh_pnf(args.esoa, verbose=verbose)
+    )
+    artifacts["who_molecules"] = _run_with_spinner(
+        "Refresh WHO ATC exports", lambda: refresh_who(inputs_dir, verbose=verbose)
+    )
     if args.include_fda_food:
         artifacts["fda_food_catalog"] = _run_with_spinner(
             "Refresh FDA food catalog",
             lambda: refresh_fda_food(
                 inputs_dir,
                 allow_scrape=args.allow_fda_food_scrape,
+                verbose=verbose,
             ),
         )
-    artifacts["fda_brand_map"] = _run_with_spinner("Build FDA brand map", lambda: refresh_fda_brand_map(inputs_dir))
+    artifacts["fda_brand_map"] = _run_with_spinner(
+        "Build FDA brand map", lambda: refresh_fda_brand_map(inputs_dir, verbose=verbose)
+    )
     generics_path, brands_path = _run_with_spinner(
-        "Refresh DrugBank generics exports", refresh_drugbank_generics_exports
+        "Refresh DrugBank generics exports", lambda: refresh_drugbank_generics_exports(verbose=verbose)
     )
     if generics_path:
         artifacts["drugbank_generics"] = generics_path
     if brands_path:
         artifacts["drugbank_brands_csv"] = brands_path
-    mixtures_path = _run_with_spinner("Check DrugBank mixtures output", ensure_drugbank_mixtures_output)
+    mixtures_path = _run_with_spinner(
+        "Check DrugBank mixtures output", lambda: ensure_drugbank_mixtures_output(verbose=verbose)
+    )
     if mixtures_path:
         artifacts["drugbank_mixtures"] = mixtures_path
     if args.include_drugbank_brands:
         _run_with_spinner(
             "Run DrugBank brands placeholder",
-            lambda: _maybe_run_drugbank_brands_script(args.include_drugbank_brands),
+            lambda: _maybe_run_drugbank_brands_script(args.include_drugbank_brands, verbose=verbose),
         )
 
     # Ensure Parquet siblings for downstream consumers (CSV remains for compatibility).
     for path in artifacts.values():
         if path and path.suffix.lower() == ".csv":
-            _ensure_parquet_sibling(path)
+            _ensure_parquet_sibling(path, verbose=verbose)
 
     print("\nArtifacts updated:")
     for label, path in artifacts.items():
