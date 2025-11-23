@@ -15,11 +15,17 @@ from typing import Callable, Iterable, List, TypeVar
 
 import pandas as pd
 
+try:
+    import psutil  # type: ignore
+except Exception:  # pragma: no cover
+    psutil = None
+
 
 BASE_DIR = Path(__file__).resolve().parent
 DRUGS_DIR = BASE_DIR / "inputs" / "drugs"
 OUTPUTS_DIR = BASE_DIR / "outputs"
 OUTPUTS_DRUGS_DIR = OUTPUTS_DIR / "drugs"
+PARALLEL_CONFIG_PATH = BASE_DIR / "parallel_config.txt"
 _REFERENCE_ROWS_SHARED: list[dict] | None = None
 _REFERENCE_INDEX_SHARED: dict[str, list[int]] | None = None
 _BRAND_PATTERNS_SHARED: list[tuple[re.Pattern, str]] | None = None
@@ -66,6 +72,34 @@ def _run_with_spinner(label: str, func: Callable[[], T]) -> T:
     if err:
         raise err[0]
     return result[0] if result else None  # type: ignore[return-value]
+
+
+def _flag_passed(name: str) -> bool:
+    flag = f"--{name}"
+    return any(arg == flag or arg.startswith(f"{flag}=") for arg in sys.argv[1:])
+
+
+def _load_parallel_config() -> dict[str, str]:
+    if not PARALLEL_CONFIG_PATH.exists():
+        return {}
+    try:
+        cfg: dict[str, str] = {}
+        for line in PARALLEL_CONFIG_PATH.read_text().splitlines():
+            if "=" in line:
+                key, val = line.split("=", 1)
+                cfg[key.strip()] = val.strip()
+        return cfg
+    except Exception:
+        return {}
+
+
+def _save_parallel_config(config: dict[str, str]) -> None:
+    try:
+        keys = ("backend", "workers")
+        lines = [f"{k}={config[k]}" for k in keys if k in config]
+        PARALLEL_CONFIG_PATH.write_text("\n".join(lines))
+    except Exception:
+        pass
 
 
 def _effective_workers(requested: int | None) -> int:
@@ -184,6 +218,92 @@ def _as_str_or_empty(value) -> str:
     if val is None:
         return ""
     return str(val)
+
+
+def _memory_snapshot() -> dict | None:
+    if psutil is None:
+        return None
+    try:
+        vm = psutil.virtual_memory()
+        sm = psutil.swap_memory()
+        return {
+            "available": int(vm.available),
+            "total": int(vm.total),
+            "swap_used": int(sm.used),
+        }
+    except Exception:
+        return None
+
+
+def _swap_thrash(before: dict | None, after: dict | None) -> bool:
+    if not before or not after:
+        return False
+    avail_drop = before.get("available", 0) - after.get("available", 0)
+    total = max(1, after.get("total", 1))
+    swap_jump = after.get("swap_used", 0) - before.get("swap_used", 0)
+    return (avail_drop > 0.2 * total) or (swap_jump > 256 * 1024 * 1024)
+
+
+def _autotune_parallelism(
+    annex_records: list[dict],
+    reference_rows: list[dict],
+    reference_index: dict[str, list[int]],
+    brand_patterns: list[tuple[re.Pattern, str]],
+    generic_automaton,
+    generic_phrases: list[str],
+    mixture_lookup: dict[str, list[dict]],
+    drugbank_refs_by_id: dict[str, list[dict]],
+) -> tuple[int, int, str]:
+    total = len(annex_records)
+    if not total:
+        return (8, 300, "process")
+    # Use the full Annex F payload to benchmark realistic performance.
+    sample = annex_records
+    cpu = os.cpu_count() or 4
+    max_workers = max(4, min(total, cpu * 2))
+    workers = 4
+    best: tuple[float, int, int] | None = None
+    baseline_mem = _memory_snapshot()
+    while workers <= max_workers:
+        chunk = max(1, math.ceil(total / workers))
+        before = _memory_snapshot()
+        start = time.perf_counter()
+        try:
+            match_annex_with_atc(
+                sample,
+                reference_rows,
+                reference_index,
+                brand_patterns,
+                generic_automaton,
+                generic_phrases,
+                mixture_lookup,
+                drugbank_refs_by_id,
+                max_workers=workers,
+                chunk_size=chunk,
+                use_threads=False,
+            )
+            duration = time.perf_counter() - start
+            after = _memory_snapshot()
+            thrash = _swap_thrash(before, after) or _swap_thrash(baseline_mem, after)
+            if thrash:
+                break
+            if best is None or duration < best[0]:
+                best = (duration, workers, chunk)
+            elif best and duration > best[0] * 1.15:
+                # Overhead is outweighing gains; stop exploring higher worker counts.
+                break
+        except Exception:
+            pass
+        workers += 2
+    if best is None:
+        return (8, 300, "process")
+    best_time, best_workers, best_chunk = best
+    backend = "process"
+    print(
+        f"[autotune] chose workers={best_workers}, chunk_size={best_chunk}, "
+        f"time={best_time:.2f}s, psutil={'on' if psutil else 'off'}"
+    )
+    return best_workers, best_chunk, backend
 
 
 def _ordered_overlap(
@@ -1093,7 +1213,7 @@ def match_annex_with_atc(
     mixture_lookup: dict[str, list[dict]],
     drugbank_refs_by_id: dict[str, list[dict]],
     max_workers: int | None = None,
-    chunk_size: int = 25,
+    chunk_size: int = 172,
     use_threads: bool = False,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     annex_records = (
@@ -1107,6 +1227,8 @@ def match_annex_with_atc(
 
     worker_count = _effective_workers(max_workers)
     use_threads = bool(use_threads)
+    backend_label = "threads" if use_threads else "processes"
+    print(f"[match_annex_with_atc] workers={worker_count} backend={backend_label}")
     if worker_count <= 1:
         for rec in annex_records:
             match_row, ties, unresolved = _score_annex_row(
@@ -1169,8 +1291,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--workers",
         type=int,
-        default=None,
-        help="Number of workers to use (defaults to available CPU, minimum 2).",
+        default=14,
+        help="Number of workers to use (defaults to 8; raise for more CPU, lower if memory is tight).",
     )
     parser.add_argument(
         "--use-threads",
@@ -1180,8 +1302,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--backend",
         choices=["process", "thread", "auto"],
-        default="auto",
-        help="Backend to use for scoring; auto benchmarks a sample to pick process or thread (default).",
+        default="process",
+        help="Backend to use for scoring; process by default, auto benchmarks a sample to pick process or thread.",
     )
     parser.add_argument(
         "--benchmark-rows",
@@ -1192,7 +1314,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--chunk-size",
         type=int,
-        default=25,
+        default=300,
         help="Batch size per worker for process pool execution.",
     )
     return parser.parse_args()
@@ -1200,6 +1322,24 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = _parse_args()
+    config = _load_parallel_config()
+    user_workers = _flag_passed("workers")
+    user_chunk = _flag_passed("chunk-size")
+    user_backend = _flag_passed("backend") or _flag_passed("use-threads")
+    backend = args.backend
+    workers = args.workers
+    chunk_size = args.chunk_size
+    if args.use_threads:
+        backend = "thread"
+    if config:
+        if not user_backend:
+            backend = config.get("backend", backend)
+        if not user_workers and config.get("workers"):
+            try:
+                workers = int(config["workers"])
+            except Exception:
+                pass
+    backend = str(backend).lower()
     annex_lex_path = DRUGS_DIR / "annex_f_lexicon.csv"
     annex_raw_path = DRUGS_DIR / "annex_f.csv"
     drugbank_path = DRUGS_DIR / "drugbank_generics_master.csv"
@@ -1251,8 +1391,27 @@ def main() -> None:
         "Prepare Annex F records", lambda: _precompute_annex_records(annex_df, brand_patterns, generic_phrases)
     )
 
-    backend = args.backend
-    use_threads = args.use_threads
+    run_autotune = False
+    if run_autotune:
+        workers, _chunk_autotune, backend = _run_with_spinner(
+            "Autotune parallelism",
+            lambda: _autotune_parallelism(
+                annex_records,
+                reference_rows,
+                reference_index,
+                brand_patterns,
+                generic_automaton,
+                generic_phrases,
+                mixture_lookup,
+                drugbank_refs_by_id,
+            ),
+        )
+        _save_parallel_config({"backend": backend, "workers": str(workers)})
+
+    if not user_chunk:
+        chunk_size = max(1, math.ceil(len(annex_records) / max(1, workers)))
+
+    use_threads = args.use_threads or backend == "thread"
     if backend == "auto":
         sample_size = min(len(annex_records), max(10, args.benchmark_rows))
         sample = annex_records[:sample_size]
@@ -1268,8 +1427,8 @@ def main() -> None:
                 generic_phrases,
                 mixture_lookup,
                 drugbank_refs_by_id,
-                max_workers=args.workers,
-                chunk_size=args.chunk_size,
+                max_workers=workers,
+                chunk_size=chunk_size,
                 use_threads=thread_flag,
             )
             return time.perf_counter() - start
@@ -1279,6 +1438,7 @@ def main() -> None:
 
         t_thread, t_process = _run_with_spinner("Benchmark process vs thread", _benchmark_backends)
         use_threads = t_thread <= t_process
+        backend = "thread" if use_threads else "process"
         print(f"[auto-backend] thread={t_thread:.2f}s, process={t_process:.2f}s -> using {'threads' if use_threads else 'processes'}")
 
     match_df, tie_df, unresolved_df = _run_with_spinner(
@@ -1292,8 +1452,8 @@ def main() -> None:
             generic_phrases,
             mixture_lookup,
             drugbank_refs_by_id,
-            max_workers=args.workers,
-            chunk_size=args.chunk_size,
+            max_workers=workers,
+            chunk_size=chunk_size,
             use_threads=use_threads or backend == "thread",
         ),
     )
