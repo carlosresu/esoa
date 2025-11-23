@@ -223,3 +223,4 @@ prompt.txt
 **/.Rproj.user/*.Rproj.user/
 *.Rproj
 .Rhistory
+parallel_config.txt
