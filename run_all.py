@@ -118,8 +118,14 @@ def _run_r_script(script_path: Path, *, verbose: bool = True) -> None:
     if "ESOA_DRUGBANK_WORKERS" not in env:
         cpu_count = os.cpu_count() or 13
         env["ESOA_DRUGBANK_WORKERS"] = str(max(13, cpu_count - 1))
-    stdout = None if verbose else subprocess.DEVNULL
-    stderr = None if verbose else subprocess.DEVNULL
+    log_path: Path | None = None
+    if not verbose:
+        log_path = script_path.with_suffix(".log")
+        stdout = log_path.open("w", encoding="utf-8")
+        stderr = subprocess.STDOUT
+    else:
+        stdout = None
+        stderr = None
     try:
         subprocess.run(
             [str(rscript), str(script_path)],
@@ -130,7 +136,15 @@ def _run_r_script(script_path: Path, *, verbose: bool = True) -> None:
             stderr=stderr,
         )
     except subprocess.CalledProcessError as exc:
+        if log_path and log_path.is_file():
+            print(f"[rscript] Failure log: {log_path}")
         raise RuntimeError(f"{script_path.name} exited with status {exc.returncode}") from exc
+    finally:
+        if stdout not in (None, sys.stdout, sys.stderr):
+            try:
+                stdout.close()  # type: ignore[arg-type]
+            except Exception:
+                pass
 
 
 def _copy_to_pipeline_inputs(source: Path, dest: Path) -> None:
