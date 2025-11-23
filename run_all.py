@@ -30,11 +30,13 @@ def _ensure_inputs_dir() -> Path:
     return DRUGS_INPUTS_DIR
 
 
-def _run_python_module(module: str, argv: Sequence[str], *, cwd: Path | None = None) -> None:
+def _run_python_module(module: str, argv: Sequence[str], *, cwd: Path | None = None, verbose: bool = True) -> None:
     command = [sys.executable, "-m", module, *argv]
     workdir = cwd or PROJECT_DIR
+    stdout = None if verbose else subprocess.DEVNULL
+    stderr = None if verbose else subprocess.DEVNULL
     try:
-        subprocess.run(command, check=True, cwd=str(workdir))
+        subprocess.run(command, check=True, cwd=str(workdir), stdout=stdout, stderr=stderr)
     except subprocess.CalledProcessError as exc:
         raise RuntimeError(f"Module {module} exited with status {exc.returncode}") from exc
 
@@ -103,7 +105,7 @@ def _run_with_spinner(label: str, func: Callable[[], T]) -> T:
     return result[0] if result else None  # type: ignore[return-value]
 
 
-def _run_r_script(script_path: Path) -> None:
+def _run_r_script(script_path: Path, *, verbose: bool = True) -> None:
     rscript = _find_rscript()
     if not rscript:
         raise FileNotFoundError(
@@ -116,8 +118,17 @@ def _run_r_script(script_path: Path) -> None:
     if "ESOA_DRUGBANK_WORKERS" not in env:
         cpu_count = os.cpu_count() or 13
         env["ESOA_DRUGBANK_WORKERS"] = str(max(13, cpu_count - 1))
+    stdout = None if verbose else subprocess.DEVNULL
+    stderr = None if verbose else subprocess.DEVNULL
     try:
-        subprocess.run([str(rscript), str(script_path)], check=True, cwd=str(script_path.parent), env=env)
+        subprocess.run(
+            [str(rscript), str(script_path)],
+            check=True,
+            cwd=str(script_path.parent),
+            env=env,
+            stdout=stdout,
+            stderr=stderr,
+        )
     except subprocess.CalledProcessError as exc:
         raise RuntimeError(f"{script_path.name} exited with status {exc.returncode}") from exc
 
@@ -291,7 +302,7 @@ def refresh_fda_food(
         argv.append("--quiet")
     if allow_scrape:
         argv.append("--allow-scrape")
-    _run_python_module(module_name, argv)
+    _run_python_module(module_name, argv, verbose=verbose)
     food_outputs = [
         path
         for path in module_output_dir.glob("fda_food_*.csv")
@@ -318,7 +329,7 @@ def refresh_drugbank_generics_exports(*, verbose: bool = True) -> tuple[Optional
     script_path = PROJECT_DIR / "dependencies" / "drugbank_generics" / "drugbank_all.R"
     if not script_path.is_file():
         raise FileNotFoundError(f"DrugBank helper not found at {script_path}")
-    _run_r_script(script_path)
+    _run_r_script(script_path, verbose=verbose)
     module_output = script_path.parent / "output"
     for filename in (
         "drugbank_generics_master.csv",
