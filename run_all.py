@@ -12,7 +12,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import List, Optional, Sequence
+from typing import Callable, List, Optional, Sequence, TypeVar
 
 import pandas as pd
 
@@ -22,6 +22,7 @@ from pipelines.drugs.scripts.prepare_drugs import prepare
 
 PROJECT_DIR = PROJECT_ROOT
 DRUGS_INPUTS_DIR = PIPELINE_INPUTS_DIR
+T = TypeVar("T")
 
 
 def _ensure_inputs_dir() -> Path:
@@ -63,6 +64,43 @@ def _find_rscript() -> Optional[Path]:
                 if candidate.is_file():
                     return candidate
     return None
+
+
+def _run_with_spinner(label: str, func: Callable[[], T]) -> T:
+    """Run func() while showing a lightweight CLI spinner with elapsed time."""
+    import threading
+    import time
+
+    done = threading.Event()
+    result: list[T] = []
+    err: list[BaseException] = []
+
+    def worker() -> None:
+        try:
+            result.append(func())
+        except BaseException as exc:  # noqa: BLE001
+            err.append(exc)
+        finally:
+            done.set()
+
+    start = time.perf_counter()
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+    frames = "|/-\\"
+    idx = 0
+    while not done.wait(0.1):
+        elapsed = time.perf_counter() - start
+        sys.stdout.write(f"\r{frames[idx % len(frames)]} {elapsed:7.2f}s {label}")
+        sys.stdout.flush()
+        idx += 1
+    thread.join()
+    elapsed = time.perf_counter() - start
+    status = "done" if not err else "error"
+    sys.stdout.write(f"\r[{status}] {elapsed:7.2f}s {label}\n")
+    sys.stdout.flush()
+    if err:
+        raise err[0]
+    return result[0] if result else None  # type: ignore[return-value]
 
 
 def _run_r_script(script_path: Path) -> None:
@@ -355,23 +393,32 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     inputs_dir = _ensure_inputs_dir()
     artifacts: dict[str, Path] = {}
 
-    artifacts["pnf_prepared"] = refresh_pnf(args.esoa)
-    artifacts["who_molecules"] = refresh_who(inputs_dir)
+    artifacts["pnf_prepared"] = _run_with_spinner("Prepare PNF dataset", lambda: refresh_pnf(args.esoa))
+    artifacts["who_molecules"] = _run_with_spinner("Refresh WHO ATC exports", lambda: refresh_who(inputs_dir))
     if args.include_fda_food:
-        artifacts["fda_food_catalog"] = refresh_fda_food(
-            inputs_dir,
-            allow_scrape=args.allow_fda_food_scrape,
+        artifacts["fda_food_catalog"] = _run_with_spinner(
+            "Refresh FDA food catalog",
+            lambda: refresh_fda_food(
+                inputs_dir,
+                allow_scrape=args.allow_fda_food_scrape,
+            ),
         )
-    artifacts["fda_brand_map"] = refresh_fda_brand_map(inputs_dir)
-    generics_path, brands_path = refresh_drugbank_generics_exports()
+    artifacts["fda_brand_map"] = _run_with_spinner("Build FDA brand map", lambda: refresh_fda_brand_map(inputs_dir))
+    generics_path, brands_path = _run_with_spinner(
+        "Refresh DrugBank generics exports", refresh_drugbank_generics_exports
+    )
     if generics_path:
         artifacts["drugbank_generics"] = generics_path
     if brands_path:
         artifacts["drugbank_brands_csv"] = brands_path
-    mixtures_path = ensure_drugbank_mixtures_output()
+    mixtures_path = _run_with_spinner("Check DrugBank mixtures output", ensure_drugbank_mixtures_output)
     if mixtures_path:
         artifacts["drugbank_mixtures"] = mixtures_path
-    _maybe_run_drugbank_brands_script(args.include_drugbank_brands)
+    if args.include_drugbank_brands:
+        _run_with_spinner(
+            "Run DrugBank brands placeholder",
+            lambda: _maybe_run_drugbank_brands_script(args.include_drugbank_brands),
+        )
 
     # Ensure Parquet siblings for downstream consumers (CSV remains for compatibility).
     for path in artifacts.values():
