@@ -117,7 +117,7 @@ def _run_r_script(script_path: Path, *, verbose: bool = True) -> None:
     # Allow R helpers to use all local cores by default (tunable via env).
     if "ESOA_DRUGBANK_WORKERS" not in env:
         cpu_count = os.cpu_count() or 13
-        env["ESOA_DRUGBANK_WORKERS"] = str(max(13, cpu_count - 1))
+        env["ESOA_DRUGBANK_WORKERS"] = str(max(1, cpu_count - 1))
     log_path: Path | None = None
     if not verbose:
         log_path = script_path.with_suffix(".log")
