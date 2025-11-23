@@ -11,13 +11,9 @@ function Prompt-YesNo($q, $defaultYes=$true) {
 # tripping on the Cloud Files reparse point ("Invalid argument" canonical name error).
 function Convert-ToExtendedPath($path) {
   $full = [System.IO.Path]::GetFullPath($path)
-  $extended = if ($full.StartsWith("\\\\?\\")) {
-    $full
-  } elseif ($full.StartsWith("\\")) {
-    "\\\\?\\UNC" + $full.Substring(1)
-  } else {
-    "\\\\?\\" + $full
-  }
+  # Strip any existing extended prefix to avoid duplicating //?/ when re-running.
+  $full = $full -replace "^\\\\\\?\\", "" -replace "^//\\?/", ""
+  $extended = if ($full.StartsWith("\\")) { "\\\\?\\UNC" + $full.Substring(1) } else { "\\\\?\\" + $full }
   # Unison prefers forward-slash extended paths: //?/C:/Users/...
   $asSlashes = $extended -replace "\\","/"
   return $asSlashes -replace "^//\\?/", "//?/"
