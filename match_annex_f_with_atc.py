@@ -1208,8 +1208,8 @@ def main() -> None:
     fda_brand_path = DRUGS_DIR / "fda_drug_2025-11-12.csv"
     mixture_path = DRUGS_DIR / "drugbank_mixtures_master.csv"
 
-    fda_df = _run_with_spinner("Load FDA brand map", lambda: _read_table(fda_brand_path, required=False))
-    brand_patterns = _run_with_spinner("Build brand substitutions", lambda: _build_brand_map(fda_df))
+    # Brand swapping is disabled for now; keep patterns empty.
+    brand_patterns: list[tuple[re.Pattern, str]] = []
 
     def _load_annex_source() -> pd.DataFrame:
         df = _read_table(annex_raw_path, required=False)
