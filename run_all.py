@@ -38,10 +38,39 @@ def _run_python_module(module: str, argv: Sequence[str], *, cwd: Path | None = N
         raise RuntimeError(f"Module {module} exited with status {exc.returncode}") from exc
 
 
+def _find_rscript() -> Optional[Path]:
+    """Resolve the Rscript executable across common Windows/Linux locations."""
+    env_override = os.environ.get("RSCRIPT_PATH")
+    if env_override:
+        candidate = Path(env_override)
+        if candidate.is_file():
+            return candidate
+    which = shutil.which("Rscript")
+    if which:
+        return Path(which)
+    r_home = os.environ.get("R_HOME")
+    if r_home:
+        for rel in ("bin/Rscript", "bin/Rscript.exe", "bin/x64/Rscript.exe", "bin/x64/Rscript"):
+            candidate = Path(r_home) / rel
+            if candidate.is_file():
+                return candidate
+    for base in (Path("C:/Program Files/R"), Path("C:/Program Files (x86)/R")):
+        versions = [p for p in base.glob("R-*") if p.is_dir()]
+        versions.sort(key=lambda p: p.name)
+        for root in reversed(versions):
+            for rel in ("bin/x64/Rscript.exe", "bin/Rscript.exe", "bin/Rscript"):
+                candidate = root / rel
+                if candidate.is_file():
+                    return candidate
+    return None
+
+
 def _run_r_script(script_path: Path) -> None:
-    rscript = shutil.which("Rscript")
+    rscript = _find_rscript()
     if not rscript:
-        raise FileNotFoundError("Rscript executable not found. Install R or adjust your PATH.")
+        raise FileNotFoundError(
+            "Rscript executable not found. Install R or set RSCRIPT_PATH/R_HOME or add Rscript to PATH."
+        )
     env = os.environ.copy()
     env.setdefault("ESOA_DRUGBANK_QUIET", "1")
     # Allow R helpers to use all local cores by default (tunable via env).
@@ -49,7 +78,7 @@ def _run_r_script(script_path: Path) -> None:
         cpu_count = os.cpu_count() or 13
         env["ESOA_DRUGBANK_WORKERS"] = str(max(13, cpu_count - 1))
     try:
-        subprocess.run([rscript, str(script_path)], check=True, cwd=str(script_path.parent), env=env)
+        subprocess.run([str(rscript), str(script_path)], check=True, cwd=str(script_path.parent), env=env)
     except subprocess.CalledProcessError as exc:
         raise RuntimeError(f"{script_path.name} exited with status {exc.returncode}") from exc
 

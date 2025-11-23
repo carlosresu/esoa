@@ -44,6 +44,14 @@ It prepares raw CSVs, parses text into structured features, detects candidate ge
 - `tibble`
 - `stringr`
 
+## Fresh setup (new machine)
+
+- **Python (pyenv/pyenv-win)**: `pyenv install 3.12.10 && pyenv global 3.12.10`, then `python -m venv .venv && .venv/Scripts/activate` (Windows) or `source .venv/bin/activate` (macOS/Linux), followed by `pip install -r requirements.txt`.
+- **R**: install the latest R release from CRAN and ensure `Rscript` is on `PATH` (or set `RSCRIPT_PATH`/`R_HOME` before running). The pipeline will auto-detect `C:/Program Files/R/R-*/bin/x64/Rscript.exe` on Windows.
+- **pacman bootstrap**: the WHO ATC scripts now self-install `pacman` if missing; you can also preinstall with `Rscript -e "if(!requireNamespace('pacman', quietly=TRUE)) install.packages('pacman', repos='https://cloud.r-project.org')"` to speed up the first run.
+- **R package cache**: by default packages go to `R_LIBS_USER` (e.g., `C:/Users/<you>/AppData/Local/R/win-library/<version>` on Windows). No admin rights are required.
+- **First refresh**: activate the venv, then run `python run_all.py` from the repo root to pull PNF/eSOA, scrape WHO ATC via R, and hydrate FDA/DrugBank inputs.
+
 ## Documentation maintenance
 
 Recent housekeeping added explicit module docstrings and refreshed inline

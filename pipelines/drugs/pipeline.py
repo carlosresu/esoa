@@ -31,6 +31,33 @@ ATCD_SUBDIR = Path("dependencies") / "atcd"
 ATCD_SCRIPTS: tuple[str, ...] = ("atcd.R", "export.R", "filter.R")
 
 
+def _find_rscript() -> Optional[Path]:
+    """Locate the Rscript executable across PATH and common install roots."""
+    env_override = os.environ.get("RSCRIPT_PATH")
+    if env_override:
+        candidate = Path(env_override)
+        if candidate.is_file():
+            return candidate
+    which = shutil.which("Rscript")
+    if which:
+        return Path(which)
+    r_home = os.environ.get("R_HOME")
+    if r_home:
+        for rel in ("bin/Rscript", "bin/Rscript.exe", "bin/x64/Rscript.exe", "bin/x64/Rscript"):
+            candidate = Path(r_home) / rel
+            if candidate.is_file():
+                return candidate
+    for base in (Path("C:/Program Files/R"), Path("C:/Program Files (x86)/R")):
+        versions = [p for p in base.glob("R-*") if p.is_dir()]
+        versions.sort(key=lambda p: p.name)
+        for root in reversed(versions):
+            for rel in ("bin/x64/Rscript.exe", "bin/Rscript.exe", "bin/Rscript"):
+                candidate = root / rel
+                if candidate.is_file():
+                    return candidate
+    return None
+
+
 @register_pipeline
 class DrugsAndMedicinePipeline(BasePipeline):
     """Concrete pipeline for the existing drug matching workflow."""
@@ -194,7 +221,7 @@ class DrugsAndMedicinePipeline(BasePipeline):
             return
         out_dir = atcd_dir / "output"
         out_dir.mkdir(parents=True, exist_ok=True)
-        rscript = shutil.which("Rscript")
+        rscript = _find_rscript()
         if not rscript:
             return
         scripts = [atcd_dir / script for script in ATCD_SCRIPTS]
@@ -203,7 +230,7 @@ class DrugsAndMedicinePipeline(BasePipeline):
         with open(os.devnull, "w") as devnull:
             for script in ATCD_SCRIPTS:
                 subprocess.run(
-                    [rscript, script],
+                    [str(rscript), script],
                     check=True,
                     cwd=str(atcd_dir),
                     stdout=devnull,

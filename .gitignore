@@ -224,3 +224,4 @@ prompt.txt
 *.Rproj
 .Rhistory
 parallel_config.txt
+*.7z
