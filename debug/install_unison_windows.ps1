@@ -12,11 +12,11 @@ function Prompt-YesNo($q, $defaultYes=$true) {
 function Convert-ToExtendedPath($path) {
   $full = [System.IO.Path]::GetFullPath($path)
   # Strip any existing extended prefix to avoid duplicating //?/ when re-running.
-  $full = $full -replace "^\\\\\\?\\", "" -replace "^//\\?/", ""
+  $full = $full -replace '^\\\\\?\\', '' -replace '^//\?/', ''
   $extended = if ($full.StartsWith("\\")) { "\\\\?\\UNC" + $full.Substring(1) } else { "\\\\?\\" + $full }
   # Unison prefers forward-slash extended paths: //?/C:/Users/...
   $asSlashes = $extended -replace "\\","/"
-  return $asSlashes -replace "^//\\?/", "//?/"
+  return $asSlashes -replace '^//\?/', '//?/'
 }
 
 # --- Roots (mac-equivalent) ---
