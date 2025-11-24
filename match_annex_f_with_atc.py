@@ -251,6 +251,7 @@ def _autotune_parallelism(
     brand_patterns: list[tuple[re.Pattern, str]],
     generic_automaton,
     generic_phrases: list[str],
+    generic_atc_map: dict[str, list[str]],
     mixture_lookup: dict[str, list[dict]],
     drugbank_refs_by_id: dict[str, list[dict]],
 ) -> tuple[int, int, str]:
@@ -276,6 +277,7 @@ def _autotune_parallelism(
                 brand_patterns,
                 generic_automaton,
                 generic_phrases,
+                generic_atc_map,
                 mixture_lookup,
                 drugbank_refs_by_id,
                 max_workers=workers,
@@ -476,6 +478,19 @@ SECONDARY_WEIGHTS = {
     CATEGORY_OTHER: 1,
 }
 
+GENERIC_MISS_PENALTY_PRIMARY = 6
+GENERIC_MISS_PENALTY_SECONDARY = 4
+GENERIC_MATCH_REQUIRED = True
+
+# Common spelling/lexical variants we want to normalize across Annex F and references.
+GENERIC_SYNONYMS = {
+    "BECLOMETASONE": "BECLOMETHASONE",
+    "AMIDOTRIZOATE": "DIATRIZOATE",
+    "DIATRIZOIC": "DIATRIZOATE",
+    "DIATRIZOIC ACID": "DIATRIZOATE",
+    "DIATRIZOIC ACID DIHYDRATE": "DIATRIZOATE",
+}
+
 
 def _is_numeric_token(token: str) -> bool:
     if not isinstance(token, str):
@@ -546,6 +561,7 @@ def _normalize_tokens(tokens: List[str], drop_stopwords: bool = False) -> List[s
 
         tok_upper = FORM_CANON.get(tok_upper, tok_upper)
         tok_upper = ROUTE_CANON.get(tok_upper, tok_upper)
+        tok_upper = GENERIC_SYNONYMS.get(tok_upper, tok_upper)
 
         # Always drop purely natural-language stopwords.
         if tok_upper == "PER":
@@ -684,7 +700,28 @@ def _build_generic_phrases(drugbank_df: pd.DataFrame) -> list[str]:
             phrase = _normalize_phrase(_as_str_or_empty(row.get(col)))
             if len(phrase) >= 3:
                 phrases.add(phrase)
+    for raw, canon in GENERIC_SYNONYMS.items():
+        phrases.add(_normalize_phrase(raw))
+        phrases.add(_normalize_phrase(canon))
     return sorted(phrases)
+
+
+def _build_generic_to_atc_map(drugbank_df: pd.DataFrame) -> dict[str, list[str]]:
+    lookup: dict[str, set[str]] = defaultdict(set)
+    for row in drugbank_df.to_dict(orient="records"):
+        atc = _as_str_or_empty(row.get("atc_code"))
+        if not atc:
+            continue
+        for col in ("canonical_generic_name", "lexeme", "generic_components_key"):
+            phrase = _normalize_phrase(_as_str_or_empty(row.get(col)))
+            if len(phrase) >= 3:
+                lookup[phrase].add(atc)
+    for raw, canon in GENERIC_SYNONYMS.items():
+        norm_raw = _normalize_phrase(raw)
+        norm_canon = _normalize_phrase(canon)
+        if norm_canon in lookup:
+            lookup[norm_raw].update(lookup[norm_canon])
+    return {phrase: sorted(codes) for phrase, codes in lookup.items() if codes}
 
 
 def _normalize_annex_df(df: pd.DataFrame, brand_patterns: list[tuple[re.Pattern, str]]) -> pd.DataFrame:
@@ -703,16 +740,24 @@ def _normalize_annex_df(df: pd.DataFrame, brand_patterns: list[tuple[re.Pattern,
 
 
 def _precompute_annex_records(
-    annex_df: pd.DataFrame, brand_patterns: list[tuple[re.Pattern, str]], generic_phrases: list[str]
+    annex_df: pd.DataFrame,
+    brand_patterns: list[tuple[re.Pattern, str]],
+    generic_phrases: list[str],
+    generic_atc_map: dict[str, list[str]] | None = None,
 ) -> list[dict]:
     records = []
     generic_automaton = _build_aho_automaton(generic_phrases) if generic_phrases else None
+    generic_atc_map = generic_atc_map or {}
     for row in annex_df.to_dict(orient="records"):
         description = _apply_brand_swaps(_as_str_or_empty(row.get("Drug Description")), brand_patterns)
         base_tokens = split_with_parentheses(description)
         tokens_primary = _normalize_tokens(base_tokens, drop_stopwords=True)
         tokens_secondary = _normalize_tokens(base_tokens, drop_stopwords=False)
         row["fuzzy_basis"] = "|".join(tokens_secondary)
+        generic_hits = _aho_find(_normalize_phrase(description), generic_automaton) if generic_automaton else set()
+        generic_hit_atcs: set[str] = set()
+        for hit in generic_hits:
+            generic_hit_atcs.update(generic_atc_map.get(hit, ()))
         records.append(
             row
             | {
@@ -723,9 +768,8 @@ def _precompute_annex_records(
                 "annex_cat_primary": _categorize_tokens(tokens_primary),
                 "annex_cat_secondary": _categorize_tokens(tokens_secondary),
                 "norm_description": _normalize_phrase(description),
-                "generic_hits": _aho_find(_normalize_phrase(description), generic_automaton)
-                if generic_automaton
-                else set(),
+                "generic_hits": generic_hits,
+                "generic_hit_atcs": sorted(generic_hit_atcs),
             }
         )
     return records
@@ -919,6 +963,20 @@ def _build_match_record(
     secondary_overlap = ref.get("secondary_overlap") or []
     raw_ref = ref.get("raw_reference_row") or {}
     raw_display = _build_reference_display(raw_ref)
+
+    def _resolve_atc_code() -> str | None:
+        generic_hit_atcs = annex_row.get("generic_hit_atcs") or []
+        atc = _as_str_or_empty(ref.get("atc_code"))
+        if ref.get("source") == "drugbank_mixture":
+            if generic_hit_atcs:
+                return "|".join(sorted(set(generic_hit_atcs)))
+            return atc or None
+        if atc:
+            return atc
+        if generic_hit_atcs:
+            return "|".join(sorted(set(generic_hit_atcs)))
+        return None
+
     return {
         "Drug Code": annex_row.get("Drug Code"),
         "Drug Description": annex_row.get("Drug Description"),
@@ -930,7 +988,7 @@ def _build_match_record(
         "match_count": primary_score,
         "matched_secondary_lexicon": ref.get("lexicon_secondary"),
         "secondary_match_count": secondary_score,
-        "atc_code": ref.get("atc_code"),
+        "atc_code": _resolve_atc_code(),
         "primary_matching_tokens": "|".join(primary_overlap) if primary_overlap else None,
         "secondary_matching_tokens": "|".join(secondary_overlap) if secondary_overlap else None,
     }
@@ -955,6 +1013,8 @@ def _score_annex_row(
     fuzzy_counts_secondary = annex_row.get("fuzzy_counts_secondary") or Counter(fuzzy_tokens_secondary)
     annex_cat_primary = annex_row.get("annex_cat_primary") or _categorize_tokens(fuzzy_tokens_primary)
     annex_cat_secondary = annex_row.get("annex_cat_secondary") or _categorize_tokens(fuzzy_tokens_secondary)
+    annex_generic_total = sum(annex_cat_primary.get(CATEGORY_GENERIC, Counter()).values())
+    annex_generic_total_secondary = sum(annex_cat_secondary.get(CATEGORY_GENERIC, Counter()).values())
 
     if not fuzzy_tokens_primary:
         matched_rows.append(_empty_match_record(annex_row))
@@ -1008,13 +1068,19 @@ def _score_annex_row(
             fuzzy_tokens_primary, fuzzy_counts_primary, ref.get("primary_tokens", ())
         )
         ref_primary_counts = ref.get("primary_cat_counts", {})
+        generic_overlap = sum(
+            (annex_cat_primary.get(CATEGORY_GENERIC, Counter()) & ref_primary_counts.get(CATEGORY_GENERIC, Counter())).values()
+        )
+        if GENERIC_MATCH_REQUIRED and annex_generic_total and generic_overlap == 0:
+            continue
         cat_scores = []
         for cat, ref_counts in ref_primary_counts.items():
             match_count = sum((annex_cat_primary.get(cat, Counter()) & ref_counts).values())
             mismatch = max(0, sum(ref_counts.values()) - match_count)
             weight = PRIMARY_WEIGHTS.get(cat, 1)
             cat_scores.append(weight * match_count - mismatch)
-        primary_score = sum(cat_scores)
+        generic_missing = max(0, annex_generic_total - generic_overlap)
+        primary_score = sum(cat_scores) - (GENERIC_MISS_PENALTY_PRIMARY * generic_missing if annex_generic_total else 0)
         if primary_score == 0:
             continue
         if primary_score < best_primary:
@@ -1041,6 +1107,9 @@ def _score_annex_row(
             fuzzy_tokens_secondary, fuzzy_counts_secondary, rec.get("secondary_tokens", ())
         )
         ref_secondary_counts = rec.get("secondary_cat_counts", {})
+        generic_overlap_secondary = sum(
+            (annex_cat_secondary.get(CATEGORY_GENERIC, Counter()) & ref_secondary_counts.get(CATEGORY_GENERIC, Counter())).values()
+        )
         cat_scores = []
         for cat, ref_counts in ref_secondary_counts.items():
             match_count = sum((annex_cat_secondary.get(cat, Counter()) & ref_counts).values())
@@ -1053,7 +1122,10 @@ def _score_annex_row(
                 )
                 bonus = numeric_match
             cat_scores.append(weight * match_count + bonus - mismatch)
-        secondary_score = sum(cat_scores)
+        generic_missing_secondary = max(0, annex_generic_total_secondary - generic_overlap_secondary)
+        secondary_score = sum(cat_scores) - (
+            GENERIC_MISS_PENALTY_SECONDARY * generic_missing_secondary if annex_generic_total_secondary else 0
+        )
         if secondary_score > best_secondary:
             finalists = []
             best_secondary = secondary_score
@@ -1181,16 +1253,19 @@ def match_annex_with_atc(
     brand_patterns: list[tuple[re.Pattern, str]],
     generic_automaton,
     generic_phrases: list[str],
-    mixture_lookup: dict[str, list[dict]],
-    drugbank_refs_by_id: dict[str, list[dict]],
+    generic_atc_map: dict[str, list[str]] | None = None,
+    mixture_lookup: dict[str, list[dict]] | None = None,
+    drugbank_refs_by_id: dict[str, list[dict]] | None = None,
     max_workers: int | None = None,
     chunk_size: int = 172,
     use_threads: bool = False,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    mixture_lookup = mixture_lookup or {}
+    drugbank_refs_by_id = drugbank_refs_by_id or {}
     annex_records = (
         annex_df
         if isinstance(annex_df, list)
-        else _precompute_annex_records(annex_df, brand_patterns, generic_phrases)
+        else _precompute_annex_records(annex_df, brand_patterns, generic_phrases, generic_atc_map)
     )
     matched_rows: list[dict] = []
     tie_rows: list[dict] = []
@@ -1344,6 +1419,9 @@ def main() -> None:
     generic_automaton = _run_with_spinner(
         "Build generic automaton", lambda: _build_aho_automaton(generic_phrases) if generic_phrases else None
     )
+    generic_atc_map = _run_with_spinner(
+        "Index generic phrases to ATC codes", lambda: _build_generic_to_atc_map(drugbank_df)
+    )
     mixture_lookup = _run_with_spinner(
         "Index mixture components", lambda: _build_mixture_lookup(mixture_df) if not mixture_df.empty else {}
     )
@@ -1357,7 +1435,8 @@ def main() -> None:
     )
 
     annex_records = _run_with_spinner(
-        "Prepare Annex F records", lambda: _precompute_annex_records(annex_df, brand_patterns, generic_phrases)
+        "Prepare Annex F records",
+        lambda: _precompute_annex_records(annex_df, brand_patterns, generic_phrases, generic_atc_map),
     )
 
     run_autotune = False
@@ -1371,6 +1450,7 @@ def main() -> None:
                 brand_patterns,
                 generic_automaton,
                 generic_phrases,
+                generic_atc_map,
                 mixture_lookup,
                 drugbank_refs_by_id,
             ),
@@ -1394,6 +1474,7 @@ def main() -> None:
                 brand_patterns,
                 None if thread_flag else generic_automaton,
                 generic_phrases,
+                generic_atc_map,
                 mixture_lookup,
                 drugbank_refs_by_id,
                 max_workers=workers,
@@ -1419,6 +1500,7 @@ def main() -> None:
             brand_patterns,
             None if use_threads else generic_automaton,
             generic_phrases,
+            generic_atc_map,
             mixture_lookup,
             drugbank_refs_by_id,
             max_workers=workers,
