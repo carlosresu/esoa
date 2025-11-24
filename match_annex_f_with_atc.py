@@ -1,4 +1,4 @@
-"""Match Annex F entries to ATC codes using PNF, DrugBank, and WHO lexicons."""
+"""Match Annex F entries to ATC codes using PNF and DrugBank generics/mixtures."""
 
 from __future__ import annotations
 
@@ -800,7 +800,7 @@ def _build_reference_display(raw_ref: dict) -> str | None:
 
 
 def _reference_sort_key(rec: dict) -> tuple[int, str, str]:
-    source_priority = {"pnf": 0, "drugbank": 1, "who": 2}
+    source_priority = {"pnf": 0, "drugbank": 1, "drugbank_mixture": 2}
     priority = source_priority.get(rec.get("source"), 99)
     name = _as_str_or_empty(rec.get("name")).upper()
     ident = _as_str_or_empty(rec.get("id")).upper()
@@ -869,41 +869,12 @@ def build_drugbank_reference(df: pd.DataFrame) -> list[dict]:
     return rows
 
 
-def build_who_reference(df: pd.DataFrame) -> list[dict]:
-    rows = []
-    for row in df.to_dict(orient="records"):
-        primary_tokens = _normalize_tokens(split_with_parentheses(row.get("atc_name")), drop_stopwords=True)
-
-        secondary_tokens: List[str] = []
-        for col in ("adm_r", "uom"):
-            secondary_tokens.extend(split_with_parentheses(row.get(col)))
-        secondary_tokens = _normalize_tokens(secondary_tokens, drop_stopwords=False)
-
-        rows.append(
-            {
-                "source": "who",
-                "id": _maybe_none(row.get("atc_code")),
-                "name": _maybe_none(row.get("atc_name")),
-                "lexicon": "|".join(primary_tokens),
-                "lexicon_secondary": "|".join(secondary_tokens),
-                "primary_tokens": primary_tokens,
-                "secondary_tokens": secondary_tokens,
-                "primary_cat_counts": _categorize_tokens(primary_tokens),
-                "secondary_cat_counts": _categorize_tokens(secondary_tokens),
-                "atc_code": _maybe_none(row.get("atc_code")),
-                "raw_reference_row": dict(row),
-            }
-        )
-    return rows
-
-
 def build_reference_rows(
-    pnf_df: pd.DataFrame, drugbank_df: pd.DataFrame, who_df: pd.DataFrame
+    pnf_df: pd.DataFrame, drugbank_df: pd.DataFrame
 ) -> list[dict]:
     refs: list[dict] = []
     refs.extend(build_pnf_reference(pnf_df))
     refs.extend(build_drugbank_reference(drugbank_df))
-    refs.extend(build_who_reference(who_df))
     return refs
 
 
@@ -1344,7 +1315,6 @@ def main() -> None:
     annex_raw_path = DRUGS_DIR / "annex_f.csv"
     drugbank_path = DRUGS_DIR / "drugbank_generics_master.csv"
     pnf_path = DRUGS_DIR / "pnf_lexicon.csv"
-    who_path = DRUGS_DIR / "who_atc_2025-11-20.csv"
     fda_brand_path = DRUGS_DIR / "fda_drug_2025-11-12.csv"
     mixture_path = DRUGS_DIR / "drugbank_mixtures_master.csv"
 
@@ -1368,7 +1338,6 @@ def main() -> None:
 
     mixture_df = _run_with_spinner("Load DrugBank mixtures", lambda: _read_table(mixture_path, required=False))
     pnf_df = _run_with_spinner("Load PNF lexicon", lambda: _read_table(pnf_path, required=True))
-    who_df = _run_with_spinner("Load WHO ATC export", lambda: _read_table(who_path, required=True))
     drugbank_df = _run_with_spinner("Load DrugBank generics", lambda: _read_table(drugbank_path, required=True))
 
     generic_phrases = _run_with_spinner("Build generic phrase list", lambda: _build_generic_phrases(drugbank_df))
@@ -1380,7 +1349,7 @@ def main() -> None:
     )
 
     reference_rows = _run_with_spinner(
-        "Assemble reference rows", lambda: build_reference_rows(pnf_df, drugbank_df, who_df)
+        "Assemble reference rows", lambda: build_reference_rows(pnf_df, drugbank_df)
     )
     reference_index = _run_with_spinner("Build reference token index", lambda: _build_reference_index(reference_rows))
     drugbank_refs_by_id = _run_with_spinner(
