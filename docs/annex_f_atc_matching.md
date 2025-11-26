@@ -36,7 +36,7 @@ This document describes the new ESOA → Drug Code matching architecture that us
 
 ## Scripts
 
-### 1. `match_annex_f_with_atc.py` - Pre-index Annex F
+### 1. `pipelines/drugs/scripts/match_annex_f_with_atc.py` - Pre-index Annex F
 
 Tags each Annex F row with ATC code and DrugBank ID by matching against PNF and DrugBank reference data.
 
@@ -47,7 +47,7 @@ Tags each Annex F row with ATC code and DrugBank ID by matching against PNF and 
 
 **Usage:**
 ```bash
-python match_annex_f_with_atc.py --workers 8
+python -m pipelines.drugs.scripts.match_annex_f_with_atc --workers 8
 ```
 
 **Current Results (2025-11-26):**
@@ -57,7 +57,7 @@ python match_annex_f_with_atc.py --workers 8
 | Matched with ATC | 2,136 (88.0%) |
 | Has DrugBank ID | 1,478 (60.9%) |
 
-### 2. `generate_route_form_mapping.py` - Route/Form Validation
+### 2. `pipelines/drugs/scripts/generate_route_form_mapping.py` - Route/Form Validation
 
 Builds valid route-form combinations from reference data and identifies unencountered forms.
 

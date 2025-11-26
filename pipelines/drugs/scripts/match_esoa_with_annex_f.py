@@ -15,12 +15,13 @@ from pathlib import Path
 from collections import Counter, defaultdict
 from typing import List
 
-BASE_DIR = Path(__file__).resolve().parent
+# Navigate from pipelines/drugs/scripts/ to repo root
+BASE_DIR = Path(__file__).resolve().parents[3]
 INPUTS_DIR = BASE_DIR / "inputs" / "drugs"
 OUTPUTS_DIR = BASE_DIR / "outputs" / "drugs"
 
 # Import utilities from match_annex_f_with_atc
-from match_annex_f_with_atc import (
+from .match_annex_f_with_atc import (
     _normalize_tokens,
     split_with_parentheses,
     _categorize_tokens,

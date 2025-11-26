@@ -21,7 +21,8 @@ except Exception:  # pragma: no cover
     psutil = None
 
 
-BASE_DIR = Path(__file__).resolve().parent
+# Navigate from pipelines/drugs/scripts/ to repo root
+BASE_DIR = Path(__file__).resolve().parents[3]
 DRUGS_DIR = BASE_DIR / "inputs" / "drugs"
 OUTPUTS_DIR = BASE_DIR / "outputs"
 OUTPUTS_DRUGS_DIR = OUTPUTS_DIR / "drugs"

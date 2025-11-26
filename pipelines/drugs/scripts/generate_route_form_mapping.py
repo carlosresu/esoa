@@ -9,7 +9,8 @@ from collections import defaultdict
 from pathlib import Path
 import re
 
-BASE_DIR = Path(__file__).resolve().parent
+# Navigate from pipelines/drugs/scripts/ to repo root
+BASE_DIR = Path(__file__).resolve().parents[3]
 INPUTS_DIR = BASE_DIR / "inputs" / "drugs"
 OUTPUTS_DIR = BASE_DIR / "outputs" / "drugs"
 
