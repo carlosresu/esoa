@@ -405,160 +405,6 @@ def _maybe_run_drugbank_brands_script(include_flag: bool, *, verbose: bool = Tru
     subprocess.run([rscript, str(script_path)], check=True, cwd=str(script_path.parent), env=env)
 
 
-def run_part_1(args, inputs_dir: Path, verbose: bool) -> dict[str, Path]:
-    """Part 1: Prepare all dependencies."""
-    print("\n" + "=" * 60)
-    print("PART 1: Prepare Dependencies")
-    print("=" * 60)
-
-    artifacts: dict[str, Path] = {}
-
-    if not args.skip_who:
-        artifacts["who_molecules"] = _run_with_spinner(
-            "Refresh WHO ATC exports", lambda: refresh_who(inputs_dir, verbose=verbose)
-        )
-
-    if not args.skip_drugbank:
-        generics_path, brands_path = _run_with_spinner(
-            "Refresh DrugBank generics exports", lambda: refresh_drugbank_generics_exports(verbose=verbose)
-        )
-        if generics_path:
-            artifacts["drugbank_generics"] = generics_path
-        if brands_path:
-            artifacts["drugbank_brands_csv"] = brands_path
-        mixtures_path = _run_with_spinner(
-            "Check DrugBank mixtures output", lambda: ensure_drugbank_mixtures_output(verbose=verbose)
-        )
-        if mixtures_path:
-            artifacts["drugbank_mixtures"] = mixtures_path
-
-    if not args.skip_fda_brand:
-        artifacts["fda_brand_map"] = _run_with_spinner(
-            "Build FDA brand map", lambda: refresh_fda_brand_map(inputs_dir, verbose=verbose)
-        )
-
-    if args.include_fda_food:
-        artifacts["fda_food_catalog"] = _run_with_spinner(
-            "Refresh FDA food catalog",
-            lambda: refresh_fda_food(
-                inputs_dir,
-                allow_scrape=args.allow_fda_food_scrape,
-                verbose=verbose,
-            ),
-        )
-
-    if not args.skip_pnf:
-        artifacts["pnf_prepared"] = _run_with_spinner(
-            "Prepare PNF dataset", lambda: refresh_pnf(args.esoa, verbose=verbose)
-        )
-
-    # Ensure Parquet siblings
-    for path in artifacts.values():
-        if path and path.suffix.lower() == ".csv":
-            _ensure_parquet_sibling(path, verbose=verbose)
-
-    return artifacts
-
-
-def run_part_2(args, verbose: bool) -> None:
-    """Part 2: Match Annex F with ATC/DrugBank IDs."""
-    print("\n" + "=" * 60)
-    print("PART 2: Match Annex F with ATC/DrugBank IDs")
-    print("=" * 60)
-
-    cmd = [
-        sys.executable,
-        "-m",
-        "pipelines.drugs.scripts.match_annex_f_with_atc",
-        "--workers",
-        str(args.workers),
-    ]
-    if args.use_threads:
-        cmd.append("--use-threads")
-
-    subprocess.run(cmd, check=True, cwd=str(PROJECT_DIR))
-
-
-def run_part_3(args, verbose: bool) -> None:
-    """Part 3: Match ESOA with ATC/DrugBank IDs."""
-    print("\n" + "=" * 60)
-    print("PART 3: Match ESOA with ATC/DrugBank IDs")
-    print("=" * 60)
-
-    from pipelines.drugs.scripts.match_drugs import match
-
-    inputs_dir = DRUGS_INPUTS_DIR
-    outputs_dir = PROJECT_DIR / "outputs" / "drugs"
-    outputs_dir.mkdir(parents=True, exist_ok=True)
-
-    pnf_prepared = inputs_dir / "pnf_prepared.csv"
-    esoa_prepared = inputs_dir / "esoa_prepared.csv"
-    annex_prepared = inputs_dir / "annex_f.csv"
-
-    if not pnf_prepared.exists() or not esoa_prepared.exists():
-        esoa_path = _resolve_esoa_source(inputs_dir, args.esoa)
-        pnf_csv = inputs_dir / "pnf.csv"
-        prepare(str(pnf_csv), str(esoa_path), str(inputs_dir))
-
-    out_path = outputs_dir / "esoa_with_atc.csv"
-
-    def _timing_hook(label: str, elapsed: float) -> None:
-        if verbose:
-            print(f"  [{elapsed:7.2f}s] {label}")
-
-    match(
-        str(annex_prepared),
-        str(pnf_prepared),
-        str(esoa_prepared),
-        str(out_path),
-        timing_hook=_timing_hook,
-        skip_excel=args.skip_excel,
-    )
-
-
-def run_part_4(args, verbose: bool) -> None:
-    """Part 4: Bridge ESOA to Annex F Drug Codes via ATC/DrugBank ID."""
-    print("\n" + "=" * 60)
-    print("PART 4: Bridge ESOA to Annex F Drug Codes")
-    print("=" * 60)
-
-    outputs_dir = PROJECT_DIR / "outputs" / "drugs"
-    esoa_atc_path = outputs_dir / "esoa_with_atc.csv"
-    annex_atc_path = outputs_dir / "annex_f_with_atc.csv"
-    out_path = outputs_dir / "esoa_matched_drug_codes.csv"
-
-    if not esoa_atc_path.exists():
-        raise FileNotFoundError(f"ESOA with ATC not found: {esoa_atc_path}. Run Part 3 first.")
-    if not annex_atc_path.exists():
-        raise FileNotFoundError(f"Annex F with ATC not found: {annex_atc_path}. Run Part 2 first.")
-
-    # Import Part 4 functions
-    from run_drugs_pt_4_esoa_to_annex_f import (
-        build_annex_f_index,
-        match_esoa_to_annex_f,
-    )
-
-    esoa_df = _run_with_spinner("Load ESOA with ATC", lambda: pd.read_csv(esoa_atc_path))
-    annex_df = _run_with_spinner("Load Annex F with ATC", lambda: pd.read_csv(annex_atc_path))
-
-    atc_to_annex, drugbank_to_annex = _run_with_spinner(
-        "Build Annex F index", lambda: build_annex_f_index(annex_df)
-    )
-    print(f"  - ATC codes indexed: {len(atc_to_annex)}")
-    print(f"  - DrugBank IDs indexed: {len(drugbank_to_annex)}")
-
-    matched_df = _run_with_spinner(
-        "Match ESOA to Annex F Drug Codes",
-        lambda: match_esoa_to_annex_f(esoa_df, atc_to_annex, drugbank_to_annex),
-    )
-
-    matched_df.to_csv(out_path, index=False)
-
-    total = len(matched_df)
-    matched = matched_df["matched_drug_code"].notna().sum()
-    print(f"\n  Output: {out_path}")
-    print(f"  Total ESOA rows: {total}")
-    print(f"  Matched to Drug Code: {matched} ({100*matched/total:.1f}%)")
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
@@ -647,8 +493,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     )
     args = parser.parse_args(list(argv) if argv is not None else None)
 
-    inputs_dir = _ensure_inputs_dir()
-    verbose = args.verbose
+    _ensure_inputs_dir()
 
     print("=" * 60)
     print("ESOA DRUGS PIPELINE")
@@ -660,21 +505,72 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     else:
         parts_to_run = list(range(args.start_from, 5))
 
+    # Import part functions
+    from run_drugs_pt_1_prepare_dependencies import run_part_1
+    from run_drugs_pt_2_annex_f_atc import run_part_2
+    from run_drugs_pt_3_esoa_atc import run_part_3
+    from run_drugs_pt_4_esoa_to_annex_f import run_part_4
+
     # Run selected parts
     if 1 in parts_to_run:
-        artifacts = run_part_1(args, inputs_dir, verbose)
+        print("\n" + "=" * 60)
+        print("PART 1: Prepare Dependencies")
+        print("=" * 60)
+        artifacts = run_part_1(
+            esoa_path=args.esoa,
+            skip_who=args.skip_who,
+            skip_drugbank=args.skip_drugbank,
+            skip_fda_brand=args.skip_fda_brand,
+            skip_fda_food=not args.include_fda_food,
+            skip_pnf=args.skip_pnf,
+            allow_fda_food_scrape=args.allow_fda_food_scrape,
+            standalone=False,
+        )
         print("\nPart 1 artifacts:")
         for label, path in artifacts.items():
             print(f"  - {label}: {path}")
 
     if 2 in parts_to_run:
-        run_part_2(args, verbose)
+        print("\n" + "=" * 60)
+        print("PART 2: Match Annex F with ATC/DrugBank IDs")
+        print("=" * 60)
+        results = run_part_2(
+            workers=args.workers,
+            use_threads=args.use_threads,
+            standalone=False,
+        )
+        print(f"\nPart 2 results:")
+        print(f"  - Matched with ATC: {results['matched_atc']} ({results['matched_atc_pct']:.1f}%)")
+        print(f"  - Has DrugBank ID: {results['has_drugbank']} ({results['has_drugbank_pct']:.1f}%)")
 
     if 3 in parts_to_run:
-        run_part_3(args, verbose)
+        print("\n" + "=" * 60)
+        print("PART 3: Match ESOA with ATC/DrugBank IDs")
+        print("=" * 60)
+        results = run_part_3(
+            esoa_path=args.esoa,
+            out_filename="esoa_with_atc.csv",
+            skip_excel=args.skip_excel,
+            standalone=False,
+        )
+        print(f"\nPart 3 results:")
+        print(f"  - Total rows: {results['total']}")
+        print(f"  - Output: {results['output_path']}")
 
     if 4 in parts_to_run:
-        run_part_4(args, verbose)
+        print("\n" + "=" * 60)
+        print("PART 4: Bridge ESOA to Annex F Drug Codes")
+        print("=" * 60)
+        results = run_part_4(
+            esoa_atc_filename="esoa_with_atc.csv",
+            annex_atc_filename="annex_f_with_atc.csv",
+            out_filename="esoa_matched_drug_codes.csv",
+            standalone=False,
+        )
+        print(f"\nPart 4 results:")
+        print(f"  - Matched to Drug Code: {results['matched']} ({results['matched_pct']:.1f}%)")
+        print(f"  - Unmatched: {results['unmatched']}")
+        print(f"  - Output: {results['output_path']}")
 
     print("\n" + "=" * 60)
     print("PIPELINE COMPLETE")

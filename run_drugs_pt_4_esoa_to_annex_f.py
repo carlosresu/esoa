@@ -21,52 +21,17 @@ from __future__ import annotations
 
 import argparse
 import sys
-import time
 from collections import defaultdict
 from pathlib import Path
 from typing import Optional, Sequence
 
 import pandas as pd
 
+from pipelines.drugs.scripts.spinner import run_with_spinner
+
 PROJECT_DIR = Path(__file__).resolve().parent
 INPUTS_DIR = PROJECT_DIR / "inputs" / "drugs"
 OUTPUTS_DIR = PROJECT_DIR / "outputs" / "drugs"
-
-
-def _run_with_spinner(label: str, func):
-    """Run func() while showing a lightweight CLI spinner."""
-    import threading
-
-    done = threading.Event()
-    result = []
-    err = []
-
-    def worker():
-        try:
-            result.append(func())
-        except BaseException as exc:
-            err.append(exc)
-        finally:
-            done.set()
-
-    start = time.perf_counter()
-    thread = threading.Thread(target=worker, daemon=True)
-    thread.start()
-    frames = "|/-\\"
-    idx = 0
-    while not done.wait(0.1):
-        elapsed = time.perf_counter() - start
-        sys.stdout.write(f"\r{frames[idx % len(frames)]} {elapsed:7.2f}s {label}")
-        sys.stdout.flush()
-        idx += 1
-    thread.join()
-    elapsed = time.perf_counter() - start
-    status = "done" if not err else "error"
-    sys.stdout.write(f"\r[{status}] {elapsed:7.2f}s {label}\n")
-    sys.stdout.flush()
-    if err:
-        raise err[0]
-    return result[0] if result else None
 
 
 def build_annex_f_index(annex_atc_df: pd.DataFrame) -> tuple[dict, dict]:
@@ -177,6 +142,77 @@ def match_esoa_to_annex_f(
     return pd.DataFrame(results)
 
 
+def run_part_4(
+    esoa_atc_filename: str = "esoa_with_atc.csv",
+    annex_atc_filename: str = "annex_f_with_atc.csv",
+    out_filename: str = "esoa_matched_drug_codes.csv",
+    standalone: bool = True,
+) -> dict:
+    """
+    Run Part 4: Bridge ESOA to Annex F Drug Codes.
+    
+    Returns dict with results summary.
+    """
+    if standalone:
+        print("=" * 60)
+        print("Part 4: Bridge ESOA to Annex F Drug Codes")
+        print("=" * 60)
+
+    # Resolve paths
+    esoa_atc_path = OUTPUTS_DIR / esoa_atc_filename
+    annex_atc_path = OUTPUTS_DIR / annex_atc_filename
+    out_path = OUTPUTS_DIR / out_filename
+
+    if not esoa_atc_path.exists():
+        raise FileNotFoundError(f"ESOA with ATC not found: {esoa_atc_path}. Run Part 3 first.")
+
+    if not annex_atc_path.exists():
+        raise FileNotFoundError(f"Annex F with ATC not found: {annex_atc_path}. Run Part 2 first.")
+
+    # Load data
+    esoa_df = run_with_spinner("Load ESOA with ATC", lambda: pd.read_csv(esoa_atc_path))
+    annex_df = run_with_spinner("Load Annex F with ATC", lambda: pd.read_csv(annex_atc_path))
+
+    # Build index
+    atc_to_annex, drugbank_to_annex = run_with_spinner(
+        "Build Annex F index", lambda: build_annex_f_index(annex_df)
+    )
+
+    # Match
+    matched_df = run_with_spinner(
+        "Match ESOA to Annex F Drug Codes",
+        lambda: match_esoa_to_annex_f(esoa_df, atc_to_annex, drugbank_to_annex),
+    )
+
+    # Save output
+    OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+    run_with_spinner("Write output CSV", lambda: matched_df.to_csv(out_path, index=False))
+
+    # Summary
+    total = len(matched_df)
+    matched = matched_df["matched_drug_code"].notna().sum()
+
+    results = {
+        "total": total,
+        "matched": matched,
+        "matched_pct": 100 * matched / total if total else 0,
+        "unmatched": total - matched,
+        "atc_codes_indexed": len(atc_to_annex),
+        "drugbank_ids_indexed": len(drugbank_to_annex),
+        "output_path": out_path,
+    }
+
+    if standalone:
+        print(f"\n  ATC codes indexed: {len(atc_to_annex)}")
+        print(f"  DrugBank IDs indexed: {len(drugbank_to_annex)}")
+        print(f"  Total ESOA rows: {total}")
+        print(f"  Matched to Drug Code: {matched} ({results['matched_pct']:.1f}%)")
+        print(f"  Unmatched: {total - matched}")
+        print(f"  Output: {out_path}")
+
+    return results
+
+
 def main(argv: Optional[Sequence[str]] = None) -> None:
     parser = argparse.ArgumentParser(
         description="Part 4: Bridge ESOA rows to Annex F Drug Codes via ATC/DrugBank ID."
@@ -201,60 +237,14 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     )
     args = parser.parse_args(list(argv) if argv is not None else None)
 
-    print("=" * 60)
-    print("Part 4: Bridge ESOA to Annex F Drug Codes")
-    print("=" * 60)
-
-    # Resolve paths
-    esoa_atc_path = OUTPUTS_DIR / args.esoa_atc
-    annex_atc_path = OUTPUTS_DIR / args.annex_atc
-    out_path = OUTPUTS_DIR / args.out
-
-    if not esoa_atc_path.exists():
-        print(f"[error] ESOA with ATC not found: {esoa_atc_path}")
-        print("  Run Part 3 first: python run_drugs_pt_3_esoa_atc.py")
-        sys.exit(1)
-
-    if not annex_atc_path.exists():
-        print(f"[error] Annex F with ATC not found: {annex_atc_path}")
-        print("  Run Part 2 first: python run_drugs_pt_2_annex_f_atc.py")
-        sys.exit(1)
-
-    # Load data
-    print(f"[info] Loading ESOA with ATC: {esoa_atc_path}")
-    esoa_df = _run_with_spinner("Load ESOA with ATC", lambda: pd.read_csv(esoa_atc_path))
-
-    print(f"[info] Loading Annex F with ATC: {annex_atc_path}")
-    annex_df = _run_with_spinner("Load Annex F with ATC", lambda: pd.read_csv(annex_atc_path))
-
-    # Build index
-    atc_to_annex, drugbank_to_annex = _run_with_spinner(
-        "Build Annex F index", lambda: build_annex_f_index(annex_df)
+    run_part_4(
+        esoa_atc_filename=args.esoa_atc,
+        annex_atc_filename=args.annex_atc,
+        out_filename=args.out,
+        standalone=True,
     )
-    print(f"  - ATC codes indexed: {len(atc_to_annex)}")
-    print(f"  - DrugBank IDs indexed: {len(drugbank_to_annex)}")
-
-    # Match
-    matched_df = _run_with_spinner(
-        "Match ESOA to Annex F Drug Codes",
-        lambda: match_esoa_to_annex_f(esoa_df, atc_to_annex, drugbank_to_annex),
-    )
-
-    # Save output
-    OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
-    matched_df.to_csv(out_path, index=False)
-
-    # Summary
-    total = len(matched_df)
-    matched = matched_df["matched_drug_code"].notna().sum()
-
-    print("\n" + "=" * 60)
-    print("Part 4 Complete: ESOA → Annex F Drug Code Mapping")
-    print("=" * 60)
-    print(f"  Output: {out_path}")
-    print(f"  Total ESOA rows: {total}")
-    print(f"  Matched to Drug Code: {matched} ({100*matched/total:.1f}%)")
-    print(f"  Unmatched: {total - matched}")
+    
+    print("\nPipeline complete!")
 
 
 if __name__ == "__main__":

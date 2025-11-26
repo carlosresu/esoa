@@ -22,51 +22,108 @@ from __future__ import annotations
 
 import argparse
 import sys
-import time
 from pathlib import Path
 from typing import Optional, Sequence
 
-import pandas as pd
+from pipelines.drugs.scripts.spinner import run_with_spinner
 
 PROJECT_DIR = Path(__file__).resolve().parent
 INPUTS_DIR = PROJECT_DIR / "inputs" / "drugs"
 OUTPUTS_DIR = PROJECT_DIR / "outputs" / "drugs"
 
 
-def _run_with_spinner(label: str, func):
-    """Run func() while showing a lightweight CLI spinner."""
-    import threading
+def run_part_3(
+    esoa_path: Optional[str] = None,
+    out_filename: str = "esoa_with_atc.csv",
+    skip_excel: bool = False,
+    standalone: bool = True,
+) -> dict:
+    """
+    Run Part 3: Match ESOA with ATC/DrugBank IDs.
+    
+    Returns dict with results summary.
+    """
+    import pandas as pd
+    from pipelines.drugs.scripts.match_drugs import match
+    from pipelines.drugs.scripts.prepare_drugs import prepare
+    
+    if standalone:
+        print("=" * 60)
+        print("Part 3: Match ESOA Rows with ATC/DrugBank IDs")
+        print("=" * 60)
 
-    done = threading.Event()
-    result = []
-    err = []
+    # Resolve ESOA path
+    if esoa_path:
+        resolved_esoa = Path(esoa_path)
+        if not resolved_esoa.is_absolute():
+            resolved_esoa = PROJECT_DIR / resolved_esoa
+    else:
+        resolved_esoa = INPUTS_DIR / "esoa_combined.csv"
+        if not resolved_esoa.exists():
+            resolved_esoa = INPUTS_DIR / "esoa_prepared.csv"
 
-    def worker():
-        try:
-            result.append(func())
-        except BaseException as exc:
-            err.append(exc)
-        finally:
-            done.set()
+    if not resolved_esoa.exists():
+        raise FileNotFoundError(f"ESOA file not found: {resolved_esoa}")
 
-    start = time.perf_counter()
-    thread = threading.Thread(target=worker, daemon=True)
-    thread.start()
-    frames = "|/-\\"
-    idx = 0
-    while not done.wait(0.1):
-        elapsed = time.perf_counter() - start
-        sys.stdout.write(f"\r{frames[idx % len(frames)]} {elapsed:7.2f}s {label}")
-        sys.stdout.flush()
-        idx += 1
-    thread.join()
-    elapsed = time.perf_counter() - start
-    status = "done" if not err else "error"
-    sys.stdout.write(f"\r[{status}] {elapsed:7.2f}s {label}\n")
-    sys.stdout.flush()
-    if err:
-        raise err[0]
-    return result[0] if result else None
+    # Prepare inputs if needed
+    pnf_prepared = INPUTS_DIR / "pnf_prepared.csv"
+    esoa_prepared = INPUTS_DIR / "esoa_prepared.csv"
+    annex_prepared = INPUTS_DIR / "annex_f.csv"
+
+    if not pnf_prepared.exists() or not esoa_prepared.exists():
+        pnf_csv = INPUTS_DIR / "pnf.csv"
+        if not pnf_csv.exists():
+            raise FileNotFoundError(f"PNF source not found: {pnf_csv}")
+        run_with_spinner(
+            "Prepare PNF and ESOA",
+            lambda: prepare(str(pnf_csv), str(resolved_esoa), str(INPUTS_DIR))
+        )
+
+    # Load reference catalogues
+    def _load_catalogues():
+        from pipelines.drugs.scripts.match_drugs import _assemble_reference_catalogue
+        annex_df = pd.read_csv(annex_prepared)
+        pnf_df = pd.read_csv(pnf_prepared)
+        return _assemble_reference_catalogue(annex_df, pnf_df)
+    
+    reference_df = run_with_spinner("Load reference catalogues", _load_catalogues)
+    esoa_df = run_with_spinner("Load ESOA prepared CSV", lambda: pd.read_csv(esoa_prepared))
+
+    # Build features
+    from pipelines.drugs.scripts.match_features_drugs import build_features
+    
+    # The build_features function has its own spinners, so we call it directly
+    features_df = build_features(reference_df, esoa_df, timing_hook=None)
+
+    # Score & classify
+    from pipelines.drugs.scripts.match_scoring_drugs import score_and_classify
+    
+    out_df = run_with_spinner(
+        "Score & classify matches",
+        lambda: score_and_classify(features_df, reference_df)
+    )
+
+    # Write outputs
+    OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+    out_path = OUTPUTS_DIR / out_filename
+
+    from pipelines.drugs.scripts.match_outputs_drugs import write_outputs
+    
+    # write_outputs has its own spinners
+    write_outputs(out_df, str(out_path), timing_hook=None, skip_excel=skip_excel)
+
+    # Summary
+    total = len(out_df)
+    results = {
+        "total": total,
+        "output_path": out_path,
+    }
+    
+    if standalone:
+        print(f"\nESO matching complete: {out_path}")
+        print(f"  Total rows: {total}")
+    
+    return results
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
@@ -91,65 +148,14 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     )
     args = parser.parse_args(list(argv) if argv is not None else None)
 
-    print("=" * 60)
-    print("Part 3: Match ESOA Rows with ATC/DrugBank IDs")
-    print("=" * 60)
-
-    # Resolve ESOA path
-    if args.esoa:
-        esoa_path = Path(args.esoa)
-        if not esoa_path.is_absolute():
-            esoa_path = PROJECT_DIR / esoa_path
-    else:
-        esoa_path = INPUTS_DIR / "esoa_combined.csv"
-        if not esoa_path.exists():
-            esoa_path = INPUTS_DIR / "esoa_prepared.csv"
-
-    if not esoa_path.exists():
-        print(f"[error] ESOA file not found: {esoa_path}")
-        sys.exit(1)
-
-    print(f"[info] Using ESOA: {esoa_path}")
-
-    # Import the existing pipeline matching logic
-    from pipelines.drugs.scripts.match_drugs import match
-    from pipelines.drugs.scripts.prepare_drugs import prepare
-
-    # Prepare inputs if needed
-    pnf_prepared = INPUTS_DIR / "pnf_prepared.csv"
-    esoa_prepared = INPUTS_DIR / "esoa_prepared.csv"
-    annex_prepared = INPUTS_DIR / "annex_f.csv"
-
-    if not pnf_prepared.exists() or not esoa_prepared.exists():
-        print("[info] Running preparation step...")
-        pnf_csv = INPUTS_DIR / "pnf.csv"
-        if not pnf_csv.exists():
-            print(f"[error] PNF source not found: {pnf_csv}")
-            sys.exit(1)
-        prepare(str(pnf_csv), str(esoa_path), str(INPUTS_DIR))
-
-    # Run matching
-    OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
-    out_path = OUTPUTS_DIR / args.out
-
-    def _timing_hook(label: str, elapsed: float) -> None:
-        print(f"  [{elapsed:7.2f}s] {label}")
-
-    print("\n[info] Running ESOA matching pipeline...")
-    match(
-        str(annex_prepared),
-        str(pnf_prepared),
-        str(esoa_prepared),
-        str(out_path),
-        timing_hook=_timing_hook,
+    run_part_3(
+        esoa_path=args.esoa,
+        out_filename=args.out,
         skip_excel=args.skip_excel,
+        standalone=True,
     )
-
-    print("\n" + "=" * 60)
-    print("Part 3 Complete: ESOA Rows Tagged with ATC/DrugBank IDs")
-    print("=" * 60)
-    print(f"  Output: {out_path}")
-    print("\nNext: Run Part 4 (esoa_to_annex_f) to bridge ESOA to Annex F Drug Codes")
+    
+    print("\nNext: Run Part 4 to bridge ESOA to Annex F Drug Codes")
 
 
 if __name__ == "__main__":
