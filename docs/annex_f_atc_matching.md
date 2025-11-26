@@ -1,8 +1,8 @@
-# Annex F ATC/DrugBank Matching
+# Drugs Pipeline: ESOA → Drug Code Matching
 
-This document describes the new ESOA → Drug Code matching architecture that uses ATC/DrugBank ID as an intermediate step.
+This document describes the new 4-part ESOA → Drug Code matching pipeline that uses ATC/DrugBank ID as an intermediate step.
 
-## New Pipeline Architecture
+## Pipeline Overview
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -12,17 +12,30 @@ This document describes the new ESOA → Drug Code matching architecture that us
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                              NEW APPROACH                                    │
+│                              NEW 4-PART APPROACH                             │
 │                                                                              │
-│  Step 1: ESOA row ──► ATC/DrugBank ID                                       │
-│          (match generic name via PNF, DrugBank, WHO, FDA brand swaps)       │
+│  Part 1: Prepare Dependencies                                                │
+│          (WHO ATC, DrugBank, FDA brand/food, PNF, Annex F)                  │
 │                                                                              │
-│  Step 2: ATC/DrugBank ID ──► Annex F candidates (pre-indexed lookup)        │
-│          (instant lookup, not fuzzy matching)                               │
+│  Part 2: Annex F ──► ATC/DrugBank ID                                        │
+│          (pre-index Annex F with codes for fast lookup)                     │
 │                                                                              │
-│  Step 3: Annex F candidates ──► Best Drug Code                              │
-│          (score by dose, form, route - only ~5-20 candidates per lookup)    │
+│  Part 3: ESOA ──► ATC/DrugBank ID                                           │
+│          (match via PNF, DrugBank, WHO, FDA brand swaps)                    │
+│                                                                              │
+│  Part 4: ESOA + Annex F ──► Drug Code                                       │
+│          (bridge via ATC/DrugBank ID, score by dose/form/route)             │
 └─────────────────────────────────────────────────────────────────────────────┘
+```
+
+## Quick Start
+
+```bash
+# Run all 4 parts in sequence
+python run_drugs_pt_1_prepare_dependencies.py
+python run_drugs_pt_2_annex_f_atc.py --workers 8
+python run_drugs_pt_3_esoa_atc.py
+python run_drugs_pt_4_esoa_to_annex_f.py
 ```
 
 ## Why This Approach?
@@ -33,12 +46,32 @@ This document describes the new ESOA → Drug Code matching architecture that us
 | Matching complexity | O(n × m) fuzzy matching | O(n) lookup + O(k) scoring |
 | ATC/DrugBank coverage | Computed per-row | Pre-computed once |
 | Reusability | None | Annex F index reusable |
+| Modularity | Monolithic | 4 independent parts |
 
-## Scripts
+## Part Scripts
 
-### 1. `pipelines/drugs/scripts/match_annex_f_with_atc.py` - Pre-index Annex F
+### Part 1: `run_drugs_pt_1_prepare_dependencies.py`
 
-Tags each Annex F row with ATC code and DrugBank ID by matching against PNF and DrugBank reference data.
+Prepares all reference data needed for matching.
+
+**Refreshes:**
+- WHO ATC (via `dependencies/atcd` R scripts)
+- DrugBank generics/mixtures (via `dependencies/drugbank_generics` R scripts)
+- FDA brand map (from FDA drug exports)
+- FDA food catalog (from FDA food exports)
+- PNF lexicon (normalize and parse dose/route/form)
+- Annex F (verify exists)
+
+**Usage:**
+```bash
+python run_drugs_pt_1_prepare_dependencies.py [--skip-who] [--skip-drugbank] [--skip-fda-brand] [--skip-fda-food]
+```
+
+### Part 2: `run_drugs_pt_2_annex_f_atc.py`
+
+Tags each Annex F row with ATC code and DrugBank ID.
+
+**Runs:** `pipelines/drugs/scripts/match_annex_f_with_atc.py`
 
 **Outputs:**
 - `outputs/drugs/annex_f_with_atc.csv` - Annex F with ATC codes and DrugBank IDs
@@ -47,7 +80,7 @@ Tags each Annex F row with ATC code and DrugBank ID by matching against PNF and 
 
 **Usage:**
 ```bash
-python -m pipelines.drugs.scripts.match_annex_f_with_atc --workers 8
+python run_drugs_pt_2_annex_f_atc.py --workers 8
 ```
 
 **Current Results (2025-11-26):**
@@ -57,28 +90,50 @@ python -m pipelines.drugs.scripts.match_annex_f_with_atc --workers 8
 | Matched with ATC | 2,136 (88.0%) |
 | Has DrugBank ID | 1,478 (60.9%) |
 
-### 2. `pipelines/drugs/scripts/generate_route_form_mapping.py` - Route/Form Validation
+### Part 3: `run_drugs_pt_3_esoa_atc.py`
 
-Builds valid route-form combinations from reference data and identifies unencountered forms.
+Matches ESOA rows to ATC codes and DrugBank IDs using the existing pipeline.
+
+**Uses:**
+- `pipelines/drugs/scripts/match_features_drugs.py` (molecule detection)
+- `pipelines/drugs/scripts/match_scoring_drugs.py` (scoring and classification)
+
+**Outputs:**
+- `outputs/drugs/esoa_with_atc.csv` - ESOA with ATC codes
+
+**Usage:**
+```bash
+python run_drugs_pt_3_esoa_atc.py [--esoa PATH] [--out FILENAME]
+```
+
+### Part 4: `run_drugs_pt_4_esoa_to_annex_f.py`
+
+Bridges ESOA rows to Annex F Drug Codes via ATC/DrugBank ID.
+
+**Process:**
+1. Load ESOA with ATC (from Part 3)
+2. Load Annex F with ATC (from Part 2)
+3. For each ESOA row, find Annex F candidates with matching ATC/DrugBank ID
+4. Score candidates by dose, form, route similarity
+5. Select best Drug Code
+
+**Outputs:**
+- `outputs/drugs/esoa_matched_drug_codes.csv` - Final ESOA → Drug Code mapping
+
+**Usage:**
+```bash
+python run_drugs_pt_4_esoa_to_annex_f.py [--esoa-atc PATH] [--annex-atc PATH] [--out FILENAME]
+```
+
+## Supporting Scripts
+
+### `pipelines/drugs/scripts/generate_route_form_mapping.py`
+
+Builds valid route-form combinations from reference data.
 
 **Outputs:**
 - `outputs/drugs/route_form_mapping.csv` - Valid route-form pairs (393 pairs)
 - `outputs/drugs/route_form_unencountered.csv` - Forms in Annex F not in reference data
-
-### 3. ESOA → ATC/DrugBank Matching (existing pipeline)
-
-The existing `pipelines/drugs/` pipeline already matches ESOA rows to ATC codes via:
-- PNF lexicon matching
-- WHO ATC detection
-- FDA brand → generic swaps
-- DrugBank generic overlay
-
-### 4. ATC/DrugBank → Drug Code Selection (to be implemented)
-
-Once ESOA has an ATC/DrugBank ID:
-1. Lookup all Annex F rows with that code (from `annex_f_with_atc.csv`)
-2. Score candidates by dose, form, route similarity
-3. Select best Drug Code
 
 ## Key Features
 
