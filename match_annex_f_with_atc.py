@@ -33,6 +33,7 @@ _GENERIC_PHRASES_SHARED: list[str] | None = None
 _GENERIC_AUTOMATON_SHARED = None
 _MIXTURE_LOOKUP_SHARED: dict[str, list[dict]] | None = None
 _DRUGBANK_BY_ID_SHARED: dict[str, list[dict]] | None = None
+_GENERIC_TO_DRUGBANK_SHARED: dict[str, str] | None = None
 
 
 T = TypeVar("T")
@@ -358,6 +359,28 @@ NATURAL_STOPWORDS = {
     "PRE-FILLED",
 }
 
+GENERIC_JUNK_TOKENS = {
+    "SOLUTION",
+    "SOLUTIONS",
+    "SOLN",
+    "IRRIGATION",
+    "IRRIGATING",
+    "INJECTION",
+    "INJECTIONS",
+    "INJECTABLE",
+    "INFUSION",
+    "INFUSIONS",
+    "DILUENT",
+    "DILUTION",
+    "POWDER",
+    "POWDERS",
+    "MICRONUTRIENT",
+    "FORMULA",
+    "FORMULATION",
+    "WATER",
+    "VEHICLE",
+}
+
 FORM_CANON = {
     "TAB": "TABLET",
     "TABS": "TABLET",
@@ -481,6 +504,17 @@ SECONDARY_WEIGHTS = {
 GENERIC_MISS_PENALTY_PRIMARY = 6
 GENERIC_MISS_PENALTY_SECONDARY = 4
 GENERIC_MATCH_REQUIRED = True
+GENERIC_REF_MISMATCH_TOLERANCE_PRIMARY = 1
+GENERIC_REF_MISMATCH_TOLERANCE_SECONDARY = 1
+GENERIC_REF_EXTRA_PENALTY_PRIMARY = 4
+GENERIC_REF_EXTRA_PENALTY_SECONDARY = 3
+
+# Dose matching: penalize when reference has a dose that doesn't match Annex F
+# This prevents matching AMLODIPINE 2.5mg to AMLODIPINE 5mg
+# Set high enough to make mismatched doses score lower than no match
+DOSE_MISMATCH_PENALTY = 20
+# Require exact dose match when Annex F has a specific numeric dose
+REQUIRE_DOSE_MATCH = True
 
 # Common spelling/lexical variants we want to normalize across Annex F and references.
 GENERIC_SYNONYMS = {
@@ -490,6 +524,58 @@ GENERIC_SYNONYMS = {
     "DIATRIZOIC ACID": "DIATRIZOATE",
     "DIATRIZOIC ACID DIHYDRATE": "DIATRIZOATE",
 }
+
+# Compound names that should be treated as generics even though they contain salt tokens.
+# These are complete drug names, not salt modifiers.
+COMPOUND_GENERICS = {
+    "SODIUM CHLORIDE",
+    "POTASSIUM CHLORIDE",
+    "CALCIUM CHLORIDE",
+    "MAGNESIUM SULFATE",
+    "MAGNESIUM SULPHATE",
+    "SODIUM BICARBONATE",
+    "POTASSIUM BICARBONATE",
+    "CALCIUM CARBONATE",
+    "CALCIUM GLUCONATE",
+    "POTASSIUM PHOSPHATE",
+    "SODIUM PHOSPHATE",
+    "ALUMINUM HYDROXIDE",
+    "MAGNESIUM HYDROXIDE",
+    "FERROUS SULFATE",
+    "FERROUS SULPHATE",
+    "ZINC SULFATE",
+    "ZINC SULPHATE",
+    "SODIUM LACTATE",
+    "CALCIUM LACTATE",
+    "SODIUM CITRATE",
+    "POTASSIUM CITRATE",
+    "SODIUM ACETATE",
+    "POTASSIUM ACETATE",
+}
+
+# ATC codes that indicate combination products (contain multiple active ingredients).
+# When resolving ties, prefer single-agent ATCs over these.
+COMBINATION_ATC_PATTERNS = {
+    "A10BD",  # Blood glucose lowering drugs, combinations
+    "C09BA",  # ACE inhibitors and diuretics
+    "C09BB",  # ACE inhibitors and calcium channel blockers
+    "C09BX",  # ACE inhibitors, other combinations
+    "C09DA",  # Angiotensin II receptor blockers and diuretics
+    "C09DB",  # Angiotensin II receptor blockers and calcium channel blockers
+    "C09DX",  # Angiotensin II receptor blockers, other combinations
+    "C10BA",  # HMG CoA reductase inhibitors in combination with other lipid modifying agents
+    "C10BX",  # HMG CoA reductase inhibitors, other combinations
+    "M05BB",  # Bisphosphonates, combinations
+    "R03AL",  # Adrenergics in combination with anticholinergics
+    "R03AK",  # Adrenergics in combination with corticosteroids
+    "R03DA20",  # Combinations of xanthines
+    "R03DA55",  # Aminophylline, combinations
+    "R03DB",  # Xanthines and adrenergics
+}
+
+# ATC codes ending in these patterns typically indicate combinations
+# (codes ending in 20, 30, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59 are often combinations)
+COMBINATION_ATC_SUFFIXES = {"20", "30", "50", "51", "52", "53", "54", "55", "56", "57", "58", "59"}
 
 
 def _is_numeric_token(token: str) -> bool:
@@ -539,20 +625,31 @@ def _normalize_tokens(tokens: List[str], drop_stopwords: bool = False) -> List[s
 
         combined_match = _COMBINED_WEIGHT_RX.match(tok_upper)
         if combined_match:
-            mg_val = _convert_to_mg(combined_match.group(1), combined_match.group(2))
-            if mg_val:
-                normalized.append(mg_val)
-                normalized.append("MG")
+            orig_val = _format_number_text(combined_match.group(1))
+            orig_unit = combined_match.group(2).upper()
+            mg_val = _convert_to_mg(combined_match.group(1), orig_unit)
+            if mg_val and orig_val:
+                # Keep both original and normalized values for better matching
+                normalized.append(orig_val)
+                normalized.append(orig_unit)
+                if mg_val != orig_val or orig_unit != "MG":
+                    normalized.append(mg_val)
+                    normalized.append("MG")
             i += 1
             continue
 
         if _is_numeric_token(tok_upper) and i + 1 < len(expanded):
             next_clean = expanded[i + 1].replace(",", "").strip("()").strip().upper()
             if next_clean in _WEIGHT_UNIT_FACTORS:
+                orig_val = _format_number_text(tok_upper)
                 mg_val = _convert_to_mg(tok_upper, next_clean)
-                if mg_val:
-                    normalized.append(mg_val)
-                    normalized.append("MG")
+                if mg_val and orig_val:
+                    # Keep both original and normalized values for better matching
+                    normalized.append(orig_val)
+                    normalized.append(next_clean)
+                    if mg_val != orig_val or next_clean != "MG":
+                        normalized.append(mg_val)
+                        normalized.append("MG")
                     i += 2
                     continue
 
@@ -599,6 +696,58 @@ def _classify_token(token: str) -> str:
     return CATEGORY_GENERIC
 
 
+def _is_combination_atc(atc_code: str | None) -> bool:
+    """Check if an ATC code indicates a combination product."""
+    if not atc_code:
+        return False
+    atc_upper = atc_code.upper().strip()
+    # Check explicit combination patterns
+    if any(atc_upper.startswith(pat) for pat in COMBINATION_ATC_PATTERNS):
+        return True
+    # Check suffix-based combinations (e.g., codes ending in 20, 30, 50-59)
+    if len(atc_upper) >= 7:  # Full ATC code like A10BF01
+        suffix = atc_upper[-2:]
+        if suffix in COMBINATION_ATC_SUFFIXES:
+            return True
+    return False
+
+
+def _detect_compound_generics(tokens: List[str]) -> set[str]:
+    """Detect tokens that are part of compound generic names like SODIUM CHLORIDE."""
+    compound_tokens: set[str] = set()
+    token_str = " ".join(tokens)
+    for compound in COMPOUND_GENERICS:
+        if compound in token_str:
+            for part in compound.split():
+                compound_tokens.add(part)
+    return compound_tokens
+
+
+def _extract_numeric_doses(tokens: List[str]) -> set[str]:
+    """Extract numeric dose values from tokens (values near dose units)."""
+    doses: set[str] = set()
+    dose_units = {"MG", "G", "MCG", "UG", "KG", "ML", "L", "PCT"}
+    for i, tok in enumerate(tokens):
+        if _is_numeric_token(tok):
+            # Check if next token is a dose unit
+            if i + 1 < len(tokens) and tokens[i + 1] in dose_units:
+                doses.add(tok)
+            # Check if previous token is a dose unit (for reversed order)
+            elif i > 0 and tokens[i - 1] in dose_units:
+                doses.add(tok)
+            # Check if any nearby token (within 2) is a dose unit
+            elif any(tokens[j] in dose_units for j in range(max(0, i-2), min(len(tokens), i+3)) if j != i):
+                doses.add(tok)
+    return doses
+
+
+def _check_dose_overlap(annex_doses: set[str], ref_doses: set[str]) -> bool:
+    """Check if there's any overlap in numeric dose values."""
+    if not annex_doses or not ref_doses:
+        return True  # No dose to compare, allow match
+    return bool(annex_doses & ref_doses)
+
+
 def _categorize_tokens(tokens: List[str]) -> dict[str, Counter]:
     cat_counts: dict[str, Counter] = {
         CATEGORY_GENERIC: Counter(),
@@ -608,12 +757,43 @@ def _categorize_tokens(tokens: List[str]) -> dict[str, Counter]:
         CATEGORY_ROUTE: Counter(),
         CATEGORY_OTHER: Counter(),
     }
+    # Detect compound generics first
+    compound_parts = _detect_compound_generics(tokens)
     for tok in tokens:
-        cat = _classify_token(tok)
-        if cat not in cat_counts:
-            cat = CATEGORY_OTHER
-        cat_counts[cat][tok] += 1
+        # If token is part of a compound generic, classify as generic not salt
+        if tok in compound_parts:
+            cat_counts[CATEGORY_GENERIC][tok] += 1
+        else:
+            cat = _classify_token(tok)
+            if cat not in cat_counts:
+                cat = CATEGORY_OTHER
+            cat_counts[cat][tok] += 1
     return cat_counts
+
+
+def _extract_generic_tokens(tokens: List[str]) -> set[str]:
+    generics: set[str] = set()
+    compound_parts = _detect_compound_generics(tokens)
+    for tok in tokens:
+        if tok in compound_parts or _classify_token(tok) == CATEGORY_GENERIC:
+            generics.add(tok)
+    return generics
+
+
+def _extract_high_value_generics(tokens: List[str]) -> set[str]:
+    return {tok for tok in _extract_generic_tokens(tokens) if tok not in GENERIC_JUNK_TOKENS}
+
+
+def _tokens_from_generic_hits(generic_hits: Iterable[str]) -> set[str]:
+    """Extract tokens from generic hits, filtering out junk tokens."""
+    tokens: set[str] = set()
+    for phrase in generic_hits or []:
+        for piece in phrase.split():
+            tok = GENERIC_SYNONYMS.get(piece.upper(), piece.upper())
+            # Filter out junk tokens that shouldn't be used for matching
+            if tok and tok not in GENERIC_JUNK_TOKENS:
+                tokens.add(tok)
+    return tokens
 
 
 def _build_brand_map(fda_df: pd.DataFrame) -> list[tuple[re.Pattern, str]]:
@@ -758,6 +938,11 @@ def _precompute_annex_records(
         generic_hit_atcs: set[str] = set()
         for hit in generic_hits:
             generic_hit_atcs.update(generic_atc_map.get(hit, ()))
+        primary_generic_tokens = _extract_generic_tokens(tokens_primary)
+        secondary_generic_tokens = _extract_generic_tokens(tokens_secondary)
+        primary_high_value_generics = _extract_high_value_generics(tokens_primary)
+        secondary_high_value_generics = _extract_high_value_generics(tokens_secondary)
+        generic_hit_tokens = _tokens_from_generic_hits(generic_hits)
         records.append(
             row
             | {
@@ -770,6 +955,11 @@ def _precompute_annex_records(
                 "norm_description": _normalize_phrase(description),
                 "generic_hits": generic_hits,
                 "generic_hit_atcs": sorted(generic_hit_atcs),
+                "primary_generic_tokens": primary_generic_tokens,
+                "secondary_generic_tokens": secondary_generic_tokens,
+                "primary_high_value_generics": primary_high_value_generics,
+                "secondary_high_value_generics": secondary_high_value_generics,
+                "generic_hit_tokens": generic_hit_tokens,
             }
         )
     return records
@@ -789,19 +979,49 @@ def _build_reference_display(raw_ref: dict) -> str | None:
     if generic:
         parts.append(generic)
 
+    # Handle dose display - standardize all doses to mg
     dose_piece = None
-    for key in ("dose_norm", "raw_dose", "strength_mg", "strength", "pct", "per_val"):
-        text = _as_str_or_empty(raw_ref.get(key))
-        if text:
-            dose_piece = text
-            break
-
     unit_piece = None
-    for key in ("unit", "per_unit"):
-        text = _as_str_or_empty(raw_ref.get(key))
-        if text:
-            unit_piece = text
-            break
+
+    # First try strength_mg (already normalized to mg)
+    strength_mg = _as_str_or_empty(raw_ref.get("strength_mg"))
+    if strength_mg:
+        dose_piece = strength_mg
+        unit_piece = "MG"
+    else:
+        # Try dose_norm (which should be in mg format like "5mg")
+        dose_norm = _as_str_or_empty(raw_ref.get("dose_norm"))
+        if dose_norm:
+            # dose_norm may include unit, extract just the number if needed
+            if "MG" in dose_norm.upper():
+                dose_piece = dose_norm
+                unit_piece = None  # Already included
+            else:
+                dose_piece = dose_norm
+                unit_piece = "MG"
+        else:
+            # Fall back to original strength + unit, but convert to mg
+            strength = _as_str_or_empty(raw_ref.get("strength"))
+            unit = _as_str_or_empty(raw_ref.get("unit")).upper()
+            if strength and unit:
+                # Convert to mg if possible
+                mg_val = _convert_to_mg(strength, unit)
+                if mg_val:
+                    dose_piece = mg_val
+                    unit_piece = "MG"
+                else:
+                    # Can't convert, use original
+                    dose_piece = strength
+                    unit_piece = unit
+            else:
+                # Try other dose fields
+                for key in ("raw_dose", "pct", "per_val"):
+                    text = _as_str_or_empty(raw_ref.get(key))
+                    if text:
+                        dose_piece = text
+                        if key == "pct":
+                            unit_piece = "%"
+                        break
 
     if dose_piece:
         parts.append(dose_piece)
@@ -869,6 +1089,10 @@ def build_pnf_reference(df: pd.DataFrame) -> list[dict]:
                 "secondary_tokens": secondary_tokens,
                 "primary_cat_counts": _categorize_tokens(primary_tokens),
                 "secondary_cat_counts": _categorize_tokens(secondary_tokens),
+                "primary_generic_tokens": _extract_generic_tokens(primary_tokens),
+                "secondary_generic_tokens": _extract_generic_tokens(secondary_tokens),
+                "primary_high_value_generics": _extract_high_value_generics(primary_tokens),
+                "secondary_high_value_generics": _extract_high_value_generics(secondary_tokens),
                 "atc_code": _maybe_none(row.get("atc_code")),
                 "raw_reference_row": dict(row),
             }
@@ -906,6 +1130,10 @@ def build_drugbank_reference(df: pd.DataFrame) -> list[dict]:
                 "secondary_tokens": secondary_tokens,
                 "primary_cat_counts": _categorize_tokens(primary_tokens),
                 "secondary_cat_counts": _categorize_tokens(secondary_tokens),
+                "primary_generic_tokens": _extract_generic_tokens(primary_tokens),
+                "secondary_generic_tokens": _extract_generic_tokens(secondary_tokens),
+                "primary_high_value_generics": _extract_high_value_generics(primary_tokens),
+                "secondary_high_value_generics": _extract_high_value_generics(secondary_tokens),
                 "atc_code": _maybe_none(row.get("atc_code")),
                 "raw_reference_row": raw_reference_row,
             }
@@ -938,6 +1166,22 @@ def _group_drugbank_refs_by_id(reference_rows: list[dict]) -> dict[str, list[dic
     return lookup
 
 
+def _build_generic_to_drugbank_id(drugbank_df: pd.DataFrame) -> dict[str, str]:
+    """Build a lookup from normalized generic name to DrugBank ID."""
+    lookup: dict[str, str] = {}
+    for row in drugbank_df.to_dict(orient="records"):
+        db_id = _as_str_or_empty(row.get("drugbank_id"))
+        if not db_id:
+            continue
+        for col in ("canonical_generic_name", "lexeme"):
+            name = _as_str_or_empty(row.get(col))
+            if name:
+                norm_name = name.upper().strip()
+                if norm_name and norm_name not in lookup:
+                    lookup[norm_name] = db_id
+    return lookup
+
+
 def _empty_match_record(annex_row: dict) -> dict:
     return {
         "Drug Code": annex_row.get("Drug Code"),
@@ -951,18 +1195,25 @@ def _empty_match_record(annex_row: dict) -> dict:
         "matched_secondary_lexicon": None,
         "secondary_match_count": None,
         "atc_code": None,
+        "drugbank_id": None,
         "primary_matching_tokens": None,
         "secondary_matching_tokens": None,
     }
 
 
 def _build_match_record(
-    annex_row: dict, ref: dict, primary_score: int, secondary_score: int
+    annex_row: dict,
+    ref: dict,
+    primary_score: int,
+    secondary_score: int,
+    generic_to_drugbank: dict[str, str] | None = None,
 ) -> dict:
     primary_overlap = ref.get("primary_overlap") or []
     secondary_overlap = ref.get("secondary_overlap") or []
     raw_ref = ref.get("raw_reference_row") or {}
     raw_display = _build_reference_display(raw_ref)
+    if raw_display:
+        raw_display = raw_display.upper()
 
     def _resolve_atc_code() -> str | None:
         generic_hit_atcs = annex_row.get("generic_hit_atcs") or []
@@ -977,6 +1228,22 @@ def _build_match_record(
             return "|".join(sorted(set(generic_hit_atcs)))
         return None
 
+    def _resolve_drugbank_id() -> str | None:
+        # Get drugbank_id from the reference if available
+        db_id = _as_str_or_empty(ref.get("id"))
+        if db_id and ref.get("source") in ("drugbank", "drugbank_mixture"):
+            return db_id
+        # Also check raw_reference_row for drugbank_id
+        raw_db_id = _as_str_or_empty(raw_ref.get("drugbank_id"))
+        if raw_db_id:
+            return raw_db_id
+        # For PNF matches, try to look up by generic name
+        if generic_to_drugbank:
+            generic_name = _as_str_or_empty(ref.get("name")).upper().strip()
+            if generic_name and generic_name in generic_to_drugbank:
+                return generic_to_drugbank[generic_name]
+        return None
+
     return {
         "Drug Code": annex_row.get("Drug Code"),
         "Drug Description": annex_row.get("Drug Description"),
@@ -989,6 +1256,7 @@ def _build_match_record(
         "matched_secondary_lexicon": ref.get("lexicon_secondary"),
         "secondary_match_count": secondary_score,
         "atc_code": _resolve_atc_code(),
+        "drugbank_id": _resolve_drugbank_id(),
         "primary_matching_tokens": "|".join(primary_overlap) if primary_overlap else None,
         "secondary_matching_tokens": "|".join(secondary_overlap) if secondary_overlap else None,
     }
@@ -1002,6 +1270,7 @@ def _score_annex_row(
     generic_automaton,
     mixture_lookup: dict[str, list[dict]],
     drugbank_refs_by_id: dict[str, list[dict]],
+    generic_to_drugbank: dict[str, str] | None = None,
 ) -> tuple[dict, list[dict], list[dict]]:
     matched_rows: list[dict] = []
     tie_rows: list[dict] = []
@@ -1015,6 +1284,9 @@ def _score_annex_row(
     annex_cat_secondary = annex_row.get("annex_cat_secondary") or _categorize_tokens(fuzzy_tokens_secondary)
     annex_generic_total = sum(annex_cat_primary.get(CATEGORY_GENERIC, Counter()).values())
     annex_generic_total_secondary = sum(annex_cat_secondary.get(CATEGORY_GENERIC, Counter()).values())
+    annex_primary_generic_tokens = annex_row.get("primary_generic_tokens") or set()
+    annex_primary_high_value_generics = annex_row.get("primary_high_value_generics") or set()
+    annex_generic_hit_tokens = annex_row.get("generic_hit_tokens") or set()
 
     if not fuzzy_tokens_primary:
         matched_rows.append(_empty_match_record(annex_row))
@@ -1056,6 +1328,10 @@ def _score_annex_row(
                         "secondary_tokens": secondary_tokens,
                         "primary_cat_counts": _categorize_tokens(primary_tokens),
                         "secondary_cat_counts": _categorize_tokens(secondary_tokens),
+                        "primary_generic_tokens": _extract_generic_tokens(primary_tokens),
+                        "secondary_generic_tokens": _extract_generic_tokens(secondary_tokens),
+                        "primary_high_value_generics": _extract_high_value_generics(primary_tokens),
+                        "secondary_high_value_generics": _extract_high_value_generics(secondary_tokens),
                         "atc_code": None,
                         "raw_reference_row": mix,
                     }
@@ -1064,6 +1340,17 @@ def _score_annex_row(
     best_primary = -10**9
     best_primary_records: list[dict] = []
     for ref in candidate_refs:
+        ref_primary_generic_tokens = ref.get("primary_generic_tokens") or set()
+        ref_primary_high_value_generics = ref.get("primary_high_value_generics") or set()
+        require_generic_overlap = GENERIC_MATCH_REQUIRED and annex_generic_total > 0
+        if require_generic_overlap and not (annex_primary_generic_tokens & ref_primary_generic_tokens):
+            continue
+        if annex_primary_high_value_generics and not (
+            annex_primary_high_value_generics & ref_primary_high_value_generics
+        ):
+            continue
+        if annex_generic_hit_tokens and not (annex_generic_hit_tokens & ref_primary_generic_tokens):
+            continue
         primary_overlap = _ordered_overlap(
             fuzzy_tokens_primary, fuzzy_counts_primary, ref.get("primary_tokens", ())
         )
@@ -1078,9 +1365,14 @@ def _score_annex_row(
             match_count = sum((annex_cat_primary.get(cat, Counter()) & ref_counts).values())
             mismatch = max(0, sum(ref_counts.values()) - match_count)
             weight = PRIMARY_WEIGHTS.get(cat, 1)
-            cat_scores.append(weight * match_count - mismatch)
+            mismatch_penalty = mismatch
+            if cat == CATEGORY_GENERIC:
+                excess = max(0, mismatch - GENERIC_REF_MISMATCH_TOLERANCE_PRIMARY)
+                mismatch_penalty += excess * GENERIC_REF_EXTRA_PENALTY_PRIMARY
+            cat_scores.append(weight * match_count - mismatch_penalty)
         generic_missing = max(0, annex_generic_total - generic_overlap)
         primary_score = sum(cat_scores) - (GENERIC_MISS_PENALTY_PRIMARY * generic_missing if annex_generic_total else 0)
+
         if primary_score == 0:
             continue
         if primary_score < best_primary:
@@ -1102,14 +1394,23 @@ def _score_annex_row(
 
     best_secondary = -10**9
     finalists: list[dict] = []
+    # Extract numeric doses from Annex F for dose matching
+    annex_doses = _extract_numeric_doses(fuzzy_tokens_secondary)
+
     for rec in best_primary_records:
         secondary_overlap = _ordered_overlap(
             fuzzy_tokens_secondary, fuzzy_counts_secondary, rec.get("secondary_tokens", ())
         )
+        ref_secondary_tokens = rec.get("secondary_tokens", [])
         ref_secondary_counts = rec.get("secondary_cat_counts", {})
         generic_overlap_secondary = sum(
             (annex_cat_secondary.get(CATEGORY_GENERIC, Counter()) & ref_secondary_counts.get(CATEGORY_GENERIC, Counter())).values()
         )
+
+        # Check dose matching - extract numeric doses from reference
+        ref_doses = _extract_numeric_doses(ref_secondary_tokens)
+        dose_matches = _check_dose_overlap(annex_doses, ref_doses)
+
         cat_scores = []
         for cat, ref_counts in ref_secondary_counts.items():
             match_count = sum((annex_cat_secondary.get(cat, Counter()) & ref_counts).values())
@@ -1121,11 +1422,19 @@ def _score_annex_row(
                     (annex_cat_secondary.get(cat, Counter()) & ref_counts).values()
                 )
                 bonus = numeric_match
-            cat_scores.append(weight * match_count + bonus - mismatch)
+            mismatch_penalty = mismatch
+            if cat == CATEGORY_GENERIC:
+                excess = max(0, mismatch - GENERIC_REF_MISMATCH_TOLERANCE_SECONDARY)
+                mismatch_penalty += excess * GENERIC_REF_EXTRA_PENALTY_SECONDARY
+            cat_scores.append(weight * match_count + bonus - mismatch_penalty)
         generic_missing_secondary = max(0, annex_generic_total_secondary - generic_overlap_secondary)
         secondary_score = sum(cat_scores) - (
             GENERIC_MISS_PENALTY_SECONDARY * generic_missing_secondary if annex_generic_total_secondary else 0
         )
+
+        # Apply dose mismatch penalty if Annex F has doses but they don't match reference
+        if REQUIRE_DOSE_MATCH and annex_doses and ref_doses and not dose_matches:
+            secondary_score -= DOSE_MISMATCH_PENALTY
         if secondary_score > best_secondary:
             finalists = []
             best_secondary = secondary_score
@@ -1145,14 +1454,21 @@ def _score_annex_row(
     if len(finalists) == 1:
         winner = finalists[0]
         matched_rows.append(
-            _build_match_record(annex_row, winner, best_primary, best_secondary)
+            _build_match_record(annex_row, winner, best_primary, best_secondary, generic_to_drugbank)
         )
         return matched_rows[0], tie_rows, unresolved_rows
 
     sorted_finalists = sorted(finalists, key=_reference_sort_key)
     atc_set = {_as_str_or_empty(rec.get("atc_code")) for rec in sorted_finalists}
     if len(atc_set) == 1:
-        def _form_route_score(rec: dict) -> tuple[int, int]:
+        # Check if this is an IV solution (BOTTLE, BAG, SOLUTION in description)
+        annex_desc_upper = _as_str_or_empty(annex_row.get("Drug Description")).upper()
+        is_iv_solution = any(
+            term in annex_desc_upper
+            for term in ("BOTTLE", "BAG", "SOLUTION", "INFUSION", "AMPULE", "VIAL")
+        )
+
+        def _form_route_score(rec: dict) -> tuple[int, int, int]:
             sec_counts = rec.get("secondary_cat_counts", {})
             form_match = sum(
                 (annex_cat_secondary.get(CATEGORY_FORM, Counter()) & sec_counts.get(CATEGORY_FORM, Counter())).values()
@@ -1160,11 +1476,18 @@ def _score_annex_row(
             route_match = sum(
                 (annex_cat_secondary.get(CATEGORY_ROUTE, Counter()) & sec_counts.get(CATEGORY_ROUTE, Counter())).values()
             )
-            return (route_match, form_match)
+            # For IV solutions, prefer INTRAVENOUS route
+            iv_bonus = 0
+            if is_iv_solution:
+                ref_display = _as_str_or_empty(rec.get("lexicon_secondary")).upper()
+                if "INTRAVENOUS" in ref_display:
+                    iv_bonus = 1
+            return (route_match, form_match, iv_bonus)
 
         sorted_finalists = sorted(
             sorted_finalists,
             key=lambda rec: (
+                -_form_route_score(rec)[2],  # IV bonus first
                 -_form_route_score(rec)[0],
                 -_form_route_score(rec)[1],
                 _reference_sort_key(rec),
@@ -1172,7 +1495,7 @@ def _score_annex_row(
         )
         winner = sorted_finalists[0]
         matched_rows.append(
-            _build_match_record(annex_row, winner, best_primary, best_secondary)
+            _build_match_record(annex_row, winner, best_primary, best_secondary, generic_to_drugbank)
         )
         for rec in sorted_finalists:
             tie_rows.append(
@@ -1181,10 +1504,67 @@ def _score_annex_row(
                     rec,
                     rec.get("primary_score", best_primary),
                     rec.get("secondary_score", best_secondary),
+                    generic_to_drugbank,
                 )
             )
         return matched_rows[0], tie_rows, unresolved_rows
 
+    # Multiple different ATCs - try to pick the best one
+    # Strategy: prefer single-agent ATCs over combination ATCs
+    # Also prefer ATCs that match more components for combination drugs
+    annex_desc = _as_str_or_empty(annex_row.get("Drug Description"))
+    is_combination_drug = "+" in annex_desc
+
+    def _atc_preference_score(atc: str) -> int:
+        """Score an ATC code - lower is better."""
+        is_combo_atc = _is_combination_atc(atc)
+        if is_combination_drug:
+            return 0 if is_combo_atc else 1  # Prefer combo ATCs for combo drugs
+        else:
+            return 1 if is_combo_atc else 0  # Prefer single ATCs for single drugs
+
+    # Group finalists by ATC and score each ATC
+    atc_to_recs: dict[str, list[dict]] = {}
+    for rec in sorted_finalists:
+        atc = _as_str_or_empty(rec.get("atc_code"))
+        atc_to_recs.setdefault(atc, []).append(rec)
+
+    # Sort ATCs by preference
+    sorted_atcs = sorted(atc_to_recs.keys(), key=_atc_preference_score)
+
+    # Check if we have a clear winner (best ATC is strictly better than second-best)
+    if len(sorted_atcs) >= 2:
+        best_atc_score = _atc_preference_score(sorted_atcs[0])
+        second_atc_score = _atc_preference_score(sorted_atcs[1])
+        if best_atc_score < second_atc_score:
+            # We have a clear winner - pick the best record from the winning ATC
+            winning_recs = atc_to_recs[sorted_atcs[0]]
+            # Sort by source (prefer PNF) then by secondary score
+            winning_recs_sorted = sorted(
+                winning_recs,
+                key=lambda r: (
+                    0 if r.get("source") == "pnf" else 1,
+                    -(r.get("secondary_score") or 0),
+                    _reference_sort_key(r),
+                ),
+            )
+            winner = winning_recs_sorted[0]
+            matched_rows.append(
+                _build_match_record(annex_row, winner, best_primary, best_secondary, generic_to_drugbank)
+            )
+            for rec in sorted_finalists:
+                unresolved_rows.append(
+                    _build_match_record(
+                        annex_row,
+                        rec,
+                        rec.get("primary_score", best_primary),
+                        rec.get("secondary_score", best_secondary),
+                        generic_to_drugbank,
+                    )
+                )
+            return matched_rows[0], tie_rows, unresolved_rows
+
+    # No clear winner - still unresolved
     matched_rows.append(_empty_match_record(annex_row))
     for rec in sorted_finalists:
         unresolved_rows.append(
@@ -1193,6 +1573,7 @@ def _score_annex_row(
                 rec,
                 rec.get("primary_score", best_primary),
                 rec.get("secondary_score", best_secondary),
+                generic_to_drugbank,
             )
         )
     return matched_rows[0], tie_rows, unresolved_rows
@@ -1210,6 +1591,7 @@ def _init_shared(
     generic_phrases: list[str],
     mixture_lookup: dict[str, list[dict]],
     drugbank_refs_by_id: dict[str, list[dict]],
+    generic_to_drugbank: dict[str, str] | None = None,
 ) -> None:
     global _REFERENCE_ROWS_SHARED
     global _REFERENCE_INDEX_SHARED
@@ -1218,6 +1600,7 @@ def _init_shared(
     global _GENERIC_AUTOMATON_SHARED
     global _MIXTURE_LOOKUP_SHARED
     global _DRUGBANK_BY_ID_SHARED
+    global _GENERIC_TO_DRUGBANK_SHARED
     _REFERENCE_ROWS_SHARED = reference_rows
     _REFERENCE_INDEX_SHARED = reference_index
     _BRAND_PATTERNS_SHARED = brand_patterns
@@ -1226,6 +1609,7 @@ def _init_shared(
     _GENERIC_AUTOMATON_SHARED = None
     _MIXTURE_LOOKUP_SHARED = mixture_lookup
     _DRUGBANK_BY_ID_SHARED = drugbank_refs_by_id
+    _GENERIC_TO_DRUGBANK_SHARED = generic_to_drugbank
 
 
 def _process_annex_row_worker(annex_row: dict) -> tuple[dict, list[dict], list[dict]]:
@@ -1235,6 +1619,7 @@ def _process_annex_row_worker(annex_row: dict) -> tuple[dict, list[dict], list[d
     generic_automaton = _GENERIC_AUTOMATON_SHARED
     mixture_lookup = _MIXTURE_LOOKUP_SHARED or {}
     drugbank_refs_by_id = _DRUGBANK_BY_ID_SHARED or {}
+    generic_to_drugbank = _GENERIC_TO_DRUGBANK_SHARED or {}
     return _score_annex_row(
         annex_row,
         reference_rows,
@@ -1243,6 +1628,7 @@ def _process_annex_row_worker(annex_row: dict) -> tuple[dict, list[dict], list[d
         generic_automaton,
         mixture_lookup,
         drugbank_refs_by_id,
+        generic_to_drugbank,
     )
 
 
@@ -1256,12 +1642,14 @@ def match_annex_with_atc(
     generic_atc_map: dict[str, list[str]] | None = None,
     mixture_lookup: dict[str, list[dict]] | None = None,
     drugbank_refs_by_id: dict[str, list[dict]] | None = None,
+    generic_to_drugbank: dict[str, str] | None = None,
     max_workers: int | None = None,
     chunk_size: int = 172,
     use_threads: bool = False,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     mixture_lookup = mixture_lookup or {}
     drugbank_refs_by_id = drugbank_refs_by_id or {}
+    generic_to_drugbank = generic_to_drugbank or {}
     annex_records = (
         annex_df
         if isinstance(annex_df, list)
@@ -1285,6 +1673,7 @@ def match_annex_with_atc(
                 generic_automaton,
                 mixture_lookup,
                 drugbank_refs_by_id,
+                generic_to_drugbank,
             )
             matched_rows.append(match_row)
             tie_rows.extend(ties)
@@ -1306,6 +1695,7 @@ def match_annex_with_atc(
                     generic_automaton,
                     mixture_lookup,
                     drugbank_refs_by_id,
+                    generic_to_drugbank,
                 ),
                 annex_records,
             ):
@@ -1316,7 +1706,7 @@ def match_annex_with_atc(
         with concurrent.futures.ProcessPoolExecutor(
             max_workers=worker_count,
             initializer=_init_shared,
-            initargs=(reference_rows, reference_index, brand_patterns, generic_phrases, mixture_lookup, drugbank_refs_by_id),
+            initargs=(reference_rows, reference_index, brand_patterns, generic_phrases, mixture_lookup, drugbank_refs_by_id, generic_to_drugbank),
         ) as executor:
             for match_row, ties, unresolved in executor.map(
                 _process_annex_row_worker, annex_records, chunksize=max(1, chunk_size)
@@ -1433,6 +1823,9 @@ def main() -> None:
     drugbank_refs_by_id = _run_with_spinner(
         "Index DrugBank references by id", lambda: _group_drugbank_refs_by_id(reference_rows)
     )
+    generic_to_drugbank = _run_with_spinner(
+        "Build generic to DrugBank ID lookup", lambda: _build_generic_to_drugbank_id(drugbank_df)
+    )
 
     annex_records = _run_with_spinner(
         "Prepare Annex F records",
@@ -1503,6 +1896,7 @@ def main() -> None:
             generic_atc_map,
             mixture_lookup,
             drugbank_refs_by_id,
+            generic_to_drugbank,
             max_workers=workers,
             chunk_size=chunk_size,
             use_threads=use_threads or backend == "thread",
@@ -1527,6 +1921,7 @@ def main() -> None:
             "matched_secondary_lexicon",
             "secondary_match_count",
             "atc_code",
+            "drugbank_id",
             "primary_matching_tokens",
             "secondary_matching_tokens",
         ]
