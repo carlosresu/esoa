@@ -1,6 +1,12 @@
 # AGENT INSTRUCTIONS
 
-These rules are meant for GPT agents running as `gpt-X.x-codex-high` or `gpt-X.x-codex-mini-high`. Apply them whenever you are editing this repository:
+These rules are meant for GPT agents. Apply them whenever you are editing this repository:
+
+> **IMPORTANT:** Before making changes to the drugs pipeline, read:
+> - `debug/pipeline.md` - Algorithmic logic, pharmaceutical rules, and decision rationale
+> - `debug/implementation_plan_v2.md` - Current TODO list and implementation status
+>
+> After every group of changes, UPDATE BOTH FILES with what was changed and any new decisions made.
 
 1. **Keep the standalone FDA scraper dependency files aligned.** Whenever you touch `pipelines/drugs/scripts/` (especially the normalization helpers or third-party imports) make sure the counterpart `dependencies/fda_ph_scraper/text_utils.py` captures the same text-processing logic and the `dependencies/fda_ph_scraper/requirements.txt` lists the packages needed by those scripts so the standalone scraper runs with the same dependencies as the pipeline helpers.
 2. **Standalone runner behavior.** The scripts under `dependencies/fda_ph_scraper`, `dependencies/atcd`, and `dependencies/drugbank_generics` must continue to be runnable on their own roots; they should default to writing outputs under their own `output/` directories while downstream runners copy those exports into `inputs/drugs/`.
@@ -49,10 +55,14 @@ These rules are meant for GPT agents running as `gpt-X.x-codex-high` or `gpt-X.x
 
 16. **Single vs combination ATC codes.** When an input row contains a single molecule, prefer single-drug ATC codes over combination ATCs. For example, LOSARTAN alone should get C09CA01, not C09DA01 (losartan+HCTZ combo).
 
-17. **Scoring algorithm.** Use Part 2's weighted scoring:
-    - Primary: GENERIC×5, SALT×4, DOSE×4, FORM×3, ROUTE×3
-    - Secondary: form/route tie-breaking
+17. **Scoring algorithm.** Use deterministic pharmaceutical-principled scoring (NOT numeric weights):
+    - Generic match is REQUIRED (no match without it)
+    - Salt forms are IGNORED (unless pure salt compound)
+    - Dose is FLEXIBLE for ATC tagging, EXACT for Drug Code matching
+    - Form allows equivalents (TABLET ≈ CAPSULE)
+    - Route is INFERRED from form if missing
     - ATC preference: single vs combo based on input molecule count
+    - See `debug/pipeline.md` for full scoring logic
 
 ## Reference Data
 
