@@ -46,6 +46,40 @@ EQUIVALENT_FORMS = {
     frozenset({"solution", "suspension"}),
 }
 
+# Form abbreviation normalization
+FORM_NORMALIZE = {
+    "tab": "tablet",
+    "tabs": "tablet",
+    "cap": "capsule",
+    "caps": "capsule",
+    "amp": "ampule",
+    "amps": "ampule",
+    "ampoule": "ampule",
+    "ampul": "ampule",
+    "vl": "vial",
+    "inj": "injection",
+    "soln": "solution",
+    "sol": "solution",
+    "susp": "suspension",
+    "supp": "suppository",
+    "supps": "suppository",
+    "crm": "cream",
+    "oint": "ointment",
+    "neb": "nebule",
+    "nebs": "nebule",
+    "nebules": "nebule",
+    "sach": "sachet",
+    "sachet": "sachet",
+    "sachets": "sachet",
+    "gtts": "drops",
+    "drop": "drops",
+    "pwdr": "powder",
+    "gran": "granule",
+    "granules": "granule",
+    "loz": "lozenge",
+    "lozenges": "lozenge",
+}
+
 # Route inference from form
 FORM_TO_ROUTE = {
     "tablet": "oral",
@@ -113,12 +147,47 @@ def _normalize_generics(generics: list[str]) -> set[str]:
     for g in generics:
         # Remove salt forms and normalize
         g = g.lower().strip()
+        
+        # Skip non-generic tokens
+        if g in ("+", "-", "/", "&", "and", "with"):
+            continue
+        
         # Remove common suffixes
-        for suffix in (" hydrochloride", " hcl", " sodium", " potassium", " sulfate", " acetate"):
+        for suffix in (" hydrochloride", " hcl", " sodium", " potassium", " sulfate", " acetate", 
+                       " maleate", " fumarate", " tartrate", " citrate", " phosphate", " chloride"):
             if g.endswith(suffix):
                 g = g[:-len(suffix)].strip()
+        
+        # Handle multi-word generics (e.g., "tranexamic acid" -> "tranexamic acid")
+        # Don't split these, keep as single token
         if g:
             normalized.add(g)
+    return normalized
+
+
+def _normalize_annex_generics(generic_str: str) -> set[str]:
+    """Normalize Annex F generic names which may have + separators."""
+    if not generic_str:
+        return set()
+    
+    # Split by common separators
+    parts = re.split(r'\s*[+/&]\s*|\s+and\s+|\s+with\s+', generic_str.lower())
+    
+    normalized = set()
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+        
+        # Remove common suffixes
+        for suffix in (" hydrochloride", " hcl", " sodium", " potassium", " sulfate", " acetate",
+                       " maleate", " fumarate", " tartrate", " citrate", " phosphate", " chloride"):
+            if part.endswith(suffix):
+                part = part[:-len(suffix)].strip()
+        
+        if part:
+            normalized.add(part)
+    
     return normalized
 
 
@@ -138,10 +207,16 @@ def _normalize_dose(strength: Optional[float], unit: str) -> Optional[float]:
     return strength
 
 
+def _normalize_form(form: str) -> str:
+    """Normalize form abbreviations to canonical form."""
+    f = form.lower().strip()
+    return FORM_NORMALIZE.get(f, f)
+
+
 def _forms_compatible(form1: str, form2: str) -> bool:
     """Check if two forms are compatible (equivalent)."""
-    f1 = form1.lower().strip()
-    f2 = form2.lower().strip()
+    f1 = _normalize_form(form1)
+    f2 = _normalize_form(form2)
     if f1 == f2:
         return True
     for equiv_set in EQUIVALENT_FORMS:
@@ -232,10 +307,10 @@ def score_annex_f_candidate(esoa_row: dict, annex_row: dict) -> tuple[float, str
     
     # === GENERICS CHECK (REQUIRED: all must match, no more no less) ===
     esoa_generics_raw = _parse_list(esoa_row.get("molecules_recognized_list") or esoa_row.get("generic_final"))
-    annex_generics_raw = _safe_str(annex_row.get("matched_generic_name")).lower().split()
+    annex_generic_str = _safe_str(annex_row.get("matched_generic_name"))
     
     esoa_generics = _normalize_generics(esoa_generics_raw)
-    annex_generics = _normalize_generics(annex_generics_raw)
+    annex_generics = _normalize_annex_generics(annex_generic_str)
     
     if not esoa_generics or not annex_generics:
         return -1000, "missing_generics"
@@ -323,7 +398,8 @@ def score_annex_f_candidate(esoa_row: dict, annex_row: dict) -> tuple[float, str
         reasons.append("esoa_route_unknown")
     
     # === FORM CHECK (FLEXIBLE: prefer exact, accept compatible) ===
-    esoa_form = _safe_str(esoa_row.get("form") or esoa_row.get("selected_form")).lower()
+    esoa_form_raw = _safe_str(esoa_row.get("form") or esoa_row.get("selected_form")).lower()
+    esoa_form = _normalize_form(esoa_form_raw)
     
     # Extract form from Annex F description
     annex_form = ""
