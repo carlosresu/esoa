@@ -4,261 +4,191 @@
 Reference synonyms and normalization for drug matching.
 
 This module provides:
-1. Generic name synonyms (paracetamol <-> acetaminophen, etc.)
+1. Generic name synonyms loaded from DrugBank (grouped by drugbank_id)
 2. Brand/generic flip detection for FDA data
 3. Common salt form normalization
+
+Synonyms are derived from DrugBank data where multiple lexemes share the same
+drugbank_id (e.g., PARACETAMOL and ACETAMINOPHEN both map to DB00316).
 """
 
 from __future__ import annotations
 
+import csv
 import re
+from collections import defaultdict
+from pathlib import Path
 from typing import Set, Dict, Tuple, Optional
 
 # ============================================================================
-# GENERIC SYNONYMS
-# Maps alternative names to canonical DrugBank names
+# DRUGBANK-BASED SYNONYMS
+# Loaded dynamically from drugbank_generics_master.csv
 # ============================================================================
-GENERIC_SYNONYMS: Dict[str, str] = {
-    # Paracetamol/Acetaminophen (most common)
-    "PARACETAMOL": "ACETAMINOPHEN",
-    "PANADOL": "ACETAMINOPHEN",  # Common brand used as generic
-    
-    # Spelling variants
-    "BECLOMETASONE": "BECLOMETHASONE",
-    "AMIDOTRIZOATE": "DIATRIZOATE",
-    "DIATRIZOIC": "DIATRIZOATE",
-    "DIATRIZOIC ACID": "DIATRIZOATE",
-    "DIATRIZOIC ACID DIHYDRATE": "DIATRIZOATE",
-    "SULPHATE": "SULFATE",
-    "SULPHASALAZINE": "SULFASALAZINE",
-    "SULPHAMETHOXAZOLE": "SULFAMETHOXAZOLE",
-    "SULPHADIAZINE": "SULFADIAZINE",
-    "ALUMINIUM": "ALUMINUM",
-    "ADRENALINE": "EPINEPHRINE",
-    "NORADRENALINE": "NOREPINEPHRINE",
-    "FRUSEMIDE": "FUROSEMIDE",
-    "LIGNOCAINE": "LIDOCAINE",
-    "GLYCERYL TRINITRATE": "NITROGLYCERIN",
-    "GTN": "NITROGLYCERIN",
-    "SALBUTAMOL": "ALBUTEROL",
-    "CICLOSPORIN": "CYCLOSPORINE",
-    "CICLOSPORINE": "CYCLOSPORINE",
-    "CEPHALEXIN": "CEFALEXIN",
-    "CEFACLOR": "CEFACLOR",
-    "CEFTRIAXONE": "CEFTRIAXONE",
-    "RIFAMPICIN": "RIFAMPIN",
-    "PHENOBARBITONE": "PHENOBARBITAL",
-    "CHLORPHENIRAMINE": "CHLORPHENAMINE",
-    "CHLORPHENAMINE": "CHLORPHENIRAMINE",  # Bidirectional
-    "PETHIDINE": "MEPERIDINE",
-    "TRAMADOL HCL": "TRAMADOL",
-    "TRAMADOL HYDROCHLORIDE": "TRAMADOL",
-    
-    # Vitamin synonyms
-    "VITAMIN B1": "THIAMINE",
-    "VITAMIN B2": "RIBOFLAVIN",
-    "VITAMIN B3": "NIACIN",
-    "VITAMIN B5": "PANTOTHENIC ACID",
-    "VITAMIN B6": "PYRIDOXINE",
-    "VITAMIN B7": "BIOTIN",
-    "VITAMIN B9": "FOLIC ACID",
-    "VITAMIN B12": "CYANOCOBALAMIN",
-    "VITAMIN C": "ASCORBIC ACID",
-    "VITAMIN D": "CHOLECALCIFEROL",
-    "VITAMIN D3": "CHOLECALCIFEROL",
-    "VITAMIN E": "TOCOPHEROL",
-    "VITAMIN K": "PHYTONADIONE",
-    "VITAMIN K1": "PHYTONADIONE",
-    
-    # Common abbreviations
-    "VIT": "VITAMIN",
-    "HCL": "HYDROCHLORIDE",
-    "NA": "SODIUM",
-    "K": "POTASSIUM",
-    "CA": "CALCIUM",
-    "MG": "MAGNESIUM",
-}
 
-# Reverse mapping for bidirectional lookup
-GENERIC_SYNONYMS_REVERSE: Dict[str, str] = {v: k for k, v in GENERIC_SYNONYMS.items()}
+_DRUGBANK_SYNONYMS_CACHE: Optional[Dict[str, str]] = None
+_DRUGBANK_GENERICS_CACHE: Optional[Set[str]] = None
 
 
-def normalize_generic_name(name: str) -> str:
-    """Normalize a generic name using synonyms."""
-    if not name:
-        return ""
-    upper = name.upper().strip()
-    return GENERIC_SYNONYMS.get(upper, upper)
+def _find_drugbank_path() -> Optional[Path]:
+    """Find the DrugBank generics master file."""
+    # Try various possible locations
+    possible_paths = [
+        Path(__file__).resolve().parents[3] / "inputs" / "drugs" / "drugbank_generics_master.csv",
+        Path.cwd() / "inputs" / "drugs" / "drugbank_generics_master.csv",
+    ]
+    for path in possible_paths:
+        if path.is_file():
+            return path
+    return None
 
 
-def get_all_synonyms(name: str) -> Set[str]:
-    """Get all known synonyms for a generic name."""
-    if not name:
-        return set()
-    upper = name.upper().strip()
-    synonyms = {upper}
+def load_drugbank_synonyms() -> Dict[str, str]:
+    """
+    Load synonym mapping from DrugBank data.
     
-    # Add canonical form
-    if upper in GENERIC_SYNONYMS:
-        synonyms.add(GENERIC_SYNONYMS[upper])
+    Groups lexemes by drugbank_id and maps each non-canonical name to its
+    canonical form. For example: PARACETAMOL -> ACETAMINOPHEN
     
-    # Add reverse mappings
-    if upper in GENERIC_SYNONYMS_REVERSE:
-        synonyms.add(GENERIC_SYNONYMS_REVERSE[upper])
+    Returns:
+        Dict mapping synonym names to their canonical DrugBank names
+    """
+    global _DRUGBANK_SYNONYMS_CACHE
+    if _DRUGBANK_SYNONYMS_CACHE is not None:
+        return _DRUGBANK_SYNONYMS_CACHE
     
-    # Add all names that map to the same canonical form
-    canonical = GENERIC_SYNONYMS.get(upper, upper)
-    for k, v in GENERIC_SYNONYMS.items():
-        if v == canonical:
-            synonyms.add(k)
+    synonyms: Dict[str, str] = {}
     
+    path = _find_drugbank_path()
+    if not path:
+        print("[synonyms] Warning: DrugBank file not found, using empty synonym map")
+        _DRUGBANK_SYNONYMS_CACHE = synonyms
+        return synonyms
+    
+    # Build synonym groups by drugbank_id
+    synonym_groups: Dict[str, Set[str]] = defaultdict(set)
+    canonical_by_id: Dict[str, str] = {}
+    
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                db_id = (row.get("drugbank_id") or "").strip()
+                canonical = (row.get("canonical_generic_name") or "").strip().upper()
+                lexeme = (row.get("lexeme") or "").strip().upper()
+                
+                if not db_id:
+                    continue
+                
+                # Track canonical name for this drugbank_id
+                if canonical and canonical != "NAN":
+                    canonical_by_id[db_id] = canonical
+                    synonym_groups[db_id].add(canonical)
+                
+                # Add lexeme as synonym
+                if lexeme and lexeme != "NAN":
+                    synonym_groups[db_id].add(lexeme)
+        
+        # Build synonym mapping: each name maps to its canonical form
+        for db_id, names in synonym_groups.items():
+            canonical = canonical_by_id.get(db_id)
+            if canonical:
+                for name in names:
+                    if name != canonical:
+                        synonyms[name] = canonical
+        
+        print(f"[synonyms] Loaded {len(synonyms)} synonyms from DrugBank")
+    except Exception as e:
+        print(f"[synonyms] Warning: Could not load DrugBank synonyms: {e}")
+    
+    _DRUGBANK_SYNONYMS_CACHE = synonyms
     return synonyms
 
 
-# ============================================================================
-# BRAND/GENERIC FLIP DETECTION
-# Detects when FDA data has brand and generic columns swapped
-# ============================================================================
-
-# Known generic names that should never be in the brand column
-KNOWN_GENERICS: Set[str] = {
-    "ACETAMINOPHEN", "ACETYLCYSTEINE", "ACYCLOVIR", "ALBENDAZOLE", "ALBUTEROL",
-    "ALENDRONATE", "ALLOPURINOL", "ALPRAZOLAM", "AMBROXOL", "AMIKACIN",
-    "AMILORIDE", "AMINOPHYLLINE", "AMIODARONE", "AMITRIPTYLINE", "AMLODIPINE",
-    "AMOXICILLIN", "AMPICILLIN", "ANASTROZOLE", "ASCORBIC ACID", "ASPIRIN",
-    "ATENOLOL", "ATORVASTATIN", "ATROPINE", "AZITHROMYCIN", "BACLOFEN",
-    "BECLOMETHASONE", "BENZOYL PEROXIDE", "BETAMETHASONE", "BISACODYL",
-    "BISOPROLOL", "BUDESONIDE", "BUPIVACAINE", "CAFFEINE", "CALCIUM",
-    "CAPTOPRIL", "CARBAMAZEPINE", "CARBIDOPA", "CARVEDILOL", "CEFACLOR",
-    "CEFIXIME", "CEFTRIAXONE", "CEFUROXIME", "CELECOXIB", "CETIRIZINE",
-    "CHLORAMPHENICOL", "CHLORHEXIDINE", "CHLORPHENIRAMINE", "CIPROFLOXACIN",
-    "CLARITHROMYCIN", "CLINDAMYCIN", "CLOBETASOL", "CLONAZEPAM", "CLONIDINE",
-    "CLOPIDOGREL", "CLOTRIMAZOLE", "CODEINE", "COLCHICINE", "DEXAMETHASONE",
-    "DEXTROMETHORPHAN", "DIAZEPAM", "DICLOFENAC", "DIGOXIN", "DILTIAZEM",
-    "DIPHENHYDRAMINE", "DOMPERIDONE", "DOXYCYCLINE", "ENALAPRIL", "EPINEPHRINE",
-    "ERYTHROMYCIN", "ESOMEPRAZOLE", "ETHAMBUTOL", "FAMOTIDINE", "FELODIPINE",
-    "FENOFIBRATE", "FENTANYL", "FERROUS", "FLUCONAZOLE", "FLUOXETINE",
-    "FLUTICASONE", "FOLIC ACID", "FUROSEMIDE", "GABAPENTIN", "GENTAMICIN",
-    "GLIBENCLAMIDE", "GLICLAZIDE", "GLIMEPIRIDE", "GUAIFENESIN", "HALOPERIDOL",
-    "HEPARIN", "HYDRALAZINE", "HYDROCHLOROTHIAZIDE", "HYDROCORTISONE",
-    "HYDROXYCHLOROQUINE", "HYOSCINE", "IBUPROFEN", "IMIPENEM", "INSULIN",
-    "IPRATROPIUM", "IRBESARTAN", "ISONIAZID", "ISOSORBIDE", "ITRACONAZOLE",
-    "KETOCONAZOLE", "KETOPROFEN", "KETOROLAC", "LABETALOL", "LACTULOSE",
-    "LAMIVUDINE", "LAMOTRIGINE", "LANSOPRAZOLE", "LEVETIRACETAM", "LEVOCETIRIZINE",
-    "LEVOFLOXACIN", "LEVOTHYROXINE", "LIDOCAINE", "LISINOPRIL", "LITHIUM",
-    "LOPERAMIDE", "LORATADINE", "LORAZEPAM", "LOSARTAN", "LOVASTATIN",
-    "MAGNESIUM", "MANNITOL", "MEBENDAZOLE", "MECLIZINE", "MEDROXYPROGESTERONE",
-    "MEFENAMIC ACID", "MELOXICAM", "METFORMIN", "METHOTREXATE", "METHYLDOPA",
-    "METHYLPREDNISOLONE", "METOCLOPRAMIDE", "METOPROLOL", "METRONIDAZOLE",
-    "MICONAZOLE", "MIDAZOLAM", "MONTELUKAST", "MORPHINE", "MOXIFLOXACIN",
-    "MULTIVITAMINS", "MUPIROCIN", "NAPROXEN", "NEBIVOLOL", "NIFEDIPINE",
-    "NITROFURANTOIN", "NITROGLYCERIN", "NORFLOXACIN", "NYSTATIN", "OFLOXACIN",
-    "OMEPRAZOLE", "ONDANSETRON", "ORLISTAT", "OSELTAMIVIR", "OXYTOCIN",
-    "PANTOPRAZOLE", "PARACETAMOL", "PENICILLIN", "PHENOBARBITAL", "PHENYLEPHRINE",
-    "PHENYTOIN", "PIOGLITAZONE", "PIPERACILLIN", "PIROXICAM", "POTASSIUM",
-    "PRAVASTATIN", "PREDNISOLONE", "PREDNISONE", "PREGABALIN", "PRIMAQUINE",
-    "PROPRANOLOL", "PYRAZINAMIDE", "PYRIDOXINE", "QUETIAPINE", "QUINAPRIL",
-    "RABEPRAZOLE", "RAMIPRIL", "RANITIDINE", "RIFAMPICIN", "RISPERIDONE",
-    "RIVAROXABAN", "ROSUVASTATIN", "SALBUTAMOL", "SERTRALINE", "SILDENAFIL",
-    "SIMVASTATIN", "SODIUM", "SPIRONOLACTONE", "STREPTOMYCIN", "SULFASALAZINE",
-    "TADALAFIL", "TAMOXIFEN", "TAMSULOSIN", "TELMISARTAN", "TERAZOSIN",
-    "TERBINAFINE", "TERBUTALINE", "TETRACYCLINE", "THEOPHYLLINE", "THIAMINE",
-    "TICAGRELOR", "TIMOLOL", "TOBRAMYCIN", "TRAMADOL", "TRANEXAMIC ACID",
-    "TRIAMCINOLONE", "TRIMETHOPRIM", "VALPROIC ACID", "VALSARTAN", "VANCOMYCIN",
-    "VERAPAMIL", "WARFARIN", "ZINC",
-}
-
-# Known brand name patterns (typically capitalized single words, often ending in specific suffixes)
-BRAND_SUFFIXES: Tuple[str, ...] = (
-    "OL", "IL", "IN", "AN", "ON", "EN", "UM", "AL", "AR", "ER", "OR",
-    "IX", "AX", "EX", "OX", "UX", "ID", "AD", "ED", "OD", "UD",
-)
-
-# Patterns that strongly suggest a brand name
-BRAND_PATTERNS: Tuple[re.Pattern, ...] = (
-    re.compile(r"^[A-Z][a-z]+$"),  # CamelCase single word
-    re.compile(r"^\d+$"),  # Pure numbers (unlikely generic)
-    re.compile(r"^[A-Z]{2,}$"),  # All caps short word
-)
+def load_drugbank_generics() -> Set[str]:
+    """
+    Load all known generic names from DrugBank (canonical + lexemes).
+    
+    Returns:
+        Set of all known generic drug names (uppercase)
+    """
+    global _DRUGBANK_GENERICS_CACHE
+    if _DRUGBANK_GENERICS_CACHE is not None:
+        return _DRUGBANK_GENERICS_CACHE
+    
+    generics: Set[str] = set()
+    
+    path = _find_drugbank_path()
+    if not path:
+        print("[synonyms] Warning: DrugBank file not found, using empty generics set")
+        _DRUGBANK_GENERICS_CACHE = generics
+        return generics
+    
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                canonical = (row.get("canonical_generic_name") or "").strip().upper()
+                lexeme = (row.get("lexeme") or "").strip().upper()
+                
+                if canonical and canonical != "NAN":
+                    generics.add(canonical)
+                if lexeme and lexeme != "NAN":
+                    generics.add(lexeme)
+        
+        print(f"[synonyms] Loaded {len(generics)} generic names from DrugBank")
+    except Exception as e:
+        print(f"[synonyms] Warning: Could not load DrugBank generics: {e}")
+    
+    _DRUGBANK_GENERICS_CACHE = generics
+    return generics
 
 
-def is_likely_generic(name: str) -> bool:
-    """Check if a name is likely a generic drug name."""
+def normalize_generic_name(name: str) -> str:
+    """
+    Normalize a generic name to its canonical DrugBank form.
+    
+    Args:
+        name: Generic drug name to normalize
+        
+    Returns:
+        Canonical form if a synonym exists, otherwise the original name (uppercase)
+    """
     if not name:
-        return False
+        return ""
     upper = name.upper().strip()
-    
-    # Check against known generics
-    if upper in KNOWN_GENERICS:
-        return True
-    
-    # Check synonyms
-    normalized = normalize_generic_name(upper)
-    if normalized in KNOWN_GENERICS:
-        return True
-    
-    # Check for salt forms (e.g., "METFORMIN HYDROCHLORIDE")
-    base = re.sub(r'\s+(HYDROCHLORIDE|HCL|SODIUM|POTASSIUM|CALCIUM|SULFATE|ACETATE|MALEATE|FUMARATE|TARTRATE|CITRATE|PHOSPHATE|CHLORIDE|BESILATE|BESYLATE|MESYLATE)\s*$', '', upper, flags=re.IGNORECASE)
-    if base in KNOWN_GENERICS:
-        return True
-    
-    # Check for "AS" salt forms (e.g., "AMLODIPINE AS BESILATE")
-    as_match = re.match(r'^(.+?)\s+AS\s+', upper)
-    if as_match:
-        base = as_match.group(1).strip()
-        if base in KNOWN_GENERICS:
-            return True
-    
-    return False
+    synonyms = load_drugbank_synonyms()
+    return synonyms.get(upper, upper)
 
 
-def is_likely_brand(name: str) -> bool:
-    """Check if a name is likely a brand name."""
+def get_all_synonyms(name: str) -> Set[str]:
+    """
+    Get all known synonyms for a generic name (including itself).
+    
+    Args:
+        name: Generic drug name
+        
+    Returns:
+        Set of all names that map to the same DrugBank ID
+    """
     if not name:
-        return False
+        return set()
     
-    # If it's a known generic, it's not a brand
-    if is_likely_generic(name):
-        return False
+    upper = name.upper().strip()
+    synonyms = load_drugbank_synonyms()
     
-    # Short single words with brand-like patterns
-    if len(name.split()) == 1 and len(name) <= 15:
-        # Check for brand patterns
-        for pattern in BRAND_PATTERNS:
-            if pattern.match(name):
-                return True
+    # Find canonical form
+    canonical = synonyms.get(upper, upper)
     
-    return False
-
-
-def detect_brand_generic_flip(brand: str, generic: str) -> bool:
-    """
-    Detect if brand and generic columns are likely swapped.
+    # Find all names that map to this canonical form
+    result = {canonical}
+    for syn_name, syn_canonical in synonyms.items():
+        if syn_canonical == canonical:
+            result.add(syn_name)
     
-    Returns True if the columns appear to be flipped.
-    """
-    if not brand or not generic:
-        return False
+    # Add the original name
+    result.add(upper)
     
-    brand_is_generic = is_likely_generic(brand)
-    generic_is_brand = is_likely_brand(generic)
-    
-    # Clear flip: brand column has a known generic, generic column has brand-like name
-    if brand_is_generic and not is_likely_generic(generic):
-        return True
-    
-    return False
-
-
-def fix_brand_generic_flip(brand: str, generic: str) -> Tuple[str, str]:
-    """
-    Fix brand/generic flip if detected.
-    
-    Returns (corrected_brand, corrected_generic).
-    """
-    if detect_brand_generic_flip(brand, generic):
-        return generic, brand
-    return brand, generic
+    return result
 
 
 # ============================================================================
@@ -283,6 +213,9 @@ def strip_salt_form(name: str) -> str:
     # Remove "AS <SALT>" pattern
     upper = re.sub(r'\s+AS\s+\w+$', '', upper)
     
+    # Remove "(AS <SALT>)" pattern
+    upper = re.sub(r'\s*\(AS\s+[^)]+\)\s*$', '', upper)
+    
     # Remove trailing salt forms
     for salt in SALT_FORMS:
         pattern = rf'\s+{re.escape(salt)}\s*$'
@@ -292,7 +225,90 @@ def strip_salt_form(name: str) -> str:
 
 
 def extract_base_generic(name: str) -> str:
-    """Extract the base generic name without salt forms."""
+    """Extract the base generic name without salt forms, normalized to canonical."""
     stripped = strip_salt_form(name)
     normalized = normalize_generic_name(stripped)
     return normalized
+
+
+# ============================================================================
+# BRAND/GENERIC FLIP DETECTION
+# Uses DrugBank generics for comprehensive detection
+# ============================================================================
+
+def is_likely_generic(name: str, drugbank_generics: Optional[Set[str]] = None) -> bool:
+    """
+    Check if a name is likely a generic drug name.
+    
+    Args:
+        name: The name to check
+        drugbank_generics: Optional set of known DrugBank generics (loaded if not provided)
+        
+    Returns:
+        True if the name matches a known generic (including salt forms)
+    """
+    if not name:
+        return False
+    upper = name.upper().strip()
+    
+    # Load DrugBank generics if not provided
+    if drugbank_generics is None:
+        drugbank_generics = load_drugbank_generics()
+    
+    # Direct match
+    if upper in drugbank_generics:
+        return True
+    
+    # Check base name without salt form
+    base = strip_salt_form(upper)
+    if base and base != upper and base in drugbank_generics:
+        return True
+    
+    # Check for combination patterns (e.g., "IBUPROFEN + PARACETAMOL")
+    if "+" in upper:
+        parts = [strip_salt_form(p.strip()) for p in upper.split("+")]
+        if any(p in drugbank_generics for p in parts if p):
+            return True
+    
+    return False
+
+
+def detect_brand_generic_flip(brand: str, generic: str, drugbank_generics: Optional[Set[str]] = None) -> bool:
+    """
+    Detect if brand and generic columns are likely swapped.
+    
+    Args:
+        brand: The brand name from FDA data
+        generic: The generic name from FDA data
+        drugbank_generics: Optional set of known DrugBank generics
+        
+    Returns:
+        True if the columns appear to be flipped
+    """
+    if not brand or not generic:
+        return False
+    
+    # Load DrugBank generics if not provided
+    if drugbank_generics is None:
+        drugbank_generics = load_drugbank_generics()
+    
+    brand_is_generic = is_likely_generic(brand, drugbank_generics)
+    generic_is_generic = is_likely_generic(generic, drugbank_generics)
+    
+    # Clear flip: brand column has a known generic, generic column doesn't
+    if brand_is_generic and not generic_is_generic:
+        return True
+    
+    return False
+
+
+def fix_brand_generic_flip(brand: str, generic: str, drugbank_generics: Optional[Set[str]] = None) -> Tuple[str, str]:
+    """
+    Fix brand/generic flip if detected.
+    
+    Returns:
+        (corrected_brand, corrected_generic)
+    """
+    if detect_brand_generic_flip(brand, generic, drugbank_generics):
+        return generic, brand
+    return brand, generic

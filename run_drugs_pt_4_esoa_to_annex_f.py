@@ -141,24 +141,19 @@ def _parse_list(val) -> list[str]:
     return [x.strip().lower() for x in s.split("|") if x.strip()]
 
 
-# Generic name synonyms for normalization
-GENERIC_SYNONYMS = {
-    "paracetamol": "acetaminophen",
-    "adrenaline": "epinephrine",
-    "noradrenaline": "norepinephrine",
-    "frusemide": "furosemide",
-    "lignocaine": "lidocaine",
-    "salbutamol": "albuterol",
-    "ciclosporin": "cyclosporine",
-    "ciclosporine": "cyclosporine",
-    "rifampicin": "rifampin",
-    "phenobarbitone": "phenobarbital",
-    "chlorpheniramine": "chlorphenamine",
-    "pethidine": "meperidine",
-    "beclometasone": "beclomethasone",
-    "aluminium": "aluminum",
-    "sulphate": "sulfate",
-}
+# Generic name synonyms for normalization - loaded from DrugBank
+try:
+    from pipelines.drugs.scripts.reference_synonyms import load_drugbank_synonyms
+    _db_synonyms = load_drugbank_synonyms()
+    # Convert to lowercase for matching
+    GENERIC_SYNONYMS = {k.lower(): v.lower() for k, v in _db_synonyms.items()}
+except ImportError:
+    # Fallback if module not available
+    GENERIC_SYNONYMS = {
+        "paracetamol": "acetaminophen",
+        "salbutamol": "albuterol",
+        "aluminium": "aluminum",
+    }
 
 
 def _normalize_generics(generics: list[str]) -> set[str]:
