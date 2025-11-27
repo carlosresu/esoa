@@ -25,7 +25,7 @@ from pipelines import (
     slugify_item_ref_code,
 )
 from pipelines.drugs.scripts.prepare_drugs import prepare  # re-exported for backward compatibility
-from pipelines.drugs.scripts.match_drugs import match  # re-exported for backward compatibility
+from pipelines.drugs.scripts.runners import run_annex_f_tagging as match  # re-exported for backward compatibility
 
 
 def _resolve_path(

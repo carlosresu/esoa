@@ -3,15 +3,17 @@
 """Exports convenience aliases for DrugsAndMedicine pipeline modules."""
 
 from .prepare_drugs import prepare
-from .match_drugs import match
-from .match_features_drugs import build_features
-from .match_scoring_drugs import score_and_classify
-from .match_outputs_drugs import write_outputs
+from .tagging import UnifiedTagger, tag_descriptions, tag_single
+from .runners import run_annex_f_tagging, run_esoa_tagging
 
 __all__ = [
     "prepare",
-    "match",
-    "build_features",
-    "score_and_classify",
-    "write_outputs",
+    "UnifiedTagger",
+    "tag_descriptions",
+    "tag_single",
+    "run_annex_f_tagging",
+    "run_esoa_tagging",
 ]
+
+# Backward compatibility alias
+match = run_annex_f_tagging

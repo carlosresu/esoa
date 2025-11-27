@@ -512,8 +512,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
 
     # Import part functions
     from run_drugs_pt_1_prepare_dependencies import run_part_1
-    from run_drugs_pt_2_annex_f_atc import run_part_2
-    from run_drugs_pt_3_esoa_atc import run_part_3
+    from pipelines.drugs.scripts.runners import run_annex_f_tagging, run_esoa_tagging
     from run_drugs_pt_4_esoa_to_annex_f import run_part_4
 
     # Run selected parts
@@ -539,27 +538,21 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         print("\n" + "=" * 60)
         print("PART 2: Match Annex F with ATC/DrugBank IDs")
         print("=" * 60)
-        results = run_part_2(
-            workers=args.workers,
-            use_threads=args.use_threads,
-            standalone=False,
-        )
+        results = run_annex_f_tagging(verbose=False)
         print(f"\nPart 2 results:")
         print(f"  - Matched with ATC: {results['matched_atc']} ({results['matched_atc_pct']:.1f}%)")
-        print(f"  - Has DrugBank ID: {results['has_drugbank']} ({results['has_drugbank_pct']:.1f}%)")
+        print(f"  - Has DrugBank ID: {results['matched_drugbank']} ({results['matched_drugbank_pct']:.1f}%)")
 
     if 3 in parts_to_run:
         print("\n" + "=" * 60)
         print("PART 3: Match ESOA with ATC/DrugBank IDs")
         print("=" * 60)
-        results = run_part_3(
-            esoa_path=args.esoa,
-            out_filename="esoa_with_atc.csv",
-            skip_excel=args.skip_excel,
-            standalone=False,
-        )
+        from pathlib import Path
+        esoa_path = Path(args.esoa) if args.esoa else None
+        results = run_esoa_tagging(esoa_path=esoa_path, verbose=False)
         print(f"\nPart 3 results:")
         print(f"  - Total rows: {results['total']}")
+        print(f"  - Matched with ATC: {results['matched_atc']} ({results['matched_atc_pct']:.1f}%)")
         print(f"  - Output: {results['output_path']}")
 
     if 4 in parts_to_run:

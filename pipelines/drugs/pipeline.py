@@ -24,7 +24,7 @@ from ..base import (
 )
 from ..registry import register_pipeline
 from .scripts.prepare_drugs import prepare
-from .scripts.match_drugs import match
+from .scripts.runners import run_annex_f_tagging, run_esoa_tagging
 
 THIS_DIR = Path(__file__).resolve().parents[2]
 ATCD_SUBDIR = Path("dependencies") / "atcd"
