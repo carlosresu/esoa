@@ -423,10 +423,103 @@ def build_unified_reference(
             print(f"  - Saved: {brands_out}")
     
     # =========================================================================
-    # STEP 5: Build mixtures lookup
+    # STEP 5: Build synonyms lookup
     # =========================================================================
     if verbose:
-        print("\n[Step 5] Building mixtures lookup...")
+        print("\n[Step 5] Building synonyms lookup...")
+    
+    # Build synonyms from DrugBank (same drugbank_id = synonyms)
+    try:
+        synonyms_df = con.execute("""
+            WITH synonym_groups AS (
+                SELECT 
+                    drugbank_id,
+                    UPPER(TRIM(canonical_generic_name)) as canonical_name,
+                    UPPER(TRIM(lexeme)) as synonym
+                FROM drugbank_generics
+                WHERE drugbank_id IS NOT NULL
+                  AND canonical_generic_name IS NOT NULL
+                  AND lexeme IS NOT NULL
+                  AND UPPER(TRIM(canonical_generic_name)) != UPPER(TRIM(lexeme))
+            )
+            SELECT DISTINCT
+                synonym,
+                canonical_name,
+                drugbank_id
+            FROM synonym_groups
+            WHERE synonym IS NOT NULL AND synonym != ''
+              AND canonical_name IS NOT NULL AND canonical_name != ''
+        """).fetchdf()
+        
+        if verbose:
+            print(f"  - DrugBank synonyms: {len(synonyms_df):,}")
+    except Exception as e:
+        if verbose:
+            print(f"  - Warning: Could not extract DrugBank synonyms: {e}")
+        synonyms_df = pd.DataFrame(columns=["synonym", "canonical_name", "drugbank_id"])
+    
+    # Add essential additional synonyms (regional names, spelling variants)
+    additional_synonyms = [
+        # Regional/spelling variants
+        ("PARACETAMOL", "ACETAMINOPHEN", None),
+        ("SALBUTAMOL", "ALBUTEROL", None),
+        ("ALUMINIUM", "ALUMINUM", None),
+        ("ADRENALINE", "EPINEPHRINE", None),
+        ("NORADRENALINE", "NOREPINEPHRINE", None),
+        ("FRUSEMIDE", "FUROSEMIDE", None),
+        ("LIGNOCAINE", "LIDOCAINE", None),
+        ("GLYCERYL TRINITRATE", "NITROGLYCERIN", None),
+        ("GTN", "NITROGLYCERIN", None),
+        ("CICLOSPORIN", "CYCLOSPORINE", None),
+        ("CICLOSPORINE", "CYCLOSPORINE", None),
+        ("RIFAMPICIN", "RIFAMPIN", None),
+        ("PHENOBARBITONE", "PHENOBARBITAL", None),
+        ("CHLORPHENIRAMINE", "CHLORPHENAMINE", None),
+        ("PETHIDINE", "MEPERIDINE", None),
+        # Alcohol variants
+        ("ALCOHOL, ETHYL", "ETHANOL", None),
+        ("ETHYL ALCOHOL", "ETHANOL", None),
+        ("ALCOHOL ETHYL", "ETHANOL", None),
+        # Spelling variants
+        ("BECLOMETASONE", "BECLOMETHASONE DIPROPIONATE", None),
+        ("BECLOMETHASONE", "BECLOMETHASONE DIPROPIONATE", None),
+        ("PHYTOMENADIONE", "PHYTONADIONE", None),
+        ("ISOSORBIDE-5-MONONITRATE", "ISOSORBIDE MONONITRATE", None),
+        ("ISOSORBIDE 5 MONONITRATE", "ISOSORBIDE MONONITRATE", None),
+        ("PHENOXYMETHYL PENICILLIN", "PHENOXYMETHYLPENICILLIN", None),
+        ("PENICILLIN V", "PHENOXYMETHYLPENICILLIN", None),
+        ("COLESTYRAMINE", "CHOLESTYRAMINE", None),
+        ("LEUPRORELINE", "LEUPROLIDE", None),
+        ("MEDROXYPROGESTERONE", "MEDROXYPROGESTERONE ACETATE", None),
+        # Enantiomer mappings (for single-drug matching)
+        ("LEVAMLODIPINE", "AMLODIPINE", None),
+        ("LEVOSALBUTAMOL", "ALBUTEROL", None),
+        ("LEVOCETIRIZINE", "CETIRIZINE", None),
+        ("ESOMEPRAZOLE", "OMEPRAZOLE", None),
+        ("DEXLANSOPRAZOLE", "LANSOPRAZOLE", None),
+    ]
+    
+    additional_df = pd.DataFrame(additional_synonyms, columns=["synonym", "canonical_name", "drugbank_id"])
+    
+    # Combine and deduplicate
+    synonyms_df = pd.concat([synonyms_df, additional_df], ignore_index=True)
+    synonyms_df = synonyms_df.drop_duplicates(subset=["synonym"], keep="first")
+    
+    if verbose:
+        print(f"  - Total synonyms (with additional): {len(synonyms_df):,}")
+    
+    # Save synonyms lookup
+    synonyms_out = outputs_dir / "synonyms_lookup.parquet"
+    synonyms_df.to_parquet(synonyms_out, index=False)
+    synonyms_df.to_csv(outputs_dir / "synonyms_lookup.csv", index=False)
+    if verbose:
+        print(f"  - Saved: {synonyms_out}")
+    
+    # =========================================================================
+    # STEP 6: Build mixtures lookup
+    # =========================================================================
+    if verbose:
+        print("\n[Step 6] Building mixtures lookup...")
     
     try:
         mixtures_df = con.execute("""

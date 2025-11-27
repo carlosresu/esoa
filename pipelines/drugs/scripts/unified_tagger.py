@@ -551,28 +551,27 @@ class UnifiedTagger:
                 SELECT * FROM read_csv_auto('{pure_salts_path}')
             """)
         
-        # Load synonyms
-        try:
-            from .reference_synonyms import load_drugbank_synonyms
-            self.generic_synonyms = load_drugbank_synonyms()
-        except ImportError:
-            self.generic_synonyms = {}
-        
-        # Add essential synonyms that may be missing
-        essential_synonyms = {
-            "PARACETAMOL": "ACETAMINOPHEN",
-            "SALBUTAMOL": "ALBUTEROL",
-            "ALUMINIUM": "ALUMINUM",
-            "ALCOHOL, ETHYL": "ETHANOL",
-            "ETHYL ALCOHOL": "ETHANOL",
-            "ADRENALINE": "EPINEPHRINE",
-            "FRUSEMIDE": "FUROSEMIDE",
-            "LIGNOCAINE": "LIDOCAINE",
-            "LEVAMLODIPINE": "AMLODIPINE",  # Levamlodipine is the S-enantiomer of amlodipine
-        }
-        for k, v in essential_synonyms.items():
-            if k not in self.generic_synonyms:
-                self.generic_synonyms[k] = v
+        # Load synonyms from parquet file (preferred) or fallback to reference_synonyms module
+        synonyms_path = self.outputs_dir / "synonyms_lookup.parquet"
+        if synonyms_path.exists():
+            try:
+                synonyms_df = pd.read_parquet(synonyms_path)
+                self.generic_synonyms = dict(zip(
+                    synonyms_df["synonym"].str.upper(),
+                    synonyms_df["canonical_name"].str.upper()
+                ))
+                self._log(f"  - synonyms: {len(self.generic_synonyms):,} entries")
+            except Exception as e:
+                self._log(f"  - Warning: Could not load synonyms: {e}")
+                self.generic_synonyms = {}
+        else:
+            # Fallback to reference_synonyms module
+            try:
+                from .reference_synonyms import load_drugbank_synonyms
+                self.generic_synonyms = load_drugbank_synonyms()
+                self._log(f"  - synonyms (from module): {len(self.generic_synonyms):,} entries")
+            except ImportError:
+                self.generic_synonyms = {}
         
         # Add multi-word generics from synonyms
         for canonical in self.generic_synonyms.values():
