@@ -1088,6 +1088,25 @@ class UnifiedTagger:
                     unique_generics.add(base)
                 # Also add synonym-normalized version
                 unique_generics.add(self._apply_synonyms(g))
+            
+            # For combinations, also add the combination key
+            # Filter out junk tokens
+            junk_tokens = {"+", "MG/5", "MG", "G", "MCG", "ML", "L", "PCT"}
+            combo_parts = [g for g in gt if g and g.upper() not in junk_tokens and not any(c.isdigit() for c in g)]
+            if len(combo_parts) >= 2:
+                base_parts = []
+                for part in combo_parts:
+                    base = part.upper()
+                    for suffix in ["HYDROXIDE", "CHLORIDE", "SULFATE", "SULPHATE", "CARBONATE", "PHOSPHATE", "ACETATE", "CITRATE"]:
+                        if base.endswith(" " + suffix):
+                            base = base[:-len(suffix)-1].strip()
+                            break
+                    if base:  # Only add non-empty
+                        base_parts.append(base)
+                # Add combination keys
+                if len(base_parts) >= 2:
+                    unique_generics.add(" + ".join(sorted(set(base_parts))))
+                    unique_generics.add(" + ".join(base_parts))
         
         # Batch lookup all generics at once
         # IMPORTANT: Use EXACT match first, only use partial match as fallback
@@ -1180,6 +1199,35 @@ class UnifiedTagger:
                 if syn in generic_cache and syn != sg:
                     generic_matches.extend(generic_cache[syn])
             
+            # For combinations, also search for the combination itself
+            # e.g., "ALUMINUM HYDROXIDE + MAGNESIUM HYDROXIDE" -> look for "ALUMINUM + MAGNESIUM"
+            junk_tokens = {"+", "MG/5", "MG", "G", "MCG", "ML", "L", "PCT"}
+            clean_generics = [sg for sg in stripped_generics if sg and sg not in junk_tokens and not any(c.isdigit() for c in sg)]
+            
+            if len(set(clean_generics)) > 1:
+                # Build combination search terms
+                base_parts = []
+                for part in clean_generics:
+                    # Strip common suffixes
+                    base = part
+                    for suffix in ["HYDROXIDE", "CHLORIDE", "SULFATE", "SULPHATE", "CARBONATE", "PHOSPHATE", "ACETATE", "CITRATE"]:
+                        if base.endswith(" " + suffix):
+                            base = base[:-len(suffix)-1].strip()
+                            break
+                    if base:
+                        base_parts.append(base)
+                
+                if len(base_parts) >= 2:
+                    # Search for combination like "ALUMINUM + MAGNESIUM"
+                    combo_key = " + ".join(sorted(set(base_parts)))
+                    if combo_key in generic_cache:
+                        generic_matches.extend(generic_cache[combo_key])
+                    
+                    # Also try unsorted
+                    combo_key2 = " + ".join(base_parts)
+                    if combo_key2 != combo_key and combo_key2 in generic_cache:
+                        generic_matches.extend(generic_cache[combo_key2])
+            
             # Deduplicate
             seen = set()
             unique_matches = []
@@ -1247,22 +1295,65 @@ class UnifiedTagger:
             # Score candidates
             best_score = -float("inf")
             best_candidate = None
-            is_single_drug = len(set(stripped_generics)) == 1
             
             # Normalize input generics for comparison
             input_generics_normalized = set()
             for sg in stripped_generics:
-                input_generics_normalized.add(self._apply_synonyms(sg.upper()))
+                normalized = self._apply_synonyms(sg.upper())
+                if normalized and normalized not in {"+", "MG/5"}:  # Filter out junk
+                    input_generics_normalized.add(normalized)
+            
+            num_input_generics = len(input_generics_normalized)
+            # Only treat as combination if there's a "+" in the original text
+            # "DEXTROSE IN SODIUM CHLORIDE" is NOT a combination
+            has_plus_separator = "+" in text
+            is_single_drug = num_input_generics == 1 or not has_plus_separator
+            is_combination = num_input_generics > 1 and has_plus_separator
             
             for cand in candidates:
+                cand_generic = _as_str_or_empty(cand.get("generic_name")).upper()
+                cand_generic_normalized = self._apply_synonyms(cand_generic)
+                
+                # Check if candidate is a combination (contains " + ")
+                cand_is_combo = " + " in cand_generic
+                
+                # For combinations: check if candidate matches all input generics
+                if is_combination:
+                    if cand_is_combo:
+                        # Candidate is also a combo - check if components match
+                        cand_parts = set(p.strip() for p in cand_generic.split(" + "))
+                        # Check if input base parts match candidate parts
+                        input_base_parts = set()
+                        for ig in input_generics_normalized:
+                            base = ig
+                            for suffix in ["HYDROXIDE", "CHLORIDE", "SULFATE", "SULPHATE", "CARBONATE", "PHOSPHATE", "ACETATE", "CITRATE"]:
+                                if base.endswith(" " + suffix):
+                                    base = base[:-len(suffix)-1].strip()
+                                    break
+                            if base:
+                                input_base_parts.add(base)
+                        
+                        # Check overlap
+                        if not input_base_parts.issubset(cand_parts) and not cand_parts.issubset(input_base_parts):
+                            # Check if at least all cand parts are in input
+                            if not all(any(cp in ig or ig in cp for ig in input_base_parts) for cp in cand_parts):
+                                continue
+                    else:
+                        # Candidate is single drug but input is combo - skip
+                        continue
+                
+                # For single drugs: require exact match
+                if is_single_drug:
+                    input_generic = list(input_generics_normalized)[0]
+                    if input_generic != cand_generic_normalized and input_generic != cand_generic:
+                        # Check if it's at least contained
+                        if input_generic not in cand_generic and cand_generic not in input_generic:
+                            continue  # Skip this candidate
+                
                 primary, secondary, reason = self._score_candidate(tokens, categories, cand)
                 total_score = primary + secondary * 0.1
                 
                 # BONUS for exact generic name match
-                cand_generic = _as_str_or_empty(cand.get("generic_name")).upper()
-                cand_generic_normalized = self._apply_synonyms(cand_generic)
-                
-                # Check if candidate generic exactly matches any input generic
                 exact_match = False
                 for ig in input_generics_normalized:
                     if ig == cand_generic_normalized or ig == cand_generic:
@@ -1270,22 +1361,11 @@ class UnifiedTagger:
                         total_score += 10  # Big bonus for exact match
                         break
                 
-                # PENALTY for candidate generic that doesn't contain input
-                if not exact_match:
-                    # Check if input is at least contained in candidate
-                    partial_match = False
-                    for ig in input_generics_normalized:
-                        if ig in cand_generic or cand_generic in ig:
-                            partial_match = True
-                            break
-                    if not partial_match:
-                        total_score -= 20  # Big penalty for no overlap
-                
                 # ATC preference
                 is_combo_atc = _is_combination_atc(_as_str_or_empty(cand.get("atc_code")))
                 if is_single_drug and is_combo_atc:
                     total_score -= 5
-                elif not is_single_drug and not is_combo_atc:
+                elif is_combination and not is_combo_atc:
                     total_score -= 5
                 
                 if total_score > best_score:
