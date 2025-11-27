@@ -3,14 +3,12 @@
 """
 Part 2: Match Annex F entries to ATC codes and DrugBank IDs.
 
-This script:
-- Loads Annex F, PNF lexicon, and DrugBank generics/mixtures
-- Matches each Annex F Drug Description to reference data
-- Assigns ATC codes and DrugBank IDs
-- Outputs annex_f_with_atc.csv for use in Part 4
+This script uses the UNIFIED TAGGER (same algorithm as Part 3) to ensure
+consistent tagging between Annex F and ESOA.
 
 Prerequisites:
 - Run Part 1 (prepare_dependencies) first to ensure reference data is fresh
+- Run build_unified_reference.py to create the unified reference dataset
 """
 
 from __future__ import annotations
@@ -27,7 +25,7 @@ INPUTS_DIR = PROJECT_DIR / "inputs" / "drugs"
 OUTPUTS_DIR = PROJECT_DIR / "outputs" / "drugs"
 
 
-def run_part_2(workers: int = 8, use_threads: bool = False, standalone: bool = True) -> dict:
+def run_part_2_unified(standalone: bool = True) -> dict:
     """
     Run Part 2: Match Annex F with ATC/DrugBank IDs.
     
