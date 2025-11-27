@@ -653,12 +653,32 @@ def _convert_to_mg(number_text: str, unit: str) -> str | None:
     return _format_number_text(mg_val)
 
 
-def _normalize_tokens(tokens: List[str], drop_stopwords: bool = False) -> List[str]:
+def _normalize_tokens(tokens: List[str], drop_stopwords: bool = False, preserve_multiword: bool = True) -> List[str]:
+    # Get known multi-word generic names from synonyms (canonical forms)
+    multiword_generics: set[str] = set()
+    if preserve_multiword:
+        for canonical in GENERIC_SYNONYMS.values():
+            if " " in canonical:
+                multiword_generics.add(canonical.upper())
+        # Also add common multi-word generics that might not be in synonyms
+        multiword_generics.update({
+            "ISOSORBIDE MONONITRATE", "ISOSORBIDE DINITRATE",
+            "TRANEXAMIC ACID", "FOLIC ACID", "ASCORBIC ACID", "VALPROIC ACID",
+            "ALUMINUM HYDROXIDE", "MAGNESIUM HYDROXIDE", "CALCIUM CARBONATE",
+            "SODIUM CHLORIDE", "POTASSIUM CHLORIDE", "SODIUM BICARBONATE",
+            "MEDROXYPROGESTERONE ACETATE", "BECLOMETHASONE DIPROPIONATE",
+        })
+    
     expanded: List[str] = []
     for tok in tokens:
         if tok is None:
             continue
-        expanded.extend(str(tok).split())
+        tok_upper = str(tok).upper().strip()
+        # Preserve known multi-word generic names
+        if preserve_multiword and tok_upper in multiword_generics:
+            expanded.append(tok_upper)
+        else:
+            expanded.extend(str(tok).split())
 
     normalized: List[str] = []
     i = 0
@@ -711,15 +731,8 @@ def _normalize_tokens(tokens: List[str], drop_stopwords: bool = False) -> List[s
         tok_upper = FORM_CANON.get(tok_upper, tok_upper)
         tok_upper = ROUTE_CANON.get(tok_upper, tok_upper)
         
-        # Apply generic synonyms - if canonical form is multi-word, split it
+        # Apply generic synonyms - keep multi-word canonical forms intact
         canonical = GENERIC_SYNONYMS.get(tok_upper, tok_upper)
-        if " " in canonical and canonical != tok_upper:
-            # Multi-word canonical form - add all parts as separate tokens
-            for part in canonical.split():
-                if part and part not in NATURAL_STOPWORDS:
-                    normalized.append(part)
-            i += 1
-            continue
         tok_upper = canonical
 
         # Always drop purely natural-language stopwords.
@@ -1166,7 +1179,12 @@ def build_drugbank_reference(df: pd.DataFrame) -> list[dict]:
     rows = []
     for row in df.to_dict(orient="records"):
         primary_tokens: List[str] = []
-        for col in ("lexeme", "generic_components_key", "canonical_generic_name"):
+        # Add canonical generic name as a single token (preserving multi-word names)
+        canonical_name = _as_str_or_empty(row.get("canonical_generic_name")).upper().strip()
+        if canonical_name:
+            primary_tokens.append(canonical_name)
+        # Also add individual tokens from other columns
+        for col in ("lexeme", "generic_components_key"):
             primary_tokens.extend(split_with_parentheses(row.get(col)))
         primary_tokens = _normalize_tokens(primary_tokens, drop_stopwords=True)
         # Deduplicate tokens to prevent excessive mismatch penalties
@@ -1217,8 +1235,14 @@ def build_reference_rows(
 def _build_reference_index(reference_rows: list[dict]) -> dict[str, list[int]]:
     reference_index: dict[str, list[int]] = defaultdict(list)
     for idx, ref in enumerate(reference_rows):
-        for tok in ref.get("primary_tokens", ()):
+        primary_tokens = ref.get("primary_tokens", ())
+        for tok in primary_tokens:
             reference_index[tok].append(idx)
+            # Also index individual words from multi-word tokens
+            if " " in tok:
+                for part in tok.split():
+                    if part:
+                        reference_index[part].append(idx)
     return reference_index
 
 
