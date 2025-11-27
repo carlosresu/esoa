@@ -551,16 +551,24 @@ class UnifiedTagger:
                 SELECT * FROM read_csv_auto('{pure_salts_path}')
             """)
         
-        # Load synonyms from parquet file (preferred) or fallback to reference_synonyms module
-        synonyms_path = self.outputs_dir / "synonyms_lookup.parquet"
-        if synonyms_path.exists():
+        # Load synonyms from generics_lookup (canonical_name column)
+        # Synonyms are rows where generic_name != canonical_name
+        generics_path = self.outputs_dir / "generics_lookup.parquet"
+        if generics_path.exists():
             try:
-                synonyms_df = pd.read_parquet(synonyms_path)
-                self.generic_synonyms = dict(zip(
-                    synonyms_df["synonym"].str.upper(),
-                    synonyms_df["canonical_name"].str.upper()
-                ))
-                self._log(f"  - synonyms: {len(self.generic_synonyms):,} entries")
+                generics_df = pd.read_parquet(generics_path)
+                if "canonical_name" in generics_df.columns:
+                    # Build synonym dict from rows where generic_name != canonical_name
+                    synonym_rows = generics_df[
+                        generics_df["generic_name"].str.upper() != generics_df["canonical_name"].str.upper()
+                    ]
+                    self.generic_synonyms = dict(zip(
+                        synonym_rows["generic_name"].str.upper(),
+                        synonym_rows["canonical_name"].str.upper()
+                    ))
+                    self._log(f"  - synonyms: {len(self.generic_synonyms):,} entries")
+                else:
+                    self.generic_synonyms = {}
             except Exception as e:
                 self._log(f"  - Warning: Could not load synonyms: {e}")
                 self.generic_synonyms = {}

@@ -423,12 +423,13 @@ def build_unified_reference(
             print(f"  - Saved: {brands_out}")
     
     # =========================================================================
-    # STEP 5: Build synonyms lookup
+    # STEP 5: Add synonyms to generics lookup
     # =========================================================================
     if verbose:
-        print("\n[Step 5] Building synonyms lookup...")
+        print("\n[Step 5] Adding synonyms to generics lookup...")
     
     # Build synonyms from DrugBank (same drugbank_id = synonyms)
+    # These will be added as additional rows in generics_lookup with synonym column
     try:
         synonyms_df = con.execute("""
             WITH synonym_groups AS (
@@ -506,14 +507,54 @@ def build_unified_reference(
     synonyms_df = synonyms_df.drop_duplicates(subset=["synonym"], keep="first")
     
     if verbose:
-        print(f"  - Total synonyms (with additional): {len(synonyms_df):,}")
+        print(f"  - Total synonyms: {len(synonyms_df):,}")
     
-    # Save synonyms lookup
-    synonyms_out = outputs_dir / "synonyms_lookup.parquet"
-    synonyms_df.to_parquet(synonyms_out, index=False)
-    synonyms_df.to_csv(outputs_dir / "synonyms_lookup.csv", index=False)
-    if verbose:
-        print(f"  - Saved: {synonyms_out}")
+    # Add synonyms as additional rows in generics_agg
+    # For each synonym, look up the canonical's ATC/DrugBank and add a row
+    synonym_rows = []
+    for _, syn_row in synonyms_df.iterrows():
+        synonym = syn_row["synonym"]
+        canonical = syn_row["canonical_name"]
+        
+        # Find the canonical in generics_agg
+        canonical_match = generics_agg[generics_agg["generic_name"].str.upper() == canonical.upper()]
+        if len(canonical_match) > 0:
+            ref = canonical_match.iloc[0]
+            synonym_rows.append({
+                "generic_name": synonym,
+                "drugbank_id": ref["drugbank_id"],
+                "atc_code": ref["atc_code"],
+                "source": ref["source"],
+                "canonical_name": canonical,  # Track the canonical form
+            })
+        else:
+            # Canonical not found, add synonym with just the mapping
+            synonym_rows.append({
+                "generic_name": synonym,
+                "drugbank_id": syn_row.get("drugbank_id"),
+                "atc_code": None,
+                "source": "synonym",
+                "canonical_name": canonical,
+            })
+    
+    if synonym_rows:
+        synonym_generics = pd.DataFrame(synonym_rows)
+        # Add canonical_name column to existing generics (they are their own canonical)
+        generics_agg["canonical_name"] = generics_agg["generic_name"]
+        # Append synonyms
+        generics_agg = pd.concat([generics_agg, synonym_generics], ignore_index=True)
+        # Deduplicate by generic_name (keep first = original over synonym)
+        generics_agg = generics_agg.drop_duplicates(subset=["generic_name"], keep="first")
+        
+        if verbose:
+            print(f"  - Generics with synonyms: {len(generics_agg):,}")
+        
+        # Re-save generics lookup with synonyms
+        generics_out = outputs_dir / "generics_lookup.parquet"
+        generics_agg.to_parquet(generics_out, index=False)
+        generics_agg.to_csv(outputs_dir / "generics_lookup.csv", index=False)
+        if verbose:
+            print(f"  - Updated: {generics_out}")
     
     # =========================================================================
     # STEP 6: Build mixtures lookup
