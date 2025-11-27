@@ -16,36 +16,19 @@ CATEGORY_ROUTE = "route"
 CATEGORY_OTHER = "other"
 
 # ============================================================================
-# SCORING WEIGHTS
+# MATCHING RULES (Rule-based, not weight-based)
 # ============================================================================
 
-PRIMARY_WEIGHTS = {
-    CATEGORY_GENERIC: 5,
-    CATEGORY_SALT: 4,
-    CATEGORY_DOSE: 4,
-    CATEGORY_FORM: 3,
-    CATEGORY_ROUTE: 3,
-    CATEGORY_OTHER: 1,
-}
-
-SECONDARY_WEIGHTS = {
-    CATEGORY_GENERIC: 3,
-    CATEGORY_SALT: 3,
-    CATEGORY_DOSE: 3,
-    CATEGORY_FORM: 4,
-    CATEGORY_ROUTE: 4,
-    CATEGORY_OTHER: 1,
-}
-
-GENERIC_MISS_PENALTY_PRIMARY = 6
-GENERIC_MISS_PENALTY_SECONDARY = 4
+# Generic match is REQUIRED - no match without it
 GENERIC_MATCH_REQUIRED = True
-GENERIC_REF_MISMATCH_TOLERANCE_PRIMARY = 1
-GENERIC_REF_MISMATCH_TOLERANCE_SECONDARY = 1
-GENERIC_REF_EXTRA_PENALTY_PRIMARY = 4
-GENERIC_REF_EXTRA_PENALTY_SECONDARY = 3
-DOSE_MISMATCH_PENALTY = 20
-REQUIRE_DOSE_MATCH = True
+
+# Salt forms are flexible - different salts of same drug are acceptable
+SALT_FLEXIBLE = True
+
+# Dose is flexible - different doses are acceptable (same ATC)
+DOSE_FLEXIBLE = True
+
+# Form equivalence is defined in scoring.py FORM_EQUIVALENCE_GROUPS
 
 # ============================================================================
 # STOPWORDS AND JUNK TOKENS
