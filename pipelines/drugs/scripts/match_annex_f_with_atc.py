@@ -1270,7 +1270,125 @@ def _build_generic_to_drugbank_id(drugbank_df: pd.DataFrame) -> dict[str, str]:
     return lookup
 
 
+def _parse_untagged_description(description: str) -> dict:
+    """
+    Parse an untagged Annex F description to extract molecule(s), salt(s), form, route, dose.
+    This is used for fallback matching when no ATC/DrugBank ID can be assigned.
+    """
+    desc_upper = description.upper().strip()
+    
+    # Extract molecules (everything before the first number or parenthesis with salt)
+    molecules = []
+    salts = []
+    form = None
+    route = None
+    dose_str = None
+    dose_mg = None
+    volume_ml = None
+    
+    # Split by + for combination drugs
+    # Pattern: MOLECULE1 + MOLECULE2 (as SALT) DOSE FORM VOLUME CONTAINER
+    import re
+    
+    # Extract salt forms in parentheses like "( as FUROATE)" or "(as MEGLUMINE)"
+    salt_match = re.search(r'\(\s*(?:AS\s+)?([A-Z]+(?:\s+[A-Z]+)?)\s*\)', desc_upper)
+    if salt_match:
+        salt_candidate = salt_match.group(1).strip()
+        # Check if it's actually a salt (not a modifier like TOPICAL, HUMAN, etc.)
+        if salt_candidate not in {'TOPICAL', 'HUMAN', 'ACETATE BASED', 'BICARBONATE BASED', 'LOW CALCIUM'}:
+            salts.append(salt_candidate)
+    
+    # Extract form
+    for form_name in ['TABLET', 'CAPSULE', 'SYRUP', 'SOLUTION', 'SUSPENSION', 'CREAM', 
+                      'OINTMENT', 'GEL', 'LOTION', 'SHAMPOO', 'OVULE', 'SUPPOSITORY',
+                      'DROPS', 'SPRAY', 'INHALER', 'POWDER', 'GRANULES', 'SACHET',
+                      'AMPULE', 'VIAL', 'BOTTLE', 'JAR', 'TUBE', 'DRUM', 'CRRT']:
+        if form_name in desc_upper:
+            form = form_name
+            break
+    
+    # Extract route from description or infer from form
+    if 'TOPICAL' in desc_upper:
+        route = 'TOPICAL'
+    elif 'ORAL' in desc_upper:
+        route = 'ORAL'
+    elif 'INTRAVENOUS' in desc_upper or 'IV' in desc_upper.split():
+        route = 'INTRAVENOUS'
+    elif form in ['TABLET', 'CAPSULE', 'SYRUP', 'DROPS']:
+        route = 'ORAL'
+    elif form in ['CREAM', 'OINTMENT', 'GEL', 'LOTION', 'SHAMPOO']:
+        route = 'TOPICAL'
+    elif form in ['AMPULE', 'VIAL', 'SOLUTION']:
+        route = 'PARENTERAL'
+    elif form in ['OVULE', 'SUPPOSITORY']:
+        route = 'VAGINAL/RECTAL'
+    
+    # Extract dose - look for patterns like "500 mg", "10 mg/mL", "100 IU/mL"
+    dose_match = re.search(r'(\d+(?:\.\d+)?)\s*(mg|g|mcg|ug|IU|mCi|PFU)(?:/(\d+(?:\.\d+)?)\s*(mL|L))?', desc_upper, re.IGNORECASE)
+    if dose_match:
+        dose_value = float(dose_match.group(1))
+        dose_unit = dose_match.group(2).upper()
+        # Normalize to mg
+        if dose_unit == 'G':
+            dose_mg = dose_value * 1000
+        elif dose_unit in ('MCG', 'UG'):
+            dose_mg = dose_value / 1000
+        elif dose_unit == 'MG':
+            dose_mg = dose_value
+        else:
+            dose_mg = dose_value  # Keep as-is for IU, mCi, PFU
+        dose_str = f"{dose_match.group(1)} {dose_unit}"
+        if dose_match.group(3):
+            dose_str += f"/{dose_match.group(3)} {dose_match.group(4)}"
+    
+    # Extract volume
+    vol_match = re.search(r'(\d+(?:\.\d+)?)\s*(mL|L)\s+(?:BOTTLE|VIAL|AMPULE|DRUM|JAR|TUBE)', desc_upper)
+    if vol_match:
+        vol_value = float(vol_match.group(1))
+        vol_unit = vol_match.group(2).upper()
+        if vol_unit == 'L':
+            volume_ml = vol_value * 1000
+        else:
+            volume_ml = vol_value
+    
+    # Extract molecule name(s) - everything before dose/form/salt
+    # Remove known suffixes and extract the drug name
+    molecule_part = desc_upper
+    # Remove parenthetical content
+    molecule_part = re.sub(r'\([^)]*\)', '', molecule_part)
+    # Remove dose patterns
+    molecule_part = re.sub(r'\d+(?:\.\d+)?\s*(?:mg|g|mcg|ug|IU|mCi|PFU|%)[^+]*', '', molecule_part, flags=re.IGNORECASE)
+    # Remove form/container words
+    for word in ['TABLET', 'CAPSULE', 'SYRUP', 'SOLUTION', 'SUSPENSION', 'CREAM', 
+                 'OINTMENT', 'GEL', 'LOTION', 'SHAMPOO', 'OVULE', 'SUPPOSITORY',
+                 'DROPS', 'SPRAY', 'INHALER', 'POWDER', 'GRANULES', 'SACHET',
+                 'AMPULE', 'VIAL', 'BOTTLE', 'JAR', 'TUBE', 'DRUM', 'CRRT',
+                 'CHEWABLE', 'ORAL', 'TOPICAL', 'MONODOSE', 'FREEZE-DRIED', 'DILUENT']:
+        molecule_part = molecule_part.replace(word, '')
+    # Clean up
+    molecule_part = re.sub(r'\s+', ' ', molecule_part).strip()
+    # Split by + for combinations
+    if '+' in molecule_part:
+        molecules = [m.strip() for m in molecule_part.split('+') if m.strip()]
+    elif molecule_part:
+        molecules = [molecule_part]
+    
+    return {
+        'parsed_molecules': '|'.join(molecules) if molecules else None,
+        'parsed_salts': '|'.join(salts) if salts else None,
+        'parsed_form': form,
+        'parsed_route': route,
+        'parsed_dose': dose_str,
+        'parsed_dose_mg': dose_mg,
+        'parsed_volume_ml': volume_ml,
+    }
+
+
 def _empty_match_record(annex_row: dict) -> dict:
+    # Parse the description for fallback matching
+    description = _as_str_or_empty(annex_row.get("Drug Description"))
+    parsed = _parse_untagged_description(description)
+    
     return {
         "Drug Code": annex_row.get("Drug Code"),
         "Drug Description": annex_row.get("Drug Description"),
@@ -1287,6 +1405,14 @@ def _empty_match_record(annex_row: dict) -> dict:
         "component_drugbank_ids": None,
         "primary_matching_tokens": None,
         "secondary_matching_tokens": None,
+        # Parsed fields for fallback matching
+        "parsed_molecules": parsed.get('parsed_molecules'),
+        "parsed_salts": parsed.get('parsed_salts'),
+        "parsed_form": parsed.get('parsed_form'),
+        "parsed_route": parsed.get('parsed_route'),
+        "parsed_dose": parsed.get('parsed_dose'),
+        "parsed_dose_mg": parsed.get('parsed_dose_mg'),
+        "parsed_volume_ml": parsed.get('parsed_volume_ml'),
     }
 
 
@@ -1357,6 +1483,14 @@ def _build_match_record(
         "component_drugbank_ids": _resolve_component_drugbank_ids(),
         "primary_matching_tokens": "|".join(primary_overlap) if primary_overlap else None,
         "secondary_matching_tokens": "|".join(secondary_overlap) if secondary_overlap else None,
+        # Parsed fields (None for matched records - only populated for untagged)
+        "parsed_molecules": None,
+        "parsed_salts": None,
+        "parsed_form": None,
+        "parsed_route": None,
+        "parsed_dose": None,
+        "parsed_dose_mg": None,
+        "parsed_volume_ml": None,
     }
 
 

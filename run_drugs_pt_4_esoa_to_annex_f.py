@@ -284,6 +284,141 @@ def build_annex_f_index(annex_df: pd.DataFrame) -> tuple[dict, dict, dict]:
     return dict(atc_to_annex), dict(drugbank_to_annex), dict(component_to_annex)
 
 
+def build_fallback_index(annex_df: pd.DataFrame) -> dict[str, list[dict]]:
+    """
+    Build a fallback index for untagged Annex F rows.
+    Index by parsed molecule names for fallback matching.
+    """
+    molecule_to_annex = defaultdict(list)
+    
+    for _, row in annex_df.iterrows():
+        row_dict = row.to_dict()
+        # Only index untagged rows (no ATC or DrugBank ID)
+        atc = _safe_str(row.get("atc_code"))
+        db_id = _safe_str(row.get("drugbank_id"))
+        if atc or db_id:
+            continue
+        
+        # Index by parsed molecules
+        parsed_molecules = _safe_str(row.get("parsed_molecules"))
+        if parsed_molecules:
+            for mol in parsed_molecules.split("|"):
+                mol = mol.strip().upper()
+                if mol and len(mol) >= 3:
+                    molecule_to_annex[mol].append(row_dict)
+    
+    return dict(molecule_to_annex)
+
+
+def find_fallback_candidates(
+    esoa_row: dict,
+    molecule_to_annex: dict,
+) -> list[dict]:
+    """
+    Find Annex F candidates for an untagged ESOA row using parsed molecule names.
+    This is used when no ATC/DrugBank ID match is found.
+    """
+    candidates = []
+    seen_drug_codes = set()
+    
+    # Get ESOA molecule names
+    esoa_molecules = _parse_list(esoa_row.get("molecules_recognized_list") or esoa_row.get("generic_final"))
+    esoa_molecules = [m.strip().upper() for m in esoa_molecules if m.strip()]
+    
+    # Also try raw_text parsing if no molecules recognized
+    if not esoa_molecules:
+        raw_text = _safe_str(esoa_row.get("raw_text"))
+        if raw_text:
+            # Simple extraction: first word(s) before numbers
+            import re
+            match = re.match(r'^([A-Za-z][A-Za-z\s\-/]+?)(?:\s+\d|\s*$)', raw_text)
+            if match:
+                esoa_molecules = [match.group(1).strip().upper()]
+    
+    for mol in esoa_molecules:
+        # Apply synonym normalization
+        mol = GENERIC_SYNONYMS.get(mol.lower(), mol.lower()).upper()
+        
+        for annex_row in molecule_to_annex.get(mol, []):
+            drug_code = annex_row.get("Drug Code")
+            if drug_code and drug_code not in seen_drug_codes:
+                seen_drug_codes.add(drug_code)
+                candidates.append(annex_row)
+    
+    return candidates
+
+
+def score_fallback_candidate(esoa_row: dict, annex_row: dict) -> tuple[float, str]:
+    """
+    Score how well an untagged Annex F row matches an untagged ESOA row.
+    Uses parsed fields for matching.
+    """
+    reasons = []
+    score = 0.0
+    
+    # === MOLECULE CHECK ===
+    esoa_molecules = _parse_list(esoa_row.get("molecules_recognized_list") or esoa_row.get("generic_final"))
+    esoa_molecules = set(m.strip().lower() for m in esoa_molecules if m.strip())
+    
+    annex_molecules = _safe_str(annex_row.get("parsed_molecules"))
+    annex_molecules = set(m.strip().lower() for m in annex_molecules.split("|") if m.strip()) if annex_molecules else set()
+    
+    # Normalize with synonyms
+    esoa_molecules = set(GENERIC_SYNONYMS.get(m, m) for m in esoa_molecules)
+    annex_molecules = set(GENERIC_SYNONYMS.get(m, m) for m in annex_molecules)
+    
+    if not esoa_molecules or not annex_molecules:
+        return -1000, "missing_molecules"
+    
+    overlap = esoa_molecules & annex_molecules
+    if not overlap:
+        return -1000, f"molecule_mismatch:esoa={esoa_molecules},annex={annex_molecules}"
+    
+    score += 50 * len(overlap)  # Base score for molecule match
+    
+    # === DOSE CHECK ===
+    esoa_dose = _safe_float(esoa_row.get("selected_strength") or esoa_row.get("selected_strength_mg"))
+    annex_dose = _safe_float(annex_row.get("parsed_dose_mg"))
+    
+    if esoa_dose and annex_dose:
+        dose_ratio = min(esoa_dose, annex_dose) / max(esoa_dose, annex_dose)
+        if dose_ratio >= 0.95:  # Within 5%
+            score += 30
+            reasons.append("dose_match")
+        elif dose_ratio >= 0.5:  # Within 2x
+            score += 10
+            reasons.append("dose_close")
+        else:
+            score -= 20
+            reasons.append(f"dose_mismatch:{esoa_dose}!={annex_dose}")
+    
+    # === FORM CHECK ===
+    esoa_form = _normalize_form(_safe_str(esoa_row.get("selected_form")))
+    annex_form = _safe_str(annex_row.get("parsed_form")).lower() if annex_row.get("parsed_form") else ""
+    
+    if esoa_form and annex_form:
+        if esoa_form == annex_form:
+            score += 20
+            reasons.append("form_match")
+        elif _forms_equivalent(esoa_form, annex_form):
+            score += 10
+            reasons.append("form_equivalent")
+        else:
+            score -= 10
+            reasons.append(f"form_mismatch:{esoa_form}!={annex_form}")
+    
+    # === ROUTE CHECK ===
+    esoa_route = _safe_str(esoa_row.get("route")).lower()
+    annex_route = _safe_str(annex_row.get("parsed_route")).lower() if annex_row.get("parsed_route") else ""
+    
+    if esoa_route and annex_route:
+        if esoa_route == annex_route or esoa_route in annex_route or annex_route in esoa_route:
+            score += 10
+            reasons.append("route_match")
+    
+    return score, "|".join(reasons) if reasons else "fallback_matched"
+
+
 def find_annex_f_candidates(
     esoa_row: dict,
     atc_to_annex: dict,
@@ -473,6 +608,7 @@ def match_esoa_to_annex_f(
     atc_to_annex: dict,
     drugbank_to_annex: dict,
     component_to_annex: dict | None = None,
+    fallback_index: dict | None = None,
 ) -> pd.DataFrame:
     """Match each ESOA row to the best Annex F Drug Code."""
     results = []
@@ -487,6 +623,7 @@ def match_esoa_to_annex_f(
         best_score = -float("inf")
         best_annex = None
         best_reason = "no_candidates"
+        is_fallback = False
 
         for annex_row in candidates:
             score, reason = score_annex_f_candidate(esoa_dict, annex_row)
@@ -494,6 +631,17 @@ def match_esoa_to_annex_f(
                 best_score = score
                 best_annex = annex_row
                 best_reason = reason
+        
+        # If no match found, try fallback matching with untagged Annex F rows
+        if (best_annex is None or best_score <= 0) and fallback_index:
+            fallback_candidates = find_fallback_candidates(esoa_dict, fallback_index)
+            for annex_row in fallback_candidates:
+                score, reason = score_fallback_candidate(esoa_dict, annex_row)
+                if score > best_score:
+                    best_score = score
+                    best_annex = annex_row
+                    best_reason = f"fallback:{reason}"
+                    is_fallback = True
 
         # Build result row - preserve key ESOA columns
         result = {
@@ -511,6 +659,7 @@ def match_esoa_to_annex_f(
             "matched_drugbank_id": best_annex.get("drugbank_id") if best_annex and best_score > 0 else None,
             "match_score": best_score if best_score > 0 else None,
             "match_reason": best_reason,
+            "is_fallback_match": is_fallback if best_score > 0 else None,
         }
         results.append(result)
 
@@ -552,11 +701,16 @@ def run_part_4(
     atc_to_annex, drugbank_to_annex, component_to_annex = run_with_spinner(
         "Build Annex F index", lambda: build_annex_f_index(annex_df)
     )
+    
+    # Build fallback index for untagged Annex F rows
+    fallback_index = run_with_spinner(
+        "Build fallback index", lambda: build_fallback_index(annex_df)
+    )
 
     # Match
     matched_df = run_with_spinner(
         "Match ESOA to Annex F Drug Codes",
-        lambda: match_esoa_to_annex_f(esoa_df, atc_to_annex, drugbank_to_annex, component_to_annex),
+        lambda: match_esoa_to_annex_f(esoa_df, atc_to_annex, drugbank_to_annex, component_to_annex, fallback_index),
     )
 
     # Save output
@@ -566,15 +720,18 @@ def run_part_4(
     # Summary
     total = len(matched_df)
     matched = matched_df["matched_drug_code"].notna().sum()
+    fallback_matched = matched_df["is_fallback_match"].sum() if "is_fallback_match" in matched_df.columns else 0
 
     results = {
         "total": total,
         "matched": matched,
         "matched_pct": 100 * matched / total if total else 0,
         "unmatched": total - matched,
+        "fallback_matched": int(fallback_matched),
         "atc_codes_indexed": len(atc_to_annex),
         "drugbank_ids_indexed": len(drugbank_to_annex),
         "component_ids_indexed": len(component_to_annex),
+        "fallback_molecules_indexed": len(fallback_index),
         "output_path": out_path,
     }
 
@@ -582,8 +739,11 @@ def run_part_4(
         print(f"\n  ATC codes indexed: {len(atc_to_annex)}")
         print(f"  DrugBank IDs indexed: {len(drugbank_to_annex)}")
         print(f"  Component IDs indexed: {len(component_to_annex)}")
+        print(f"  Fallback molecules indexed: {len(fallback_index)}")
         print(f"  Total ESOA rows: {total}")
         print(f"  Matched to Drug Code: {matched} ({results['matched_pct']:.1f}%)")
+        print(f"    - Via ATC/DrugBank: {matched - int(fallback_matched)}")
+        print(f"    - Via fallback: {int(fallback_matched)}")
         print(f"  Unmatched: {total - matched}")
         print(f"  Output: {out_path}")
 
