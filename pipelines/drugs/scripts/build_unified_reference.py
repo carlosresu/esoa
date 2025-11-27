@@ -294,12 +294,14 @@ def build_unified_reference(
         print("\n[Step 3] Building generics lookup...")
     
     # Get unique generics from DrugBank
+    # reference_text = constructed from generic + dose + form + route
     generics_df = con.execute("""
         SELECT DISTINCT
             drugbank_id,
             UPPER(TRIM(canonical_generic_name)) as generic_name,
             atc_code,
-            'drugbank' as source
+            'drugbank' as source,
+            TRIM(canonical_generic_name) as reference_text
         FROM drugbank_generics
         WHERE drugbank_id IS NOT NULL
           AND canonical_generic_name IS NOT NULL
@@ -316,7 +318,8 @@ def build_unified_reference(
                 NULL as drugbank_id,
                 UPPER(TRIM(atc_name)) as generic_name,
                 atc_code,
-                'who' as source
+                'who' as source,
+                TRIM(atc_name) as reference_text
             FROM who_atc
             WHERE atc_name IS NOT NULL AND atc_name != ''
         """).fetchdf()
@@ -326,14 +329,15 @@ def build_unified_reference(
     except:
         pass
     
-    # Add PNF generics
+    # Add PNF generics - use raw_molecule as reference_text
     try:
         pnf_generics = con.execute("""
             SELECT DISTINCT
                 NULL as drugbank_id,
                 UPPER(TRIM(generic_name)) as generic_name,
                 atc_code,
-                'pnf' as source
+                'pnf' as source,
+                TRIM(raw_molecule) as reference_text
             FROM pnf
             WHERE generic_name IS NOT NULL AND generic_name != ''
         """).fetchdf()
@@ -348,6 +352,7 @@ def build_unified_reference(
         "drugbank_id": "first",
         "atc_code": lambda x: "|".join(sorted(set(str(v) for v in x if pd.notna(v) and str(v).strip()))),
         "source": lambda x: "|".join(sorted(set(str(v) for v in x if pd.notna(v)))),
+        "reference_text": "first",  # Keep first reference text
     })
     
     if verbose:

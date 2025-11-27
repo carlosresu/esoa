@@ -96,17 +96,30 @@ def run_part_2_unified(standalone: bool = True) -> dict:
     # Merge results back with original Annex F
     annex_df["row_idx"] = range(len(annex_df))
     merged = annex_df.merge(
-        results_df[["row_idx", "atc_code", "drugbank_id", "generic_name", "match_score", "match_reason", "sources"]],
+        results_df[["row_idx", "atc_code", "drugbank_id", "generic_name", "reference_text", "match_score", "match_reason", "sources"]],
         on="row_idx",
         how="left",
     )
     merged = merged.drop(columns=["row_idx"])
     
     # Rename columns for compatibility with Part 4
+    # Put input_text and reference_text side by side for comparison
     merged = merged.rename(columns={
         "generic_name": "matched_generic_name",
+        "reference_text": "matched_reference_text",
         "sources": "matched_source",
     })
+    
+    # Reorder columns: put Drug Description and matched_reference_text side by side
+    cols = list(merged.columns)
+    # Find positions
+    desc_idx = cols.index("Drug Description") if "Drug Description" in cols else -1
+    ref_idx = cols.index("matched_reference_text") if "matched_reference_text" in cols else -1
+    if desc_idx >= 0 and ref_idx >= 0 and ref_idx != desc_idx + 1:
+        # Move matched_reference_text right after Drug Description
+        cols.remove("matched_reference_text")
+        cols.insert(desc_idx + 1, "matched_reference_text")
+        merged = merged[cols]
     
     # Write outputs
     PIPELINE_OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)

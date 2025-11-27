@@ -1157,7 +1157,7 @@ class UnifiedTagger:
                 
                 # First try EXACT match (highest priority)
                 query_exact = """
-                    SELECT DISTINCT generic_name, drugbank_id, atc_code, source
+                    SELECT DISTINCT generic_name, drugbank_id, atc_code, source, reference_text
                     FROM generics
                     WHERE UPPER(generic_name) = ?
                 """
@@ -1171,7 +1171,7 @@ class UnifiedTagger:
                 
                 # Then try prefix match (e.g., AMLODIPINE matches "AMLODIPINE AND...")
                 query_prefix = """
-                    SELECT DISTINCT generic_name, drugbank_id, atc_code, source
+                    SELECT DISTINCT generic_name, drugbank_id, atc_code, source, reference_text
                     FROM generics
                     WHERE UPPER(generic_name) LIKE ?
                     ORDER BY LENGTH(generic_name) ASC
@@ -1189,7 +1189,7 @@ class UnifiedTagger:
                 # Finally try contains match (lowest priority, only for multi-word)
                 if " " in token:
                     query_contains = """
-                        SELECT DISTINCT generic_name, drugbank_id, atc_code, source
+                        SELECT DISTINCT generic_name, drugbank_id, atc_code, source, reference_text
                         FROM generics
                         WHERE UPPER(generic_name) LIKE ?
                         ORDER BY LENGTH(generic_name) ASC
@@ -1284,6 +1284,7 @@ class UnifiedTagger:
                     "atc_code": None,
                     "drugbank_id": None,
                     "generic_name": "|".join(stripped_generics) if stripped_generics else None,
+                    "reference_text": None,
                     "match_score": 0,
                     "match_reason": "no_candidates",
                     "sources": "",
@@ -1311,6 +1312,7 @@ class UnifiedTagger:
                             "atc_code": atc,
                             "drugbank_id": gm.get("drugbank_id"),
                             "generic_name": gm.get("generic_name"),
+                            "reference_text": gm.get("reference_text", ""),
                             "source": gm.get("source"),
                             "form": "",
                             "route": "",
@@ -1325,6 +1327,7 @@ class UnifiedTagger:
                     "atc_code": None,
                     "drugbank_id": None,
                     "generic_name": "|".join(stripped_generics) if stripped_generics else None,
+                    "reference_text": None,
                     "match_score": 0,
                     "match_reason": "no_candidates",
                     "sources": "",
@@ -1443,6 +1446,7 @@ class UnifiedTagger:
                     "atc_code": best_candidate.get("atc_code"),
                     "drugbank_id": best_candidate.get("drugbank_id"),
                     "generic_name": best_candidate.get("generic_name"),
+                    "reference_text": best_candidate.get("reference_text", ""),
                     "match_score": best_score,
                     "match_reason": "matched",
                     "sources": best_candidate.get("source", ""),
@@ -1455,6 +1459,7 @@ class UnifiedTagger:
                     "atc_code": None,
                     "drugbank_id": None,
                     "generic_name": None,
+                    "reference_text": None,
                     "match_score": 0,
                     "match_reason": "no_match",
                     "sources": "",

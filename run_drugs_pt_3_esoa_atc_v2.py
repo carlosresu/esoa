@@ -137,19 +137,31 @@ def run_part_3_unified(
     # Merge results back with original ESOA
     esoa_df["_batch_idx"] = range(len(esoa_df))
     merged = esoa_df.merge(
-        results_df[["_batch_idx", "atc_code", "drugbank_id", "generic_name", "match_score", "match_reason", "sources"]],
+        results_df[["_batch_idx", "atc_code", "drugbank_id", "generic_name", "reference_text", "match_score", "match_reason", "sources"]],
         on="_batch_idx",
         how="left",
     )
     merged = merged.drop(columns=["_batch_idx"])
     
     # Rename columns for compatibility with Part 4
+    # Put input_text and reference_text side by side for comparison
     merged = merged.rename(columns={
         "atc_code": "atc_code_final",
         "drugbank_id": "drugbank_id_final",
         "generic_name": "generic_final",
+        "reference_text": "matched_reference_text",
         "sources": "reference_source",
     })
+    
+    # Reorder columns: put text column and matched_reference_text side by side
+    cols = list(merged.columns)
+    text_idx = cols.index(text_column) if text_column in cols else -1
+    ref_idx = cols.index("matched_reference_text") if "matched_reference_text" in cols else -1
+    if text_idx >= 0 and ref_idx >= 0 and ref_idx != text_idx + 1:
+        # Move matched_reference_text right after text column
+        cols.remove("matched_reference_text")
+        cols.insert(text_idx + 1, "matched_reference_text")
+        merged = merged[cols]
     
     # Write outputs
     PIPELINE_OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
