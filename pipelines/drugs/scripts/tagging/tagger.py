@@ -95,9 +95,17 @@ class UnifiedTagger:
             "SODIUM CHLORIDE", "POTASSIUM CHLORIDE", "CALCIUM CHLORIDE",
             "MAGNESIUM SULFATE", "FERROUS SULFATE", "ZINC SULFATE",
             "INSULIN GLARGINE", "INSULIN LISPRO", "INSULIN ASPART",
-            # Vitamin variants with plural forms
-            "VITAMINS INTRAVENOUS, FAT-SOLUBLE", "VITAMINS INTRAVENOUS, WATER-SOLUBLE",
         })
+        
+        # Add plural forms of multiword generics for detection
+        plural_forms = set()
+        for mw in self.multiword_generics:
+            words = mw.split()
+            if words and not words[0].endswith("S"):
+                # Add plural form (e.g., VITAMIN -> VITAMINS)
+                plural_first = words[0] + "S"
+                plural_forms.add(" ".join([plural_first] + words[1:]))
+        self.multiword_generics.update(plural_forms)
         
         self._loaded = True
         self._log("Reference data loaded.")

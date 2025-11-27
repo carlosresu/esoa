@@ -50,14 +50,6 @@ def load_synonyms(
     
     # Add hardcoded synonyms for common variations
     hardcoded = {
-        # Plural -> singular
-        "VITAMINS": "VITAMIN",
-        "VITAMINS FAT-SOLUBLE": "VITAMIN FAT-SOLUBLE",
-        "VITAMINS WATER-SOLUBLE": "VITAMIN WATER-SOLUBLE",
-        "VITAMINS INTRAVENOUS, FAT-SOLUBLE": "VITAMIN INTRAVENOUS, FAT-SOLUBLE",
-        "VITAMINS INTRAVENOUS, WATER-SOLUBLE": "VITAMIN INTRAVENOUS, WATER-SOLUBLE",
-        "VITAMINS INTRAVENOUS FAT-SOLUBLE": "VITAMIN INTRAVENOUS, FAT-SOLUBLE",
-        "VITAMINS INTRAVENOUS WATER-SOLUBLE": "VITAMIN INTRAVENOUS, WATER-SOLUBLE",
         # Regional/spelling variants
         "ADRENALINE": "EPINEPHRINE",
         "FRUSEMIDE": "FUROSEMIDE",
@@ -92,13 +84,49 @@ def load_synonyms(
     return synonyms
 
 
+def _singularize(word: str) -> str:
+    """Convert a plural word to singular form."""
+    word_upper = word.upper()
+    
+    # Common plural endings
+    if word_upper.endswith("IES"):
+        return word_upper[:-3] + "Y"
+    elif word_upper.endswith("ES") and len(word_upper) > 3:
+        # Handle -ES endings (e.g., BOXES -> BOX, but not DOSES)
+        if word_upper[-3] in "SXZH":
+            return word_upper[:-2]
+        return word_upper[:-1]  # Just remove S
+    elif word_upper.endswith("S") and not word_upper.endswith("SS"):
+        return word_upper[:-1]
+    
+    return word_upper
+
+
 def apply_synonym(
     generic: str,
     synonyms: Dict[str, str],
 ) -> str:
-    """Apply synonym mapping to a generic name."""
+    """Apply synonym mapping to a generic name, including plural->singular."""
     generic_upper = generic.upper()
-    return synonyms.get(generic_upper, generic_upper)
+    
+    # First check explicit synonyms
+    if generic_upper in synonyms:
+        return synonyms[generic_upper]
+    
+    # Try singularizing the first word if it looks plural
+    words = generic_upper.split()
+    if words and words[0].endswith("S") and not words[0].endswith("SS"):
+        singular_first = _singularize(words[0])
+        singular_name = " ".join([singular_first] + words[1:])
+        
+        # Check if singular form is in synonyms
+        if singular_name in synonyms:
+            return synonyms[singular_name]
+        
+        # Return singular form (it might match in lookup)
+        return singular_name
+    
+    return generic_upper
 
 
 def lookup_generic_exact(
