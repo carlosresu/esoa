@@ -158,8 +158,13 @@ PURE_SALT_COMPOUNDS = {
 
 # ATC combination patterns
 COMBINATION_ATC_PATTERNS = {
-    "A10BD", "C09BA", "C09BB", "C09BX", "C09DA", "C09DB", "C09DX",
-    "C10BA", "C10BX", "M05BB", "R03AL", "R03AK", "R03DA20", "R03DA55", "R03DB",
+    "A10BD",  # Blood glucose lowering drugs, combinations
+    "C07FB",  # Beta blocking agents and other antihypertensives
+    "C09BA", "C09BB", "C09BX",  # ACE inhibitors combinations
+    "C09DA", "C09DB", "C09DX",  # ARB combinations
+    "C10BA", "C10BX",  # Lipid modifying agents combinations
+    "M05BB",  # Bisphosphonates combinations
+    "R03AL", "R03AK", "R03DA20", "R03DA55", "R03DB",  # Respiratory combinations
 }
 COMBINATION_ATC_SUFFIXES = {"20", "30", "50", "51", "52", "53", "54", "55", "56", "57", "58", "59"}
 
@@ -551,11 +556,23 @@ class UnifiedTagger:
             from .reference_synonyms import load_drugbank_synonyms
             self.generic_synonyms = load_drugbank_synonyms()
         except ImportError:
-            self.generic_synonyms = {
-                "PARACETAMOL": "ACETAMINOPHEN",
-                "SALBUTAMOL": "ALBUTEROL",
-                "ALUMINIUM": "ALUMINUM",
-            }
+            self.generic_synonyms = {}
+        
+        # Add essential synonyms that may be missing
+        essential_synonyms = {
+            "PARACETAMOL": "ACETAMINOPHEN",
+            "SALBUTAMOL": "ALBUTEROL",
+            "ALUMINIUM": "ALUMINUM",
+            "ALCOHOL, ETHYL": "ETHANOL",
+            "ETHYL ALCOHOL": "ETHANOL",
+            "ADRENALINE": "EPINEPHRINE",
+            "FRUSEMIDE": "FUROSEMIDE",
+            "LIGNOCAINE": "LIDOCAINE",
+            "LEVAMLODIPINE": "AMLODIPINE",  # Levamlodipine is the S-enantiomer of amlodipine
+        }
+        for k, v in essential_synonyms.items():
+            if k not in self.generic_synonyms:
+                self.generic_synonyms[k] = v
         
         # Add multi-word generics from synonyms
         for canonical in self.generic_synonyms.values():
@@ -840,7 +857,6 @@ class UnifiedTagger:
         generic_tokens = list(categories.get(CATEGORY_GENERIC, {}).keys())
         
         # Check for multi-word generics that might have been split
-        # Reconstruct potential multi-word generics from consecutive tokens
         text_upper = text.upper()
         for mwg in self.multiword_generics:
             if mwg in text_upper and mwg not in generic_tokens:
@@ -851,13 +867,28 @@ class UnifiedTagger:
             if psc in text_upper and psc not in generic_tokens:
                 generic_tokens.append(psc)
         
+        # Handle combination drugs with "+" separator
+        if "+" in text_upper:
+            parts = text_upper.split("+")
+            for part in parts:
+                part = part.strip()
+                words = []
+                for word in part.split():
+                    if word and not any(c.isdigit() for c in word) and word not in _UNIT_TOKENS:
+                        words.append(word)
+                    else:
+                        break
+                if words:
+                    combo_part = " ".join(words)
+                    if combo_part and combo_part not in generic_tokens:
+                        generic_tokens.append(combo_part)
+        
         # Try brand→generic swap
         brand_matches = self._find_brand_matches(tokens)
         if brand_matches:
             for bm in brand_matches:
                 generic_name = bm.get("generic_name")
                 if generic_name:
-                    # Add the generic to our tokens
                     generic_tokens.append(generic_name.upper())
         
         # Strip salts from generics (but not pure salt compounds)
@@ -1017,6 +1048,25 @@ class UnifiedTagger:
                 if psc in text_upper and psc not in generic_tokens:
                     generic_tokens.append(psc)
             
+            # Handle combination drugs with "+" separator
+            # e.g., "ALUMINUM HYDROXIDE + MAGNESIUM HYDROXIDE"
+            if "+" in text_upper:
+                parts = text_upper.split("+")
+                for part in parts:
+                    # Extract the drug name (before dose info)
+                    part = part.strip()
+                    # Remove dose info (numbers, mg, etc.)
+                    words = []
+                    for word in part.split():
+                        if word and not any(c.isdigit() for c in word) and word not in _UNIT_TOKENS:
+                            words.append(word)
+                        else:
+                            break  # Stop at first dose-like token
+                    if words:
+                        combo_part = " ".join(words)
+                        if combo_part and combo_part not in generic_tokens:
+                            generic_tokens.append(combo_part)
+            
             all_tokens.append(tokens)
             all_generic_tokens.append(generic_tokens)
         
@@ -1033,22 +1083,59 @@ class UnifiedTagger:
                 unique_generics.add(self._apply_synonyms(g))
         
         # Batch lookup all generics at once
+        # IMPORTANT: Use EXACT match first, only use partial match as fallback
         generic_cache = {}
         if unique_generics and self.con:
             for token in unique_generics:
                 if token in generic_cache:
                     continue
-                query = """
+                
+                # First try EXACT match (highest priority)
+                query_exact = """
                     SELECT DISTINCT generic_name, drugbank_id, atc_code, source
                     FROM generics
                     WHERE UPPER(generic_name) = ?
-                       OR UPPER(generic_name) LIKE ?
-                    LIMIT 10
                 """
                 try:
-                    df_result = self.con.execute(query, [token, f"%{token}%"]).fetchdf()
-                    generic_cache[token] = df_result.to_dict("records")
+                    df_result = self.con.execute(query_exact, [token]).fetchdf()
+                    if len(df_result) > 0:
+                        generic_cache[token] = df_result.to_dict("records")
+                        continue
                 except Exception:
+                    pass
+                
+                # Then try prefix match (e.g., AMLODIPINE matches "AMLODIPINE AND...")
+                query_prefix = """
+                    SELECT DISTINCT generic_name, drugbank_id, atc_code, source
+                    FROM generics
+                    WHERE UPPER(generic_name) LIKE ?
+                    ORDER BY LENGTH(generic_name) ASC
+                    LIMIT 5
+                """
+                try:
+                    df_result = self.con.execute(query_prefix, [f"{token} %"]).fetchdf()
+                    if len(df_result) > 0:
+                        # Only use if the token is the FIRST word
+                        generic_cache[token] = df_result.to_dict("records")
+                        continue
+                except Exception:
+                    pass
+                
+                # Finally try contains match (lowest priority, only for multi-word)
+                if " " in token:
+                    query_contains = """
+                        SELECT DISTINCT generic_name, drugbank_id, atc_code, source
+                        FROM generics
+                        WHERE UPPER(generic_name) LIKE ?
+                        ORDER BY LENGTH(generic_name) ASC
+                        LIMIT 3
+                    """
+                    try:
+                        df_result = self.con.execute(query_contains, [f"%{token}%"]).fetchdf()
+                        generic_cache[token] = df_result.to_dict("records")
+                    except Exception:
+                        generic_cache[token] = []
+                else:
                     generic_cache[token] = []
         
         # Now process each text using the cache
@@ -1114,6 +1201,16 @@ class UnifiedTagger:
             candidates = []
             for gm in unique_matches:
                 atc_codes = _as_str_or_empty(gm.get("atc_code")).split("|")
+                
+                # Sort ATCs: prefer single-agent codes (not combos) for single drugs
+                def atc_sort_key(atc):
+                    # Single-agent ATCs should come first
+                    is_combo = _is_combination_atc(atc)
+                    # Also prefer shorter codes (more specific)
+                    return (is_combo, len(atc), atc)
+                
+                atc_codes = sorted([a for a in atc_codes if a], key=atc_sort_key)
+                
                 for atc in atc_codes:
                     if atc:
                         candidates.append({
@@ -1145,9 +1242,37 @@ class UnifiedTagger:
             best_candidate = None
             is_single_drug = len(set(stripped_generics)) == 1
             
+            # Normalize input generics for comparison
+            input_generics_normalized = set()
+            for sg in stripped_generics:
+                input_generics_normalized.add(self._apply_synonyms(sg.upper()))
+            
             for cand in candidates:
                 primary, secondary, reason = self._score_candidate(tokens, categories, cand)
                 total_score = primary + secondary * 0.1
+                
+                # BONUS for exact generic name match
+                cand_generic = _as_str_or_empty(cand.get("generic_name")).upper()
+                cand_generic_normalized = self._apply_synonyms(cand_generic)
+                
+                # Check if candidate generic exactly matches any input generic
+                exact_match = False
+                for ig in input_generics_normalized:
+                    if ig == cand_generic_normalized or ig == cand_generic:
+                        exact_match = True
+                        total_score += 10  # Big bonus for exact match
+                        break
+                
+                # PENALTY for candidate generic that doesn't contain input
+                if not exact_match:
+                    # Check if input is at least contained in candidate
+                    partial_match = False
+                    for ig in input_generics_normalized:
+                        if ig in cand_generic or cand_generic in ig:
+                            partial_match = True
+                            break
+                    if not partial_match:
+                        total_score -= 20  # Big penalty for no overlap
                 
                 # ATC preference
                 is_combo_atc = _is_combination_atc(_as_str_or_empty(cand.get("atc_code")))
