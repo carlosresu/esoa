@@ -221,37 +221,31 @@ def _concatenate_csv(parts: Sequence[Path], dest: Path) -> Path:
 
 
 def _resolve_esoa_source(inputs_dir: Path, esoa_hint: Optional[str]) -> Path:
-    """Resolve the eSOA CSV path, concatenating esoa_pt_* files when present."""
-    search_dirs: List[Path] = []
+    """Resolve the eSOA CSV path, concatenating esoa_pt_* files from raw/ when present."""
+    raw_dir = PROJECT_ROOT / "raw" / "drugs"
+    
+    # If explicit hint provided, use it
     if esoa_hint:
         hint = Path(esoa_hint)
         if not hint.is_absolute():
             hint = (PROJECT_DIR / hint).resolve()
-        if hint.is_dir():
-            search_dirs.append(hint)
-        elif hint.is_file():
+        if hint.is_file():
             return hint
-        else:
-            candidate = inputs_dir / hint.name
-            if candidate.is_file():
-                return candidate
-            raise FileNotFoundError(f"Unable to resolve eSOA input at {hint}")
-    search_dirs.append(inputs_dir)
-    seen: set[Path] = set()
-    for directory in search_dirs:
-        directory = directory.resolve()
-        if directory in seen:
-            continue
-        seen.add(directory)
-        part_files = sorted(directory.glob("esoa_pt_*.csv"), key=_natural_esoa_part_order)
-        if part_files:
-            return _concatenate_csv(part_files, directory / "esoa_combined.csv")
-        for name in ("esoa_combined.csv", "esoa.csv", "esoa_prepared.csv"):
-            candidate = directory / name
-            if candidate.is_file():
-                return candidate
+        raise FileNotFoundError(f"Unable to resolve eSOA input at {hint}")
+    
+    # Check for esoa_pt_*.csv in raw/drugs/ and combine them
+    part_files = sorted(raw_dir.glob("esoa_pt_*.csv"), key=_natural_esoa_part_order)
+    if part_files:
+        return _concatenate_csv(part_files, inputs_dir / "esoa_combined.csv")
+    
+    # Fall back to existing combined file in inputs/
+    for name in ("esoa_combined.csv", "esoa.csv", "esoa_prepared.csv"):
+        candidate = inputs_dir / name
+        if candidate.is_file():
+            return candidate
+    
     raise FileNotFoundError(
-        f"No eSOA CSV found. Provide esoa_pt_*.csv files or esoa.csv under {inputs_dir} (or use --esoa)."
+        f"No eSOA CSV found. Provide esoa_pt_*.csv files in raw/drugs/ or esoa_combined.csv in {inputs_dir}."
     )
 
 
