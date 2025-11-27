@@ -401,6 +401,52 @@ FORM_CANON = {
     "INJECTABLE": "INJECTION",
     "SYR": "SYRUP",
     "SYRUP": "SYRUP",
+    # Topical forms
+    "LOTION": "LOTION",
+    "CREAM": "CREAM",
+    "GEL": "GEL",
+    "OINTMENT": "OINTMENT",
+    "PASTE": "PASTE",
+    "FOAM": "FOAM",
+    "EMULSION": "EMULSION",
+    "SHAMPOO": "SHAMPOO",
+    # Liquid forms
+    "SOLUTION": "SOLUTION",
+    "SOLN": "SOLUTION",
+    "SOL": "SOLUTION",
+    "SUSPENSION": "SUSPENSION",
+    "SUSP": "SUSPENSION",
+    "DROPS": "DROPS",
+    "DROP": "DROPS",
+    "GTTS": "DROPS",
+    # Powder/granule forms
+    "POWDER": "POWDER",
+    "PWDR": "POWDER",
+    "GRANULES": "GRANULES",
+    "GRANULE": "GRANULES",
+    "GRAN": "GRANULES",
+    "SACHET": "SACHET",
+    "SACHETS": "SACHET",
+    # Inhalation forms
+    "INHALER": "INHALER",
+    "INH": "INHALER",
+    "NEBULE": "NEBULE",
+    "NEBULES": "NEBULE",
+    "NEB": "NEBULE",
+    "DPI": "DPI",
+    "MDI": "MDI",
+    "AEROSOL": "AEROSOL",
+    "SPRAY": "SPRAY",
+    "DISPENSER": "DISPENSER",
+    # Other forms
+    "SUPPOSITORY": "SUPPOSITORY",
+    "SUPP": "SUPPOSITORY",
+    "PATCH": "PATCH",
+    "FILM": "FILM",
+    "AMPULE": "AMPULE",
+    "AMPUL": "AMPULE",
+    "AMP": "AMPULE",
+    "AMPOULE": "AMPULE",
 }
 
 ROUTE_CANON = {
@@ -1113,6 +1159,8 @@ def build_drugbank_reference(df: pd.DataFrame) -> list[dict]:
         for col in ("lexeme", "generic_components_key", "canonical_generic_name"):
             primary_tokens.extend(split_with_parentheses(row.get(col)))
         primary_tokens = _normalize_tokens(primary_tokens, drop_stopwords=True)
+        # Deduplicate tokens to prevent excessive mismatch penalties
+        primary_tokens = list(dict.fromkeys(primary_tokens))
 
         secondary_tokens: List[str] = []
         for col in ("route_norm", "form_norm", "salt_names", "dose_norm"):
@@ -1581,8 +1629,21 @@ def _score_annex_row(
                 )
             return matched_rows[0], tie_rows, unresolved_rows
 
-    # No clear winner - still unresolved
-    matched_rows.append(_empty_match_record(annex_row))
+    # No clear winner by ATC preference - pick the best candidate anyway
+    # Sort all finalists by: source (prefer PNF), secondary score, then reference sort key
+    all_sorted = sorted(
+        sorted_finalists,
+        key=lambda r: (
+            0 if r.get("source") == "pnf" else 1,
+            -(r.get("secondary_score") or 0),
+            _reference_sort_key(r),
+        ),
+    )
+    winner = all_sorted[0]
+    matched_rows.append(
+        _build_match_record(annex_row, winner, best_primary, best_secondary, generic_to_drugbank)
+    )
+    # Record all candidates as unresolved for review
     for rec in sorted_finalists:
         unresolved_rows.append(
             _build_match_record(
