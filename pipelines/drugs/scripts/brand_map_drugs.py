@@ -46,25 +46,79 @@ def _latest_brandmap_path(inputs_dir: str) -> Optional[str]:
     return candidates[0]
 
 
-def load_latest_brandmap(inputs_dir: str) -> Optional[pd.DataFrame]:
-    """Load the most recent brand map CSV into a dataframe with expected columns present."""
-    path = _latest_brandmap_path(inputs_dir)
-    if not path or not os.path.exists(path):
+def _drugbank_brands_path(inputs_dir: str) -> Optional[str]:
+    """Return the DrugBank brands master file path if it exists."""
+    path = os.path.join(inputs_dir, "drugbank_brands_master.csv")
+    if os.path.exists(path):
+        return path
+    return None
+
+
+def load_drugbank_brands(inputs_dir: str) -> Optional[pd.DataFrame]:
+    """Load DrugBank brands master CSV and normalize to brand map format."""
+    path = _drugbank_brands_path(inputs_dir)
+    if not path:
         return None
     try:
         df = pd.read_csv(path)
-        for c in ["brand_name", "generic_name", "dosage_form", "route", "dosage_strength"]:
-            if c not in df.columns:
-                df[c] = ""
-        if "generic_name" in df.columns:
-            split_vals = df["generic_name"].fillna("").astype(str).map(extract_base_and_salts)
-            df["generic_name"] = [base or original.strip().upper() for (base, _), original in zip(split_vals, df["generic_name"].fillna("").astype(str))]
-            df["salt_form"] = [serialize_salt_list(salts) for _, salts in split_vals]
-        else:
-            df["salt_form"] = ""
-        return df
+        # Map DrugBank columns to expected brand map columns
+        result = pd.DataFrame({
+            "brand_name": df["brand_name"].fillna("").astype(str),
+            "generic_name": df["canonical_generic_name"].fillna("").astype(str),
+            "dosage_form": df["dosage_form"].fillna("").astype(str) if "dosage_form" in df.columns else "",
+            "route": df["route"].fillna("").astype(str) if "route" in df.columns else "",
+            "dosage_strength": df["strength"].fillna("").astype(str) if "strength" in df.columns else "",
+            "source": "drugbank",
+        })
+        # Extract salt forms from generic names
+        split_vals = result["generic_name"].map(extract_base_and_salts)
+        result["generic_name"] = [base or original.strip().upper() for (base, _), original in zip(split_vals, result["generic_name"])]
+        result["salt_form"] = [serialize_salt_list(salts) for _, salts in split_vals]
+        return result
     except Exception:
         return None
+
+
+def load_latest_brandmap(inputs_dir: str) -> Optional[pd.DataFrame]:
+    """Load brand maps from FDA and DrugBank, combining them into a single dataframe."""
+    dfs = []
+    
+    # Load FDA brands
+    fda_path = _latest_brandmap_path(inputs_dir)
+    if fda_path and os.path.exists(fda_path):
+        try:
+            fda_df = pd.read_csv(fda_path)
+            for c in ["brand_name", "generic_name", "dosage_form", "route", "dosage_strength"]:
+                if c not in fda_df.columns:
+                    fda_df[c] = ""
+            if "generic_name" in fda_df.columns:
+                split_vals = fda_df["generic_name"].fillna("").astype(str).map(extract_base_and_salts)
+                fda_df["generic_name"] = [base or original.strip().upper() for (base, _), original in zip(split_vals, fda_df["generic_name"].fillna("").astype(str))]
+                fda_df["salt_form"] = [serialize_salt_list(salts) for _, salts in split_vals]
+            else:
+                fda_df["salt_form"] = ""
+            fda_df["source"] = "fda"
+            dfs.append(fda_df)
+        except Exception:
+            pass
+    
+    # Load DrugBank brands
+    drugbank_df = load_drugbank_brands(inputs_dir)
+    if drugbank_df is not None and len(drugbank_df) > 0:
+        dfs.append(drugbank_df)
+    
+    if not dfs:
+        return None
+    
+    # Combine all brand sources
+    combined = pd.concat(dfs, ignore_index=True)
+    
+    # Ensure all expected columns exist
+    for c in ["brand_name", "generic_name", "dosage_form", "route", "dosage_strength", "salt_form", "source"]:
+        if c not in combined.columns:
+            combined[c] = ""
+    
+    return combined
 
 
 def build_brand_automata(brand_df: pd.DataFrame) -> Tuple[ahocorasick.Automaton, ahocorasick.Automaton, Dict[str, List[BrandMatch]]]:
