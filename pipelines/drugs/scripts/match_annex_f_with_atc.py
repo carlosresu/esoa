@@ -518,12 +518,57 @@ DOSE_MISMATCH_PENALTY = 20
 REQUIRE_DOSE_MATCH = True
 
 # Common spelling/lexical variants we want to normalize across Annex F and references.
+# Maps alternative names to canonical DrugBank names for consistent matching.
 GENERIC_SYNONYMS = {
+    # Paracetamol/Acetaminophen (most common synonym issue)
+    "PARACETAMOL": "ACETAMINOPHEN",
+    "PANADOL": "ACETAMINOPHEN",
+    
+    # Spelling variants
     "BECLOMETASONE": "BECLOMETHASONE",
     "AMIDOTRIZOATE": "DIATRIZOATE",
     "DIATRIZOIC": "DIATRIZOATE",
     "DIATRIZOIC ACID": "DIATRIZOATE",
     "DIATRIZOIC ACID DIHYDRATE": "DIATRIZOATE",
+    "SULPHATE": "SULFATE",
+    "SULPHASALAZINE": "SULFASALAZINE",
+    "SULPHAMETHOXAZOLE": "SULFAMETHOXAZOLE",
+    "SULPHADIAZINE": "SULFADIAZINE",
+    "ALUMINIUM": "ALUMINUM",
+    
+    # Regional name differences
+    "ADRENALINE": "EPINEPHRINE",
+    "NORADRENALINE": "NOREPINEPHRINE",
+    "FRUSEMIDE": "FUROSEMIDE",
+    "LIGNOCAINE": "LIDOCAINE",
+    "GLYCERYL TRINITRATE": "NITROGLYCERIN",
+    "GTN": "NITROGLYCERIN",
+    "SALBUTAMOL": "ALBUTEROL",
+    "CICLOSPORIN": "CYCLOSPORINE",
+    "CICLOSPORINE": "CYCLOSPORINE",
+    "RIFAMPICIN": "RIFAMPIN",
+    "PHENOBARBITONE": "PHENOBARBITAL",
+    "CHLORPHENIRAMINE": "CHLORPHENAMINE",
+    "PETHIDINE": "MEPERIDINE",
+    
+    # Vitamin synonyms
+    "VITAMIN B1": "THIAMINE",
+    "VITAMIN B2": "RIBOFLAVIN",
+    "VITAMIN B3": "NIACIN",
+    "VITAMIN B6": "PYRIDOXINE",
+    "VITAMIN B12": "CYANOCOBALAMIN",
+    "VITAMIN C": "ASCORBIC ACID",
+    "VITAMIN D": "CHOLECALCIFEROL",
+    "VITAMIN D3": "CHOLECALCIFEROL",
+    "VITAMIN E": "TOCOPHEROL",
+    "VITAMIN K": "PHYTONADIONE",
+    "VITAMIN K1": "PHYTONADIONE",
+    "VIT D3": "CHOLECALCIFEROL",
+    "VIT D": "CHOLECALCIFEROL",
+    "VIT C": "ASCORBIC ACID",
+    "VIT B1": "THIAMINE",
+    "VIT B6": "PYRIDOXINE",
+    "VIT B12": "CYANOCOBALAMIN",
 }
 
 # Compound names that should be treated as generics even though they contain salt tokens.

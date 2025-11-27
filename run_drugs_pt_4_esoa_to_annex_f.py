@@ -141,6 +141,26 @@ def _parse_list(val) -> list[str]:
     return [x.strip().lower() for x in s.split("|") if x.strip()]
 
 
+# Generic name synonyms for normalization
+GENERIC_SYNONYMS = {
+    "paracetamol": "acetaminophen",
+    "adrenaline": "epinephrine",
+    "noradrenaline": "norepinephrine",
+    "frusemide": "furosemide",
+    "lignocaine": "lidocaine",
+    "salbutamol": "albuterol",
+    "ciclosporin": "cyclosporine",
+    "ciclosporine": "cyclosporine",
+    "rifampicin": "rifampin",
+    "phenobarbitone": "phenobarbital",
+    "chlorpheniramine": "chlorphenamine",
+    "pethidine": "meperidine",
+    "beclometasone": "beclomethasone",
+    "aluminium": "aluminum",
+    "sulphate": "sulfate",
+}
+
+
 def _normalize_generics(generics: list[str]) -> set[str]:
     """Normalize generic names for comparison."""
     normalized = set()
@@ -157,6 +177,9 @@ def _normalize_generics(generics: list[str]) -> set[str]:
                        " maleate", " fumarate", " tartrate", " citrate", " phosphate", " chloride"):
             if g.endswith(suffix):
                 g = g[:-len(suffix)].strip()
+        
+        # Apply synonym normalization
+        g = GENERIC_SYNONYMS.get(g, g)
         
         # Handle multi-word generics (e.g., "tranexamic acid" -> "tranexamic acid")
         # Don't split these, keep as single token
@@ -184,6 +207,9 @@ def _normalize_annex_generics(generic_str: str) -> set[str]:
                        " maleate", " fumarate", " tartrate", " citrate", " phosphate", " chloride"):
             if part.endswith(suffix):
                 part = part[:-len(suffix)].strip()
+        
+        # Apply synonym normalization
+        part = GENERIC_SYNONYMS.get(part, part)
         
         if part:
             normalized.add(part)
