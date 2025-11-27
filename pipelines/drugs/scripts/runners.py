@@ -1,0 +1,260 @@
+"""
+Pipeline runner functions for drug tagging.
+
+These functions are called by the run_* scripts in the project root.
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from typing import Optional
+
+import pandas as pd
+
+from .io_utils import reorder_columns_after, write_csv_and_parquet
+from .spinner import run_with_spinner
+from .tagging import UnifiedTagger
+
+
+# Default paths
+PROJECT_DIR = Path(__file__).resolve().parents[3]
+INPUTS_DIR = PROJECT_DIR / "inputs" / "drugs"
+OUTPUTS_DIR = PROJECT_DIR / "outputs" / "drugs"
+
+PIPELINE_INPUTS_DIR = Path(os.environ.get("PIPELINE_INPUTS_DIR", INPUTS_DIR))
+PIPELINE_OUTPUTS_DIR = Path(os.environ.get("PIPELINE_OUTPUTS_DIR", OUTPUTS_DIR))
+
+
+def run_annex_f_tagging(
+    annex_path: Optional[Path] = None,
+    output_path: Optional[Path] = None,
+    verbose: bool = True,
+) -> dict:
+    """
+    Run Annex F tagging (Part 2).
+    
+    Returns dict with results summary.
+    """
+    if annex_path is None:
+        annex_path = PIPELINE_INPUTS_DIR / "annex_f.csv"
+    if output_path is None:
+        output_path = PIPELINE_OUTPUTS_DIR / "annex_f_with_atc.csv"
+    
+    if verbose:
+        print("=" * 60)
+        print("Part 2: Match Annex F with ATC/DrugBank IDs")
+        print("=" * 60)
+    
+    # Load Annex F
+    if not annex_path.exists():
+        raise FileNotFoundError(f"Annex F not found: {annex_path}")
+    
+    annex_df = run_with_spinner("Load Annex F", lambda: pd.read_csv(annex_path))
+    
+    # Initialize and load tagger
+    tagger = run_with_spinner(
+        "Initialize tagger",
+        lambda: UnifiedTagger(
+            outputs_dir=PIPELINE_OUTPUTS_DIR,
+            inputs_dir=PIPELINE_INPUTS_DIR,
+            verbose=False,
+        )
+    )
+    run_with_spinner("Load reference data", lambda: tagger.load())
+    
+    # Tag descriptions
+    if verbose:
+        print(f"\nTagging {len(annex_df):,} Annex F entries...")
+    
+    results_df = run_with_spinner(
+        "Tag descriptions",
+        lambda: tagger.tag_descriptions(
+            annex_df,
+            text_column="Drug Description",
+            id_column="Drug Code",
+        )
+    )
+    
+    # Merge results
+    annex_df["row_idx"] = range(len(annex_df))
+    merged = annex_df.merge(
+        results_df[["row_idx", "atc_code", "drugbank_id", "generic_name", "reference_text", "match_score", "match_reason", "sources"]],
+        on="row_idx",
+        how="left",
+    ).drop(columns=["row_idx"])
+    
+    # Rename columns
+    merged = merged.rename(columns={
+        "generic_name": "matched_generic_name",
+        "reference_text": "matched_reference_text",
+        "sources": "matched_source",
+    })
+    
+    # Reorder columns
+    merged = reorder_columns_after(merged, "Drug Description", "matched_reference_text")
+    
+    # Write outputs
+    PIPELINE_OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+    run_with_spinner("Write outputs", lambda: write_csv_and_parquet(merged, output_path))
+    
+    tagger.close()
+    
+    # Summary
+    total = len(merged)
+    matched_atc = merged["atc_code"].notna().sum()
+    matched_drugbank = merged["drugbank_id"].notna().sum()
+    
+    results = {
+        "total": total,
+        "matched_atc": matched_atc,
+        "matched_atc_pct": 100 * matched_atc / total if total else 0,
+        "matched_drugbank": matched_drugbank,
+        "matched_drugbank_pct": 100 * matched_drugbank / total if total else 0,
+        "output_path": output_path,
+    }
+    
+    if verbose:
+        print(f"\nAnnex F tagging complete: {output_path}")
+        print(f"  Total: {total:,}")
+        print(f"  Has ATC: {matched_atc:,} ({results['matched_atc_pct']:.1f}%)")
+        print(f"  Has DrugBank ID: {matched_drugbank:,} ({results['matched_drugbank_pct']:.1f}%)")
+        
+        print("\nMatch reasons:")
+        for reason, count in merged["match_reason"].value_counts().items():
+            print(f"  {reason}: {count:,} ({100*count/total:.1f}%)")
+    
+    return results
+
+
+def run_esoa_tagging(
+    esoa_path: Optional[Path] = None,
+    output_path: Optional[Path] = None,
+    verbose: bool = True,
+) -> dict:
+    """
+    Run ESOA tagging (Part 3).
+    
+    Returns dict with results summary.
+    """
+    if esoa_path is None:
+        esoa_path = PIPELINE_INPUTS_DIR / "esoa_combined.csv"
+        if not esoa_path.exists():
+            esoa_path = PIPELINE_INPUTS_DIR / "esoa_prepared.csv"
+    if output_path is None:
+        output_path = PIPELINE_OUTPUTS_DIR / "esoa_with_atc.csv"
+    
+    if verbose:
+        print("=" * 60)
+        print("Part 3: Match ESOA with ATC/DrugBank IDs")
+        print("=" * 60)
+    
+    # Load ESOA
+    if not esoa_path.exists():
+        raise FileNotFoundError(f"ESOA not found: {esoa_path}")
+    
+    esoa_df = run_with_spinner("Load ESOA", lambda: pd.read_csv(esoa_path))
+    
+    # Determine text column
+    text_column = None
+    for col in ["raw_text", "ITEM_DESCRIPTION", "DESCRIPTION", "Drug Description", "description"]:
+        if col in esoa_df.columns:
+            text_column = col
+            break
+    
+    if not text_column:
+        raise ValueError(f"No text column found. Columns: {list(esoa_df.columns)}")
+    
+    if verbose:
+        print(f"  Using text column: {text_column}")
+    
+    # Initialize and load tagger
+    tagger = run_with_spinner(
+        "Initialize tagger",
+        lambda: UnifiedTagger(
+            outputs_dir=PIPELINE_OUTPUTS_DIR,
+            inputs_dir=PIPELINE_INPUTS_DIR,
+            verbose=False,
+        )
+    )
+    run_with_spinner("Load reference data", lambda: tagger.load())
+    
+    # Tag in batches
+    total = len(esoa_df)
+    if verbose:
+        print(f"\nTagging {total:,} ESOA entries...")
+    
+    batch_size = 5000
+    results_list = []
+    
+    for start in range(0, total, batch_size):
+        end = min(start + batch_size, total)
+        batch_df = esoa_df.iloc[start:end].copy()
+        batch_df["_batch_idx"] = range(start, end)
+        
+        batch_results = tagger.tag_descriptions(
+            batch_df,
+            text_column=text_column,
+            id_column="_batch_idx",
+        )
+        batch_results = batch_results.rename(columns={"id": "_batch_idx"})
+        results_list.append(batch_results)
+        
+        if verbose:
+            pct = 100 * end / total
+            print(f"  Processed {end:,}/{total:,} ({pct:.1f}%)")
+    
+    results_df = pd.concat(results_list, ignore_index=True)
+    
+    # Merge results
+    esoa_df["_batch_idx"] = range(len(esoa_df))
+    merged = esoa_df.merge(
+        results_df[["_batch_idx", "atc_code", "drugbank_id", "generic_name", "reference_text", "match_score", "match_reason", "sources"]],
+        on="_batch_idx",
+        how="left",
+    ).drop(columns=["_batch_idx"])
+    
+    # Rename columns
+    merged = merged.rename(columns={
+        "atc_code": "atc_code_final",
+        "drugbank_id": "drugbank_id_final",
+        "generic_name": "generic_final",
+        "reference_text": "matched_reference_text",
+        "sources": "reference_source",
+    })
+    
+    # Reorder columns
+    merged = reorder_columns_after(merged, text_column, "matched_reference_text")
+    
+    # Write outputs
+    PIPELINE_OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+    run_with_spinner("Write outputs", lambda: write_csv_and_parquet(merged, output_path))
+    
+    tagger.close()
+    
+    # Summary
+    matched_atc = merged["atc_code_final"].notna() & (merged["atc_code_final"] != "")
+    matched_atc_count = matched_atc.sum()
+    matched_drugbank = merged["drugbank_id_final"].notna() & (merged["drugbank_id_final"] != "")
+    matched_drugbank_count = matched_drugbank.sum()
+    
+    results = {
+        "total": total,
+        "matched_atc": matched_atc_count,
+        "matched_atc_pct": 100 * matched_atc_count / total if total else 0,
+        "matched_drugbank": matched_drugbank_count,
+        "matched_drugbank_pct": 100 * matched_drugbank_count / total if total else 0,
+        "output_path": output_path,
+    }
+    
+    if verbose:
+        print(f"\nESOA tagging complete: {output_path}")
+        print(f"  Total: {total:,}")
+        print(f"  Has ATC: {matched_atc_count:,} ({results['matched_atc_pct']:.1f}%)")
+        print(f"  Has DrugBank ID: {matched_drugbank_count:,} ({results['matched_drugbank_pct']:.1f}%)")
+        
+        print("\nMatch reasons:")
+        for reason, count in merged["match_reason"].value_counts().head(10).items():
+            print(f"  {reason}: {count:,} ({100*count/total:.1f}%)")
+    
+    return results
