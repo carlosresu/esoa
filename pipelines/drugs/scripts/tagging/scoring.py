@@ -99,6 +99,25 @@ def forms_are_equivalent(form1: str, form2: str) -> bool:
     return f2 in equiv1
 
 
+def parse_generic_with_subtype(generic: str) -> Tuple[str, Optional[str]]:
+    """
+    Parse a generic name that may have a subtype after a comma.
+    
+    Examples:
+    - "VITAMIN INTRAVENOUS, FAT-SOLUBLE" -> ("VITAMIN INTRAVENOUS", "FAT-SOLUBLE")
+    - "AMINO ACIDS, CRYSTALLINE STANDARD" -> ("AMINO ACIDS", "CRYSTALLINE STANDARD")
+    - "PARACETAMOL" -> ("PARACETAMOL", None)
+    
+    Returns (base_name, subtype or None).
+    """
+    if "," in generic and " + " not in generic and " AND " not in generic:
+        parts = generic.split(",", 1)
+        base = parts[0].strip()
+        subtype = parts[1].strip() if len(parts) > 1 else None
+        return base, subtype
+    return generic, None
+
+
 def generics_match(
     input_generics: Set[str],
     candidate_generic: str,
@@ -113,6 +132,8 @@ def generics_match(
     - Synonyms are normalized to canonical form
     - Salt forms are stripped for comparison
     - For combinations, all components must match
+    - Comma separates base name from subtype (e.g., "VITAMIN, FAT-SOLUBLE")
+      - First filter by base name, then by subtype
     """
     if not input_generics or not candidate_generic:
         return False, "missing_generic"
@@ -120,13 +141,17 @@ def generics_match(
     cand_upper = candidate_generic.upper()
     cand_normalized = apply_synonyms_fn(cand_upper)
     
-    # Check if candidate is a combination
+    # Parse candidate for base name and subtype
+    cand_base, cand_subtype = parse_generic_with_subtype(cand_upper)
+    cand_base_normalized = apply_synonyms_fn(cand_base)
+    
+    # Check if candidate is a combination (using + or AND, not comma)
     cand_is_combo = " + " in cand_upper or " AND " in cand_upper
     
     if cand_is_combo:
-        # Split candidate into parts
+        # Split candidate into parts (don't split on comma for combos)
         cand_parts = set(
-            p.strip() for p in re.split(r'\s*\+\s*|\s+AND\s+|,\s*', cand_upper) 
+            p.strip() for p in re.split(r'\s*\+\s*|\s+AND\s+', cand_upper) 
             if p.strip()
         )
         cand_parts_normalized = {apply_synonyms_fn(p) for p in cand_parts}
@@ -151,16 +176,39 @@ def generics_match(
         for inp in input_generics:
             inp_normalized = apply_synonyms_fn(inp)
             
-            # Exact match
+            # Parse input for base name and subtype
+            inp_base, inp_subtype = parse_generic_with_subtype(inp)
+            inp_base_normalized = apply_synonyms_fn(inp_base)
+            
+            # Step 1: Base name must match
+            base_matches = (
+                inp_base_normalized == cand_base_normalized or
+                inp_base_normalized == cand_base or
+                inp_base_normalized in cand_base_normalized or
+                cand_base_normalized in inp_base_normalized or
+                inp_base in cand_base or
+                cand_base in inp_base
+            )
+            
+            if not base_matches:
+                continue
+            
+            # Step 2: If input has subtype, candidate must also have matching subtype
+            if inp_subtype:
+                if not cand_subtype:
+                    # Input has subtype but candidate doesn't - partial match
+                    continue
+                # Check if subtypes match
+                if inp_subtype.upper() in cand_subtype.upper() or cand_subtype.upper() in inp_subtype.upper():
+                    return True, "exact_with_subtype"
+                else:
+                    continue  # Subtypes don't match
+            
+            # No subtype in input, or subtypes match
             if inp_normalized == cand_normalized or inp_normalized == cand_upper:
                 return True, "exact"
             
-            # Substring match (for multi-word generics)
-            if inp_normalized in cand_normalized or cand_normalized in inp_normalized:
-                return True, "substring"
-            
-            if inp in cand_upper or cand_upper in inp:
-                return True, "substring"
+            return True, "substring"
         
         return False, "no_match"
 
@@ -249,13 +297,14 @@ def select_best_candidate(
         cand_route = str(cand.get("route", "")).upper()
         cand_source = str(cand.get("source", "")).lower()
         
-        # Priority 1: Match type (exact > substring > combo)
+        # Priority 1: Match type (exact_with_subtype > exact > combo > substring)
         match_priority = {
-            "exact": 0,
-            "combo_match": 1,
-            "substring": 2,
-            "combo_partial": 3,
-        }.get(match_reason, 4)
+            "exact_with_subtype": 0,  # Best: base + subtype both match
+            "exact": 1,
+            "combo_match": 2,
+            "substring": 3,
+            "combo_partial": 4,
+        }.get(match_reason, 5)
         
         # Priority 2: ATC type preference
         is_combo_atc = is_combination_atc(cand_atc)
