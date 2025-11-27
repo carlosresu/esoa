@@ -251,15 +251,17 @@ def _infer_route(form: str) -> str:
     return FORM_TO_ROUTE.get(form.lower().strip(), "")
 
 
-def build_annex_f_index(annex_df: pd.DataFrame) -> tuple[dict, dict]:
-    """Build ATC → Annex F and DrugBank ID → Annex F lookup indexes."""
+def build_annex_f_index(annex_df: pd.DataFrame) -> tuple[dict, dict, dict]:
+    """Build ATC → Annex F, DrugBank ID → Annex F, and Component IDs → Annex F lookup indexes."""
     atc_to_annex = defaultdict(list)
     drugbank_to_annex = defaultdict(list)
+    component_to_annex = defaultdict(list)
 
     for _, row in annex_df.iterrows():
         row_dict = row.to_dict()
         atc = _safe_str(row.get("atc_code"))
         db_id = _safe_str(row.get("drugbank_id"))
+        component_ids = _safe_str(row.get("component_drugbank_ids"))
 
         if atc:
             # Handle pipe-separated ATC codes
@@ -270,16 +272,25 @@ def build_annex_f_index(annex_df: pd.DataFrame) -> tuple[dict, dict]:
 
         if db_id:
             drugbank_to_annex[db_id].append(row_dict)
+        
+        # Index by component DrugBank IDs for mixture matching
+        if component_ids:
+            # component_ids is pipe-separated, e.g., "DB00761|DB09153"
+            for comp_id in component_ids.split("|"):
+                comp_id = comp_id.strip()
+                if comp_id:
+                    component_to_annex[comp_id].append(row_dict)
 
-    return dict(atc_to_annex), dict(drugbank_to_annex)
+    return dict(atc_to_annex), dict(drugbank_to_annex), dict(component_to_annex)
 
 
 def find_annex_f_candidates(
     esoa_row: dict,
     atc_to_annex: dict,
     drugbank_to_annex: dict,
+    component_to_annex: dict | None = None,
 ) -> list[dict]:
-    """Find Annex F candidates for an ESOA row based on ATC/DrugBank ID."""
+    """Find Annex F candidates for an ESOA row based on ATC/DrugBank ID/Component IDs."""
     candidates = []
     seen_drug_codes = set()
 
@@ -304,6 +315,17 @@ def find_annex_f_candidates(
             did = did.strip()
             if did.startswith("DB"):
                 for annex_row in drugbank_to_annex.get(did, []):
+                    drug_code = annex_row.get("Drug Code")
+                    if drug_code and drug_code not in seen_drug_codes:
+                        seen_drug_codes.add(drug_code)
+                        candidates.append(annex_row)
+    
+    # Also try component DrugBank IDs for combination drugs
+    if component_to_annex:
+        for did in db_ids if db_id else []:
+            did = did.strip()
+            if did.startswith("DB"):
+                for annex_row in component_to_annex.get(did, []):
                     drug_code = annex_row.get("Drug Code")
                     if drug_code and drug_code not in seen_drug_codes:
                         seen_drug_codes.add(drug_code)
@@ -450,6 +472,7 @@ def match_esoa_to_annex_f(
     esoa_df: pd.DataFrame,
     atc_to_annex: dict,
     drugbank_to_annex: dict,
+    component_to_annex: dict | None = None,
 ) -> pd.DataFrame:
     """Match each ESOA row to the best Annex F Drug Code."""
     results = []
@@ -457,8 +480,8 @@ def match_esoa_to_annex_f(
     for idx, esoa_row in esoa_df.iterrows():
         esoa_dict = esoa_row.to_dict()
 
-        # Find candidates via ATC/DrugBank ID
-        candidates = find_annex_f_candidates(esoa_dict, atc_to_annex, drugbank_to_annex)
+        # Find candidates via ATC/DrugBank ID/Component IDs
+        candidates = find_annex_f_candidates(esoa_dict, atc_to_annex, drugbank_to_annex, component_to_annex)
 
         # Score and select best
         best_score = -float("inf")
@@ -526,14 +549,14 @@ def run_part_4(
     annex_df = run_with_spinner("Load Annex F with ATC", lambda: pd.read_csv(annex_atc_path))
 
     # Build index
-    atc_to_annex, drugbank_to_annex = run_with_spinner(
+    atc_to_annex, drugbank_to_annex, component_to_annex = run_with_spinner(
         "Build Annex F index", lambda: build_annex_f_index(annex_df)
     )
 
     # Match
     matched_df = run_with_spinner(
         "Match ESOA to Annex F Drug Codes",
-        lambda: match_esoa_to_annex_f(esoa_df, atc_to_annex, drugbank_to_annex),
+        lambda: match_esoa_to_annex_f(esoa_df, atc_to_annex, drugbank_to_annex, component_to_annex),
     )
 
     # Save output
@@ -551,12 +574,14 @@ def run_part_4(
         "unmatched": total - matched,
         "atc_codes_indexed": len(atc_to_annex),
         "drugbank_ids_indexed": len(drugbank_to_annex),
+        "component_ids_indexed": len(component_to_annex),
         "output_path": out_path,
     }
 
     if standalone:
         print(f"\n  ATC codes indexed: {len(atc_to_annex)}")
         print(f"  DrugBank IDs indexed: {len(drugbank_to_annex)}")
+        print(f"  Component IDs indexed: {len(component_to_annex)}")
         print(f"  Total ESOA rows: {total}")
         print(f"  Matched to Drug Code: {matched} ({results['matched_pct']:.1f}%)")
         print(f"  Unmatched: {total - matched}")

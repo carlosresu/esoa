@@ -1260,6 +1260,7 @@ def _empty_match_record(annex_row: dict) -> dict:
         "secondary_match_count": None,
         "atc_code": None,
         "drugbank_id": None,
+        "component_drugbank_ids": None,
         "primary_matching_tokens": None,
         "secondary_matching_tokens": None,
     }
@@ -1297,8 +1298,8 @@ def _build_match_record(
         db_id = _as_str_or_empty(ref.get("id"))
         if db_id and ref.get("source") in ("drugbank", "drugbank_mixture"):
             return db_id
-        # Also check raw_reference_row for drugbank_id
-        raw_db_id = _as_str_or_empty(raw_ref.get("drugbank_id"))
+        # Also check raw_reference_row for drugbank_id or mixture_drugbank_id
+        raw_db_id = _as_str_or_empty(raw_ref.get("drugbank_id")) or _as_str_or_empty(raw_ref.get("mixture_drugbank_id"))
         if raw_db_id:
             return raw_db_id
         # For PNF matches, try to look up by generic name
@@ -1306,6 +1307,14 @@ def _build_match_record(
             generic_name = _as_str_or_empty(ref.get("name")).upper().strip()
             if generic_name and generic_name in generic_to_drugbank:
                 return generic_to_drugbank[generic_name]
+        return None
+    
+    def _resolve_component_drugbank_ids() -> str | None:
+        # For mixtures, get the component DrugBank IDs
+        if ref.get("source") == "drugbank_mixture":
+            component_ids = _as_str_or_empty(raw_ref.get("component_drugbank_ids"))
+            if component_ids:
+                return component_ids
         return None
 
     return {
@@ -1321,6 +1330,7 @@ def _build_match_record(
         "secondary_match_count": secondary_score,
         "atc_code": _resolve_atc_code(),
         "drugbank_id": _resolve_drugbank_id(),
+        "component_drugbank_ids": _resolve_component_drugbank_ids(),
         "primary_matching_tokens": "|".join(primary_overlap) if primary_overlap else None,
         "secondary_matching_tokens": "|".join(secondary_overlap) if secondary_overlap else None,
     }
@@ -1385,32 +1395,36 @@ def _score_annex_row(
         for mix in mixture_rows:
             mix_id = _as_str_or_empty(mix.get("mixture_drugbank_id")) or _as_str_or_empty(mix.get("mixture_id"))
             mix_name = _as_str_or_empty(mix.get("mixture_name"))
-            attached = False
-            if mix_id and mix_id in drugbank_refs_by_id:
-                candidate_refs.extend(drugbank_refs_by_id[mix_id])
-                attached = True
-            if not attached:
-                primary_tokens = _normalize_tokens(split_with_parentheses(mix_name), drop_stopwords=True)
-                secondary_tokens = _normalize_tokens(split_with_parentheses(mix_name), drop_stopwords=False)
-                candidate_refs.append(
-                    {
-                        "source": "drugbank_mixture",
-                        "id": mix_id or mix.get("mixture_id"),
-                        "name": mix_name,
-                        "lexicon": "|".join(primary_tokens),
-                        "lexicon_secondary": "|".join(secondary_tokens),
-                        "primary_tokens": primary_tokens,
-                        "secondary_tokens": secondary_tokens,
-                        "primary_cat_counts": _categorize_tokens(primary_tokens),
-                        "secondary_cat_counts": _categorize_tokens(secondary_tokens),
-                        "primary_generic_tokens": _extract_generic_tokens(primary_tokens),
-                        "secondary_generic_tokens": _extract_generic_tokens(secondary_tokens),
-                        "primary_high_value_generics": _extract_high_value_generics(primary_tokens),
-                        "secondary_high_value_generics": _extract_high_value_generics(secondary_tokens),
-                        "atc_code": None,
-                        "raw_reference_row": mix,
-                    }
-                )
+            # Always create a mixture reference with proper component tokens
+            # Don't use drugbank_refs_by_id because mixture_drugbank_id often points to a single component
+            # Use ingredient_components for primary tokens (generic names)
+            # and mixture_name for secondary tokens (brand name)
+            ingredient_components = _as_str_or_empty(mix.get("ingredient_components"))
+            # Split by semicolon and normalize each component
+            component_parts = [p.strip() for p in ingredient_components.split(";") if p.strip()]
+            primary_tokens = []
+            for part in component_parts:
+                primary_tokens.extend(_normalize_tokens(split_with_parentheses(part), drop_stopwords=True))
+            secondary_tokens = _normalize_tokens(split_with_parentheses(mix_name), drop_stopwords=False)
+            candidate_refs.append(
+                {
+                    "source": "drugbank_mixture",
+                    "id": mix_id or mix.get("mixture_id"),
+                    "name": ingredient_components or mix_name,
+                    "lexicon": "|".join(primary_tokens),
+                    "lexicon_secondary": "|".join(secondary_tokens),
+                    "primary_tokens": primary_tokens,
+                    "secondary_tokens": secondary_tokens,
+                    "primary_cat_counts": _categorize_tokens(primary_tokens),
+                    "secondary_cat_counts": _categorize_tokens(secondary_tokens),
+                    "primary_generic_tokens": _extract_generic_tokens(primary_tokens),
+                    "secondary_generic_tokens": _extract_generic_tokens(secondary_tokens),
+                    "primary_high_value_generics": _extract_high_value_generics(primary_tokens),
+                    "secondary_high_value_generics": _extract_high_value_generics(secondary_tokens),
+                    "atc_code": None,
+                    "raw_reference_row": mix,
+                }
+            )
 
     best_primary = -10**9
     best_primary_records: list[dict] = []
@@ -1447,6 +1461,14 @@ def _score_annex_row(
             cat_scores.append(weight * match_count - mismatch_penalty)
         generic_missing = max(0, annex_generic_total - generic_overlap)
         primary_score = sum(cat_scores) - (GENERIC_MISS_PENALTY_PRIMARY * generic_missing if annex_generic_total else 0)
+        
+        # Bonus for mixture matches when Annex F has multiple generics
+        # This ensures mixtures are preferred over single-drug matches for combination drugs
+        if ref.get("source") in ("drugbank_mixture",) and annex_generic_total >= 2:
+            # Check if the mixture matches all the Annex F generics
+            ref_generic_count = len(ref_primary_generic_tokens)
+            if ref_generic_count >= 2 and generic_overlap >= min(annex_generic_total, ref_generic_count):
+                primary_score += 20  # Significant bonus for matching all components
 
         if primary_score == 0:
             continue
