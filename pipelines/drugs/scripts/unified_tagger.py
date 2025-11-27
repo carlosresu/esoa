@@ -1075,23 +1075,43 @@ class UnifiedTagger:
                             generic_tokens.append(combo_part)
             
             # Handle " IN " separator for IV solutions
-            # e.g., "DEXTROSE IN SODIUM CHLORIDE" -> both DEXTROSE and SODIUM CHLORIDE
+            # Pattern: "ACTIVE IN SOLUTION_BASE" e.g., "DEXTROSE IN SODIUM CHLORIDE"
+            # The ACTIVE is the primary ingredient, SOLUTION_BASE is secondary
+            # We tag based on ACTIVE but record the full description for differentiation
+            iv_active_ingredient = None
+            iv_solution_base = None
             if " IN " in text_upper and "+" not in text_upper:
-                parts = text_upper.split(" IN ")
-                for part in parts:
-                    part = part.strip()
-                    # Extract drug name (before dose/form info)
-                    words = []
-                    skip_words = {"SOLUTION", "BOTTLE", "BAG", "VIAL", "AMPULE", "L", "ML"}
-                    for word in part.split():
+                parts = text_upper.split(" IN ", 1)  # Split only on first " IN "
+                if len(parts) == 2:
+                    active_part = parts[0].strip()
+                    base_part = parts[1].strip()
+                    
+                    # Extract active ingredient (before dose info)
+                    skip_words = {"SOLUTION", "BOTTLE", "BAG", "VIAL", "AMPULE", "L", "ML", "WATER"}
+                    active_words = []
+                    for word in active_part.split():
                         if word and not any(c.isdigit() for c in word) and word not in _UNIT_TOKENS and word not in skip_words:
-                            words.append(word)
+                            active_words.append(word)
                         else:
                             break
-                    if words:
-                        combo_part = " ".join(words)
-                        if combo_part and combo_part not in generic_tokens:
-                            generic_tokens.append(combo_part)
+                    
+                    # Extract solution base (skip WATER as it's not a drug)
+                    base_words = []
+                    for word in base_part.split():
+                        if word and not any(c.isdigit() for c in word) and word not in _UNIT_TOKENS and word not in skip_words:
+                            base_words.append(word)
+                        else:
+                            break
+                    
+                    if active_words:
+                        iv_active_ingredient = " ".join(active_words)
+                        if iv_active_ingredient not in generic_tokens:
+                            generic_tokens.insert(0, iv_active_ingredient)  # Insert at front (priority)
+                    
+                    if base_words:
+                        iv_solution_base = " ".join(base_words)
+                        if iv_solution_base not in generic_tokens:
+                            generic_tokens.append(iv_solution_base)
             
             all_tokens.append(tokens)
             all_generic_tokens.append(generic_tokens)
@@ -1323,14 +1343,13 @@ class UnifiedTagger:
                     input_generics_normalized.add(normalized)
             
             num_input_generics = len(input_generics_normalized)
-            # Treat as combination if:
-            # 1. There's a "+" in the text, OR
-            # 2. There's " IN " connecting two chemicals (e.g., "DEXTROSE IN SODIUM CHLORIDE")
-            # 3. Multiple distinct generics are detected
+            # Treat as combination if there's a "+" in the text
+            # For " IN " (IV solutions), treat specially: match on active, prefer with base
             has_plus_separator = "+" in text
             has_in_separator = " IN " in text.upper() and num_input_generics > 1
-            is_combination = num_input_generics > 1 and (has_plus_separator or has_in_separator)
-            is_single_drug = num_input_generics == 1 or (num_input_generics > 1 and not is_combination)
+            is_iv_solution = has_in_separator and not has_plus_separator
+            is_combination = num_input_generics > 1 and has_plus_separator  # Only "+" is strict combo
+            is_single_drug = num_input_generics == 1
             
             for cand in candidates:
                 cand_generic = _as_str_or_empty(cand.get("generic_name")).upper()
@@ -1372,6 +1391,20 @@ class UnifiedTagger:
                         if input_generic not in cand_generic and cand_generic not in input_generic:
                             continue  # Skip this candidate
                 
+                # For IV solutions: match on active ingredient, prefer candidates with base
+                # e.g., "DEXTROSE IN SODIUM CHLORIDE" -> match DEXTROSE, prefer if also has SODIUM
+                if is_iv_solution:
+                    # Get the first stripped generic (active ingredient - should be first due to insert(0))
+                    active_ingredient = stripped_generics[0] if stripped_generics else None
+                    if active_ingredient:
+                        active_normalized = self._apply_synonyms(active_ingredient.upper())
+                        # Must match active ingredient
+                        if (active_normalized not in cand_generic and 
+                            cand_generic not in active_normalized and
+                            active_normalized != cand_generic_normalized and
+                            active_ingredient.upper() not in cand_generic):
+                            continue  # Skip - doesn't match active
+                
                 primary, secondary, reason = self._score_candidate(tokens, categories, cand)
                 total_score = primary + secondary * 0.1
                 
@@ -1382,6 +1415,14 @@ class UnifiedTagger:
                         exact_match = True
                         total_score += 10  # Big bonus for exact match
                         break
+                
+                # For IV solutions: bonus if candidate includes solution base
+                if is_iv_solution and len(input_generics_normalized) > 1:
+                    # Check if candidate mentions multiple components
+                    match_count = sum(1 for ig in input_generics_normalized 
+                                     if ig in cand_generic or cand_generic in ig)
+                    if match_count > 1:
+                        total_score += 5  # Bonus for matching base too
                 
                 # ATC preference
                 is_combo_atc = _is_combination_atc(_as_str_or_empty(cand.get("atc_code")))
