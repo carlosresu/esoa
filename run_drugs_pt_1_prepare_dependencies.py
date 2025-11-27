@@ -40,7 +40,7 @@ def run_part_1(
     Returns dict of artifact paths.
     """
     # Import here to avoid circular imports
-    from run_all import (
+    from run_drugs_all import (
         _ensure_inputs_dir,
         _ensure_parquet_sibling,
         refresh_pnf,
