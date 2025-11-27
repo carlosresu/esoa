@@ -1,34 +1,171 @@
 # Drug Pipeline Implementation Plan
 
 **Created:** Nov 27, 2025  
-**Objective:** Increase ESOA→Drug Code matching from 20.1% to 60%+
+**Updated:** Nov 27, 2025  
+**Objective:** Unified drug tagging with consistent algorithms for Annex F and ESOA
 
 ---
 
-## Current State Summary
+## Current State Summary (Nov 27, 2025)
 
 | Metric | Current | Target |
 |--------|---------|--------|
 | Annex F tagging | 97.0% | 99%+ |
-| ESOA ATC tagging | 37.2% | 70%+ |
-| ESOA→Drug Code | 20.1% | 60%+ |
+| ESOA ATC tagging | 87.5% | 95%+ |
+| ESOA→Drug Code | 7.0% | 60%+ |
 
-### Key Bottlenecks
-1. **Part 3 ESOA ATC tagging only 37.2%** - 162K rows have no ATC
-2. **Generic mismatch** - 16K rows (single vs combo ATC codes)
-3. **Dose mismatch** - 10K rows (same drug, different dose)
-4. **Missing brand→generic swap** - Brand-only ESOA rows not converted
+### Architecture Decision
+**Use Annex F tagging algorithm as base** (97% accuracy) and enhance with:
+- DuckDB for all queries (faster than Aho-Corasick for our use case)
+- Unified reference dataset
+- Salt detection via drugbank$salts
+- Consistent algorithm for both Annex F and ESOA
 
 ---
 
-## Tier System for Matching
+## NEW: Unified Architecture
 
-| Tier | Sources | Purpose |
-|------|---------|---------|
-| **1** | PNF + WHO + DrugBank Generics + DrugBank Mixtures | Known pharmaceuticals - tag with ATC/DrugBank ID |
-| **2** | DrugBank Brands + FDA Drug Brands | Brand→Generic swap, then re-run Tier 1 |
-| **3** | FDA Food | Food/supplement detection and normalization |
-| **4** | Unknown | Parse and fallback match untagged rows |
+### Core Principle
+Both Annex F and ESOA are drug description texts. They should use **identical tagging algorithms**.
+
+### Three Reference Structures (via DuckDB)
+1. **Generics Table**: All single-entity drug names (base generics, normalized)
+2. **Brands Table**: FDA + DrugBank brands → maps to generic(s)
+3. **Mixtures Table**: Component combinations → maps to mixture info
+
+### Unified Reference Dataset Schema
+```
+drugbank_id | atc_code | generic_name | form | route | salts | doses | brands | mixtures | sources
+```
+- **Exploded by**: `drugbank_id × atc_code × form × route` (only valid combos)
+- **Aggregated**: `salts`, `doses`, `brands`, `mixtures` as pipe-delimited
+
+### Dose Normalization
+- Weight: normalize to `mg` (e.g., `1g` → `1000mg`)
+- Combinations: `500mg+200mg` (fixed combo)
+- Concentration: `10mg/mL`, `5%`
+- Volume: `mL` is canonical for liquids
+
+### Salt Handling
+- Use `drugbank$salts` dataset for salt detection
+- Strip salts from matching basis UNLESS pure salt compound (e.g., sodium chloride)
+- Auto-detect pure salts: compounds where base would be empty after stripping
+
+---
+
+## Phase 1: Build Unified Reference Dataset
+
+### 1.1 Load Source Datasets into DuckDB
+Load all sources:
+- `pnf_lexicon.csv` / `pnf_prepared.csv`
+- `who_atc_*.parquet`
+- `drugbank_generics_master.csv`
+- `drugbank_mixtures_master.csv`
+- `drugbank_brands_master.csv`
+- `drugbank_products_export.csv`
+- `fda_drug_*.csv`
+- `annex_f.csv`
+
+### 1.2 Extract Salts from DrugBank
+**New R Script:** `dependencies/drugbank_generics/drugbank_salts.R`
+- Extract `dbdataset::drugbank$salts`
+- Output: `drugbank_salts_master.csv`
+- Use for salt detection and stripping
+
+### 1.3 Normalize Generics
+- Strip salts using salts dataset (unless pure salt compound)
+- Handle synonyms (PARACETAMOL ↔ ACETAMINOPHEN)
+- Normalize to canonical DrugBank name
+
+### 1.4 Extract Form-Route Validity Mapping
+**Output:** `form_route_validity.parquet` (longform with provenance)
+```
+form | route | source | example_drugbank_id
+tablet | oral | pnf | DB00316
+solution | intravenous | drugbank_products | DB00316
+```
+
+### 1.5 Build Unified Dataset
+Explosion logic: `drugbank_id × atc_code × form × route`
+- Only valid form-route combinations
+- Aggregate salts, doses, brands, mixtures as pipe-delimited
+- Track sources
+
+### 1.6 Export and Index
+- Export as `unified_drug_reference.parquet`
+- Create DuckDB indexes for fast queries
+
+---
+
+## Phase 2: Create Unified Tagger
+
+### 2.1 Port Annex F Tokenization
+Use Part 2's tokenization and categorization:
+- GENERIC, DOSE, FORM, ROUTE, SALT, OTHER categories
+- Handle parentheses, commas, special characters
+
+### 2.2 Replace Tries with DuckDB Queries
+```sql
+-- Find generic matches
+SELECT * FROM unified WHERE generic_name IN (unnest(?tokens))
+
+-- Find brand matches and get generics
+SELECT generic_name FROM brands WHERE brand_name IN (unnest(?tokens))
+
+-- Find mixture matches
+SELECT * FROM mixtures WHERE component_key = ?key
+```
+
+### 2.3 Port Scoring Algorithm
+From Part 2:
+- Primary score: GENERIC×5, SALT×4, DOSE×4, FORM×3, ROUTE×3
+- Secondary score: form/route tie-breaking
+- ATC preference: single vs combo
+
+### 2.4 Add Salt Stripping
+- Query salts table to detect salt tokens
+- Strip unless pure salt compound
+- Re-query with base generic
+
+### 2.5 Unified Tagger Module
+**New File:** `pipelines/drugs/scripts/unified_tagger.py`
+- Single entry point for both Annex F and ESOA
+- Uses DuckDB for all lookups
+- Consistent scoring
+
+---
+
+## Phase 3: Refactor Pipeline Parts
+
+### 3.1 Part 2 (Annex F)
+- Call unified tagger
+- Output format unchanged for Part 4 compatibility
+
+### 3.2 Part 3 (ESOA)
+- Call unified tagger (same as Part 2)
+- Remove redundant multi-step matching
+
+### 3.3 Part 4 (Bridging)
+- Use unified reference for matching
+- Simplified logic with DuckDB
+
+---
+
+## Phase 4: Verification and Documentation
+
+### 4.1 Verify Coverage
+- Annex F: should maintain 97%+
+- ESOA: should improve from 87.5%
+- Bridging: should improve from 7%
+
+### 4.2 Update Documentation
+- AGENTS.md with new policies
+- Memories with new architecture
+- README updates
+
+---
+
+## Legacy Phases (Superseded)
 
 ---
 

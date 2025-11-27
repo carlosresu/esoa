@@ -12,35 +12,62 @@ These rules are meant for GPT agents running as `gpt-X.x-codex-high` or `gpt-X.x
 
 6. **Use 8 workers for R scripts.** When running DrugBank or other R scripts via Python, set `ESOA_DRUGBANK_WORKERS=8` environment variable.
 7. **Pipeline part dependencies.** The drugs pipeline has 4 parts that must run in order:
-   - Part 1: Prepare dependencies (DrugBank generics, mixtures, brands, FDA data)
+   - Part 1: Prepare dependencies (DrugBank generics, mixtures, brands, salts, FDA data)
    - Part 2: Match Annex F with ATC/DrugBank IDs → outputs `annex_f_with_atc.csv`
-   - Part 3: Match ESOA with ATC/DrugBank IDs → uses Part 2 output as reference
+   - Part 3: Match ESOA with ATC/DrugBank IDs → uses unified tagger (same as Part 2)
    - Part 4: Bridge ESOA to Annex F Drug Codes → uses Part 3 output
+
+## Unified Architecture
+
+8. **Unified tagging algorithm.** Both Annex F and ESOA use the SAME tagging algorithm. The Annex F tagger (Part 2) is the base - do not create separate algorithms for different input types.
+
+9. **DuckDB for all queries.** Use DuckDB for all reference lookups instead of Aho-Corasick tries. Load parquet files into DuckDB and query with SQL. This is faster for exact/prefix matching after tokenization.
+
+10. **Three reference tables.** The unified reference consists of:
+    - **Generics table**: All single-entity drug names (base generics, normalized)
+    - **Brands table**: FDA + DrugBank brands → maps to generic(s)
+    - **Mixtures table**: Component combinations → maps to mixture info
+
+11. **Unified reference dataset schema.** The main reference is `unified_drug_reference.parquet`:
+    - Exploded by: `drugbank_id × atc_code × form × route` (only valid combos)
+    - Aggregated columns: `salts`, `doses`, `brands`, `mixtures` as pipe-delimited
+    - Sources tracked: `sources` column with pipe-delimited provenance
 
 ## Drug Matching Policies
 
-8. **Tiered matching strategy.** Match drugs in this priority order:
-   - Tier 1: PNF + WHO + DrugBank Generics + DrugBank Mixtures (known pharmaceuticals with ATC/DrugBank IDs)
-   - Tier 2: DrugBank Brands + FDA Drug Brands (brand→generic swap, then re-run Tier 1)
-   - Tier 3: FDA Food (food/supplement detection for non-drugs)
-   - Tier 4: Fallback parsing for unknown categories
+12. **Salt handling.** Use `drugbank$salts` dataset for salt detection. Strip salts from matching basis UNLESS the compound is a pure salt (e.g., sodium chloride, calcium carbonate). Auto-detect pure salts: compounds where base would be empty after stripping.
 
-9. **Multi-word generic names.** Preserve known multi-word generics as single tokens (e.g., "tranexamic acid", "folic acid", "insulin glargine"). Do not split these into individual words during tokenization.
+13. **Dose normalization.** Canonical formats:
+    - Weight: normalize to `mg` (e.g., `1g` → `1000mg`)
+    - Combinations: `500mg+200mg` (fixed combo), `500mg/200mg` (ratio)
+    - Concentration: `10mg/mL`, `5%`
+    - Volume: `mL` is canonical for liquids
 
-10. **Form token filtering.** When comparing molecules between ESOA and Annex F, filter out form tokens (tablet, capsule, vial, ampule, bottle, sachet, etc.) from the molecules list. These are dosage forms, not drug names.
+14. **Form-route validity.** Maintain `form_route_validity.parquet` with provenance. Only allow form-route combinations that exist in reference datasets. If form or route missing in input, infer the most common one.
 
-11. **Single vs combination ATC codes.** When an ESOA row contains a single molecule, prefer single-drug ATC codes over combination ATCs. For example, LOSARTAN alone should get C09CA01, not C09DA01 (losartan+HCTZ combo).
+15. **Multi-word generic names.** Preserve known multi-word generics as single tokens (e.g., "tranexamic acid", "folic acid", "insulin glargine"). Do not split these into individual words during tokenization.
 
-12. **Brand sources.** Brand→generic mapping uses combined sources:
-    - FDA Drug brands (`fda_drug_*.csv`)
-    - DrugBank brands (`drugbank_brands_master.csv` from products where generic=false)
-    - DrugBank mixture names (brand names of combination products)
+16. **Single vs combination ATC codes.** When an input row contains a single molecule, prefer single-drug ATC codes over combination ATCs. For example, LOSARTAN alone should get C09CA01, not C09DA01 (losartan+HCTZ combo).
+
+17. **Scoring algorithm.** Use Part 2's weighted scoring:
+    - Primary: GENERIC×5, SALT×4, DOSE×4, FORM×3, ROUTE×3
+    - Secondary: form/route tie-breaking
+    - ATC preference: single vs combo based on input molecule count
 
 ## Reference Data
 
-13. **DrugBank data extraction.** The `dependencies/drugbank_generics/` directory contains R scripts that extract from the `dbdataset` package:
+18. **DrugBank data extraction.** The `dependencies/drugbank_generics/` directory contains R scripts that extract from the `dbdataset` package:
     - `drugbank_generics.R` → `drugbank_generics_master.csv`
     - `drugbank_mixtures.R` → `drugbank_mixtures_master.csv`
     - `drugbank_brands.R` → `drugbank_brands_master.csv` + `drugbank_products_export.csv`
+    - `drugbank_salts.R` → `drugbank_salts_master.csv`
 
-14. **WHO ATC data.** Use the canonical `who_atc_YYYY-MM-DD.parquet` files. The `load_who_molecules()` function supports both parquet and CSV formats.
+19. **WHO ATC data.** Use the canonical `who_atc_YYYY-MM-DD.parquet` files. The `load_who_molecules()` function supports both parquet and CSV formats.
+
+20. **Unified dataset enrichment.** DrugBank generics is the base dataset. Enrich with:
+    - PNF: synonyms, ATC codes
+    - WHO: ATC codes, names
+    - DrugBank products: dose/form/route variants
+    - DrugBank mixtures: combination info
+    - FDA drug brands: brand names, dose/form/route
+    - Deduplicate across all steps to prevent row explosion
