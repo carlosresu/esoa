@@ -41,6 +41,7 @@ def run_part_1(
     """
     # Import here to avoid circular imports
     from run_drugs_all import (
+        PROJECT_ROOT,
         _ensure_inputs_dir,
         _ensure_parquet_sibling,
         refresh_pnf,
@@ -56,6 +57,7 @@ def run_part_1(
         print("Part 1: Prepare Dependencies")
         print("=" * 60)
     
+    project_root = PROJECT_ROOT
     inputs_dir = _ensure_inputs_dir()
     artifacts: dict[str, Path] = {}
 
