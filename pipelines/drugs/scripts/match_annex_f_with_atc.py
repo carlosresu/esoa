@@ -710,7 +710,17 @@ def _normalize_tokens(tokens: List[str], drop_stopwords: bool = False) -> List[s
 
         tok_upper = FORM_CANON.get(tok_upper, tok_upper)
         tok_upper = ROUTE_CANON.get(tok_upper, tok_upper)
-        tok_upper = GENERIC_SYNONYMS.get(tok_upper, tok_upper)
+        
+        # Apply generic synonyms - if canonical form is multi-word, split it
+        canonical = GENERIC_SYNONYMS.get(tok_upper, tok_upper)
+        if " " in canonical and canonical != tok_upper:
+            # Multi-word canonical form - add all parts as separate tokens
+            for part in canonical.split():
+                if part and part not in NATURAL_STOPWORDS:
+                    normalized.append(part)
+            i += 1
+            continue
+        tok_upper = canonical
 
         # Always drop purely natural-language stopwords.
         if tok_upper == "PER":

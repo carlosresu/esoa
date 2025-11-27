@@ -100,6 +100,40 @@ def load_drugbank_synonyms() -> Dict[str, str]:
     except Exception as e:
         print(f"[synonyms] Warning: Could not load DrugBank synonyms: {e}")
     
+    # Add additional synonyms not in DrugBank (spelling variants, regional names)
+    additional_synonyms = {
+        # Spelling variants
+        "BECLOMETASONE": "BECLOMETHASONE DIPROPIONATE",
+        "BECLOMETHASONE": "BECLOMETHASONE DIPROPIONATE",
+        "PHYTOMENADIONE": "PHYTONADIONE",
+        "ISOSORBIDE-5-MONONITRATE": "ISOSORBIDE MONONITRATE",
+        "ISOSORBIDE 5 MONONITRATE": "ISOSORBIDE MONONITRATE",
+        "PHENOXYMETHYL PENICILLIN": "PHENOXYMETHYLPENICILLIN",
+        "PENICILLIN V": "PHENOXYMETHYLPENICILLIN",
+        "COLESTYRAMINE": "CHOLESTYRAMINE",
+        "LEUPRORELINE": "LEUPROLIDE",
+        "MEDROXYPROGESTERONE": "MEDROXYPROGESTERONE ACETATE",
+        "FERROUS SULFATE": "IRON",
+        "FERROUS SULPHATE": "IRON",
+        "FERROUS SALT": "IRON",
+        # Regional names
+        "ADRENALINE": "EPINEPHRINE",
+        "NORADRENALINE": "NOREPINEPHRINE",
+        "FRUSEMIDE": "FUROSEMIDE",
+        "LIGNOCAINE": "LIDOCAINE",
+        "GLYCERYL TRINITRATE": "NITROGLYCERIN",
+        "GTN": "NITROGLYCERIN",
+        "CICLOSPORIN": "CYCLOSPORINE",
+        "CICLOSPORINE": "CYCLOSPORINE",
+        "RIFAMPICIN": "RIFAMPIN",
+        "PHENOBARBITONE": "PHENOBARBITAL",
+        "CHLORPHENIRAMINE": "CHLORPHENAMINE",
+        "PETHIDINE": "MEPERIDINE",
+    }
+    for name, canonical in additional_synonyms.items():
+        if name not in synonyms:
+            synonyms[name] = canonical
+    
     _DRUGBANK_SYNONYMS_CACHE = synonyms
     return synonyms
 
