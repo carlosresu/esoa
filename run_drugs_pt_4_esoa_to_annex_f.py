@@ -157,14 +157,57 @@ except ImportError:
 
 
 def _normalize_generics(generics: list[str]) -> set[str]:
-    """Normalize generic names for comparison."""
+    """Normalize generic names for comparison, filtering out form/route tokens."""
+    # Form tokens to filter out
+    FORM_TOKENS = {
+        "tablet", "tablets", "tab", "tabs", "capsule", "capsules", "cap", "caps",
+        "vial", "vials", "ampule", "ampules", "amp", "amps", "ampoule", "ampoules",
+        "bottle", "bottles", "sachet", "sachets", "nebule", "nebules",
+        "solution", "suspension", "injection", "injectable", "syrup",
+        "cream", "ointment", "gel", "lotion", "drops", "spray",
+        "powder", "granules", "suppository", "patch", "inhaler",
+        "mdi", "dpi", "nebulizer", "tube", "jar", "container",
+        "per", "ml", "mg", "g", "mcg", "iu", "unit", "units",
+        "sterile", "water", "iod", "iodine", "povidone", "fre", "min",
+        "acid", "beta", "rose", "plain", "usp", "intravenous", "oral",
+        "vit", "vitamin", "vitamins", "multivitamins", "multi",
+        "insuli", "gla", "tar", "diph", "co",
+    }
+    
+    # Known multi-word generics to preserve
+    MULTIWORD_GENERICS = {
+        "tranexamic acid", "ascorbic acid", "folic acid", "valproic acid",
+        "amino acid", "amino acids", "ursodeoxycholic acid", "hyaluronic acid",
+        "co amoxiclav", "co-amoxiclav", "insulin glargine", "insulin lispro",
+        "insulin aspart", "insulin detemir", "insulin degludec",
+        "sodium chloride", "potassium chloride", "calcium chloride",
+    }
+    
     normalized = set()
+    
+    # First pass: identify multi-word generics
     for g in generics:
-        # Remove salt forms and normalize
+        g = g.lower().strip()
+        if g in MULTIWORD_GENERICS:
+            normalized.add(g)
+    
+    # Second pass: process remaining tokens
+    for g in generics:
         g = g.lower().strip()
         
-        # Skip non-generic tokens
+        # Skip if already added as multi-word
+        if g in MULTIWORD_GENERICS:
+            continue
+        
+        # Skip non-generic tokens (forms, routes, connectors)
         if g in ("+", "-", "/", "&", "and", "with"):
+            continue
+        if g in FORM_TOKENS:
+            continue
+        # Skip tokens that are just numbers or very short
+        if len(g) < 3:
+            continue
+        if re.match(r'^\d+(?:\.\d+)?$', g):
             continue
         
         # Remove common suffixes
@@ -176,10 +219,9 @@ def _normalize_generics(generics: list[str]) -> set[str]:
         # Apply synonym normalization
         g = GENERIC_SYNONYMS.get(g, g)
         
-        # Handle multi-word generics (e.g., "tranexamic acid" -> "tranexamic acid")
-        # Don't split these, keep as single token
-        if g:
+        if g and g not in FORM_TOKENS and len(g) >= 3:
             normalized.add(g)
+    
     return normalized
 
 
@@ -244,6 +286,10 @@ def _forms_compatible(form1: str, form2: str) -> bool:
         if f1 in equiv_set and f2 in equiv_set:
             return True
     return False
+
+
+# Alias for backward compatibility
+_forms_equivalent = _forms_compatible
 
 
 def _infer_route(form: str) -> str:

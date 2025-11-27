@@ -17,9 +17,15 @@ from .text_utils_drugs import (
 )
 
 
-def load_who_molecules(who_csv: str) -> Tuple[Dict[str, set], List[str], Dict[str, List[dict]]]:
-    """Load WHO exports, providing lookup dictionaries and candidate name lists."""
-    who = pd.read_csv(who_csv)
+def load_who_molecules(who_path: str) -> Tuple[Dict[str, set], List[str], Dict[str, List[dict]]]:
+    """Load WHO exports, providing lookup dictionaries and candidate name lists.
+    
+    Supports both parquet (preferred) and CSV formats.
+    """
+    if who_path.endswith('.parquet'):
+        who = pd.read_parquet(who_path)
+    else:
+        who = pd.read_csv(who_path)
     who["name_base"] = who["atc_name"].fillna("").map(_base_name)
     who["name_norm"] = who["atc_name"].fillna("").map(_normalize_text_basic)
     split_vals = who["atc_name"].fillna("").map(extract_base_and_salts)

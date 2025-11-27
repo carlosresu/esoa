@@ -251,10 +251,32 @@ def _known_tokens() -> Set[str]:
 
 
 def _write_csv_and_parquet(frame: pd.DataFrame, csv_path: str) -> None:
-    """Persist a dataframe to both CSV and Parquet with matching stems."""
+    """Persist a dataframe to both CSV and Parquet with matching stems.
+    
+    Policy: Parquet is the primary format; CSV is for compatibility only.
+    """
+    # Write CSV first (always succeeds)
     frame.to_csv(csv_path, index=False, encoding="utf-8")
+    
+    # For parquet, ensure consistent types to avoid Arrow conversion errors
     parquet_path = Path(csv_path).with_suffix(".parquet")
-    frame.to_parquet(parquet_path, index=False)
+    parquet_frame = frame.copy()
+    
+    # Convert object columns with mixed types to string
+    for col in parquet_frame.columns:
+        if parquet_frame[col].dtype == object:
+            # Check if column has mixed types
+            try:
+                parquet_frame[col] = parquet_frame[col].fillna("").astype(str)
+            except Exception:
+                pass
+    
+    try:
+        parquet_frame.to_parquet(parquet_path, index=False)
+    except Exception as e:
+        # Log but don't fail - CSV was already written
+        import sys
+        print(f"Warning: Parquet write failed for {parquet_path}: {e}", file=sys.stderr)
 
 def _generate_summary_lines(out_small: pd.DataFrame, mode: str) -> List[str]:
     """Produce human-readable distribution summaries for review files."""

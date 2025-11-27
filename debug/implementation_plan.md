@@ -198,12 +198,16 @@ For rows failing all tiers:
 
 ## Implementation Order
 
-1. **Phase 1A-1E:** DrugBank products/brands pipeline (foundation)
+1. **Phase 1A-1E:** DrugBank products/brands pipeline (foundation) ✅ DONE
+   - Created drugbank_brands.R extracting 208,999 brand entries
+   - Created drugbank_products_export.csv with 455,970 products
+   - Integrated DrugBank brands into brand_map_drugs.py
+   - Total brands now: 239,638 (DrugBank 208,999 + FDA 30,639)
 2. **Phase 2A-2B:** FDA data preparation
 3. **Phase 3:** PNF improvements
 4. **Phase 4:** Build unified tries
 5. **Phase 5C:** Fix Part 3 ESOA tagging (biggest impact)
-6. **Phase 6:** Brand swapping
+6. **Phase 6:** Brand swapping - PARTIALLY DONE (integrated into Part 3)
 7. **Phase 5B:** Maximize Annex F tagging
 8. **Phase 5D:** Improve Part 4 matching
 9. **Phase 7:** Fallback matching

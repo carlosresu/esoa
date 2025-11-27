@@ -208,7 +208,12 @@ def dose_similarity(esoa_dose: dict, pnf_row) -> float:
     kind = esoa_dose.get("kind")
     if kind == "amount":
         mg_esoa = to_mg_match(esoa_dose["strength"], esoa_dose["unit"])
-        mg_pnf = pnf_row.get("strength_mg")
+        mg_pnf_raw = pnf_row.get("strength_mg")
+        # Handle empty strings and non-numeric values
+        try:
+            mg_pnf = float(mg_pnf_raw) if mg_pnf_raw not in (None, "", "None") else None
+        except (ValueError, TypeError):
+            mg_pnf = None
         if mg_esoa is None or mg_pnf is None:
             return 0.0
         if _eq(mg_esoa, mg_pnf):

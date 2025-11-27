@@ -74,6 +74,12 @@ def _assemble_reference_catalogue(annex_df: pd.DataFrame, pnf_df: pd.DataFrame) 
     )
     annex_synonyms = maybe_parallel_map(annex_synonym_payloads, _prep_annex_synonyms)
 
+    # Use ATC codes from Annex F if available (from Part 2 output)
+    annex_atc_codes = annex.get("atc_code", pd.Series([""] * len(annex)))
+    if annex_atc_codes is None:
+        annex_atc_codes = pd.Series([""] * len(annex))
+    annex_atc_codes = annex_atc_codes.fillna("").astype(str)
+    
     annex_ref = pd.DataFrame(
         {
             "generic_id": annex["drug_code"].astype(str),
@@ -81,7 +87,7 @@ def _assemble_reference_catalogue(annex_df: pd.DataFrame, pnf_df: pd.DataFrame) 
             "generic_normalized": annex["generic_name"].astype(str),
             "raw_molecule": annex["generic_name"].astype(str),
             "synonyms": annex_synonyms,
-            "atc_code": [""] * len(annex),
+            "atc_code": annex_atc_codes.tolist(),
             "route_allowed": annex["route_allowed"].fillna("").astype(str),
             "form_token": annex["form_token"].fillna("").astype(str),
             "dose_kind": annex["dose_kind"],

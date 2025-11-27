@@ -731,14 +731,37 @@ def _segment_norm(seg: str) -> str:
     return s
 
 def load_latest_who_file(root_dir: str) -> str | None:
-    """Return the freshest WHO ATC CSV path, preferring the pipeline-specific inputs directory."""
-    who_candidates = glob.glob(os.path.join(str(PIPELINE_WHO_ATC_DIR), "who_atc_*_molecules.csv"))
-    if who_candidates:
-        return max(who_candidates, key=os.path.getmtime)
+    """Return the freshest WHO ATC file path, preferring parquet over CSV.
+    
+    Canonical naming: who_atc_YYYY-MM-DD.parquet or who_atc_YYYY-MM-DD.csv
+    Legacy naming: who_atc_*_molecules.csv (deprecated)
+    """
+    # Prefer parquet files (canonical naming: who_atc_YYYY-MM-DD.parquet)
+    parquet_candidates = glob.glob(os.path.join(str(PIPELINE_WHO_ATC_DIR), "who_atc_*.parquet"))
+    if parquet_candidates:
+        # Filter out any with _molecules suffix (legacy)
+        canonical = [c for c in parquet_candidates if "_molecules" not in c]
+        if canonical:
+            return max(canonical, key=os.path.getmtime)
+        return max(parquet_candidates, key=os.path.getmtime)
+    
+    # Fall back to CSV (canonical naming: who_atc_YYYY-MM-DD.csv)
+    csv_candidates = glob.glob(os.path.join(str(PIPELINE_WHO_ATC_DIR), "who_atc_*.csv"))
+    if csv_candidates:
+        # Filter out any with _molecules suffix (legacy)
+        canonical = [c for c in csv_candidates if "_molecules" not in c]
+        if canonical:
+            return max(canonical, key=os.path.getmtime)
+        return max(csv_candidates, key=os.path.getmtime)
+    
+    # Legacy directory fallback
     legacy_dir = os.path.join(root_dir, "dependencies", "atcd", "output")
-    legacy_candidates = glob.glob(os.path.join(legacy_dir, "who_atc_*_molecules.csv"))
-    if legacy_candidates:
-        return max(legacy_candidates, key=os.path.getmtime)
+    parquet_candidates = glob.glob(os.path.join(legacy_dir, "who_atc_*.parquet"))
+    if parquet_candidates:
+        return max(parquet_candidates, key=os.path.getmtime)
+    csv_candidates = glob.glob(os.path.join(legacy_dir, "who_atc_*.csv"))
+    if csv_candidates:
+        return max(csv_candidates, key=os.path.getmtime)
     return None
 
 def _tokenize_unknowns(s_norm: str) -> List[str]:

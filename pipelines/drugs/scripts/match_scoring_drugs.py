@@ -600,8 +600,9 @@ def score_and_classify(features_df: pd.DataFrame, pnf_df: pd.DataFrame) -> pd.Da
             "selected_unit",
         ]
     ].to_dict("records")
+    dose_sim_raw = maybe_parallel_map(dose_rows, _recompute_dose_row, parallel_threshold=500)
     out["dose_sim"] = pd.to_numeric(
-        maybe_parallel_map(dose_rows, _recompute_dose_row, parallel_threshold=500),
+        pd.Series(dose_sim_raw),
         errors="coerce",
     ).fillna(0.0)
 

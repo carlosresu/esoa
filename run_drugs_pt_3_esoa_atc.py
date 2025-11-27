@@ -68,7 +68,11 @@ def run_part_3(
     # Prepare inputs if needed
     pnf_prepared = INPUTS_DIR / "pnf_prepared.csv"
     esoa_prepared = INPUTS_DIR / "esoa_prepared.csv"
-    annex_prepared = INPUTS_DIR / "annex_f.csv"
+    # Use Part 2 output (annex_f_with_atc.csv) which has ATC codes and parsed info
+    annex_prepared = OUTPUTS_DIR / "annex_f_with_atc.csv"
+    if not annex_prepared.exists():
+        # Fallback to raw annex_f if Part 2 hasn't been run
+        annex_prepared = INPUTS_DIR / "annex_f.csv"
 
     if not pnf_prepared.exists() or not esoa_prepared.exists():
         pnf_csv = INPUTS_DIR / "pnf.csv"
@@ -84,6 +88,19 @@ def run_part_3(
         from pipelines.drugs.scripts.match_drugs import _assemble_reference_catalogue
         annex_df = pd.read_csv(annex_prepared)
         pnf_df = pd.read_csv(pnf_prepared)
+        
+        # Map Part 2 output columns to expected column names if needed
+        if "Drug Description" in annex_df.columns and "raw_description" not in annex_df.columns:
+            annex_df["raw_description"] = annex_df["Drug Description"]
+            annex_df["normalized_description"] = annex_df.get("fuzzy_basis", annex_df["Drug Description"])
+            annex_df["generic_name"] = annex_df.get("matched_generic_name", annex_df.get("parsed_molecules", ""))
+            annex_df["drug_code"] = annex_df["Drug Code"]
+            # Add missing columns with defaults
+            for col in ["route_allowed", "form_token", "dose_kind", "strength", "unit", 
+                       "per_val", "per_unit", "pct", "strength_mg", "ratio_mg_per_ml", "route_evidence"]:
+                if col not in annex_df.columns:
+                    annex_df[col] = ""
+        
         return _assemble_reference_catalogue(annex_df, pnf_df)
     
     reference_df = run_with_spinner("Load reference catalogues", _load_catalogues)
