@@ -121,6 +121,13 @@ SALT_TOKENS = {
     "BENZOATE", "VALERATE", "PROPIONATE", "HYDROBROMIDE", "DOCUSATE",
 }
 
+# Elements that can be standalone drugs (not just salt modifiers)
+# These should be treated as generics when they appear as the main drug
+ELEMENT_DRUGS = {
+    "ZINC", "CALCIUM", "IRON", "MAGNESIUM", "POTASSIUM", "SODIUM",
+    "COPPER", "MANGANESE", "SELENIUM", "CHROMIUM", "IODINE",
+}
+
 # ============================================================================
 # PURE SALT COMPOUNDS - should NOT have salt stripped
 # ============================================================================

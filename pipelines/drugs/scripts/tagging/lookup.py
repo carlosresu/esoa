@@ -60,6 +60,11 @@ def load_synonyms(
         "POLYMYXIN B": "POLYMIXIN B",
         "ALPHA-TOCOPHEROL": "TOCOPHEROL",
         "TOCOPHEROL": "VITAMIN E",
+        # Combination drug synonyms
+        "CO-AMOXICLAV": "AMOXICILLIN + CLAVULANIC ACID",
+        "POTASSIUM CLAVULANATE": "CLAVULANIC ACID",
+        "CLAVULANATE": "CLAVULANIC ACID",
+        "COTRIMOXAZOLE": "SULFAMETHOXAZOLE + TRIMETHOPRIM",
         # Common abbreviations
         "VIT": "VITAMIN",
         "VIT A": "VITAMIN A",

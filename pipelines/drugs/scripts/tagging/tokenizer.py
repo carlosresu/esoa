@@ -9,7 +9,7 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from .constants import (
     CATEGORY_DOSE, CATEGORY_FORM, CATEGORY_GENERIC, CATEGORY_OTHER,
-    CATEGORY_ROUTE, CATEGORY_SALT, FORM_CANON, GENERIC_JUNK_TOKENS,
+    CATEGORY_ROUTE, CATEGORY_SALT, ELEMENT_DRUGS, FORM_CANON, GENERIC_JUNK_TOKENS,
     NATURAL_STOPWORDS, PURE_SALT_COMPOUNDS, ROUTE_CANON, SALT_TOKENS,
     UNIT_TOKENS,
 )
@@ -159,8 +159,18 @@ def categorize_tokens(tokens: List[str]) -> Dict[str, Dict[str, int]]:
             categories[CATEGORY_ROUTE][canon] = categories[CATEGORY_ROUTE].get(canon, 0) + 1
             continue
         
-        # Check salt
+        # Check salt (but element drugs can be generics too)
         if tok_upper in SALT_TOKENS:
+            # If it's an element drug and appears to be the main drug (first token),
+            # treat it as generic instead of salt
+            if tok_upper in ELEMENT_DRUGS:
+                # Check if this is likely the main drug (not a salt modifier)
+                # It's a main drug ONLY if it's the first token in the list
+                tok_idx = tokens.index(tok) if tok in tokens else -1
+                is_main_drug = tok_idx == 0
+                if is_main_drug:
+                    categories[CATEGORY_GENERIC][tok_upper] = categories[CATEGORY_GENERIC].get(tok_upper, 0) + 1
+                    continue
             categories[CATEGORY_SALT][tok_upper] = categories[CATEGORY_SALT].get(tok_upper, 0) + 1
             continue
         
