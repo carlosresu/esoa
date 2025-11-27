@@ -60,7 +60,7 @@ def load_drugbank_synonyms() -> Dict[str, str]:
     
     path = _find_drugbank_path()
     if not path:
-        print("[synonyms] Warning: DrugBank file not found, using empty synonym map")
+        # DrugBank file not found, using empty synonym map
         _DRUGBANK_SYNONYMS_CACHE = synonyms
         return synonyms
     
@@ -96,9 +96,9 @@ def load_drugbank_synonyms() -> Dict[str, str]:
                     if name != canonical:
                         synonyms[name] = canonical
         
-        print(f"[synonyms] Loaded {len(synonyms)} synonyms from DrugBank")
+        # Synonyms loaded silently
     except Exception as e:
-        print(f"[synonyms] Warning: Could not load DrugBank synonyms: {e}")
+        pass  # Silently handle errors, will use fallback synonyms
     
     # Add additional synonyms not in DrugBank (spelling variants, regional names)
     additional_synonyms = {
@@ -153,7 +153,7 @@ def load_drugbank_generics() -> Set[str]:
     
     path = _find_drugbank_path()
     if not path:
-        print("[synonyms] Warning: DrugBank file not found, using empty generics set")
+        # DrugBank file not found, using empty generics set
         _DRUGBANK_GENERICS_CACHE = generics
         return generics
     
@@ -169,9 +169,9 @@ def load_drugbank_generics() -> Set[str]:
                 if lexeme and lexeme != "NAN":
                     generics.add(lexeme)
         
-        print(f"[synonyms] Loaded {len(generics)} generic names from DrugBank")
+        # Generics loaded silently
     except Exception as e:
-        print(f"[synonyms] Warning: Could not load DrugBank generics: {e}")
+        pass  # Silently handle errors
     
     _DRUGBANK_GENERICS_CACHE = generics
     return generics
