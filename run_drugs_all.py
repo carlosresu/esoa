@@ -355,6 +355,8 @@ def refresh_drugbank_generics_exports(*, verbose: bool = True) -> tuple[Optional
     for filename in (
         "drugbank_generics_master.csv",
         "drugbank_mixtures_master.csv",
+        "drugbank_brands_master.csv",
+        "drugbank_products_export.csv",
     ):
         source = module_output / filename
         if source.is_file():
