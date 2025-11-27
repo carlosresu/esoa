@@ -1,21 +1,33 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Build the unified drug reference dataset.
+Build the Tier 1 Unified Drug Reference Dataset.
 
-This script:
-1. Loads all source datasets into DuckDB
-2. Normalizes generics (strip salts, handle synonyms)
-3. Extracts form-route validity mapping with provenance
-4. Builds unified dataset with explosion logic
-5. Exports as parquet
+Sources:
+- PNF (Philippine National Formulary)
+- WHO ATC
+- DrugBank generics
+- DrugBank brands/products
+- DrugBank salts
+- DrugBank mixtures
+- FDA drug brands
+
+Priority columns:
+- generic: Single generic name (compound words OK, salts stripped)
+- salt_forms: Pipe-delimited salt forms
+- doses: Pipe-delimited doses (explode by dose if changes ATC/drugbank_id)
+- form: Dosage form (simplified to base, keep release modifiers)
+- route: Administration route (explode by form × route, only valid mappings)
+- brands: Pipe-delimited brand names
+- synonyms: Pipe-delimited synonyms (English, valid coder, not IUPAC-only)
+- mixtures: Pipe-delimited mixture DrugBank IDs (ID1+ID2+ID3 format)
 
 Output files:
-- unified_drug_reference.parquet: Main reference (drugbank_id × atc_code × form × route)
-- form_route_validity.parquet: Valid form-route combinations with provenance
+- unified_drug_reference.parquet: Main reference
 - generics_lookup.parquet: Generic names with synonyms and salts
 - brands_lookup.parquet: Brand → generic mapping
 - mixtures_lookup.parquet: Mixture component combinations
+- form_route_validity.parquet: Valid form-route combinations
 
 Usage:
     python -m pipelines.drugs.scripts.build_unified_reference

@@ -19,7 +19,14 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from .constants import (
     ATC_COMBINATION_PATTERNS,
     CATEGORY_DOSE, CATEGORY_FORM, CATEGORY_GENERIC, CATEGORY_ROUTE, CATEGORY_SALT,
-    FORM_CANON,
+)
+from .form_route_mapping import (
+    FORM_ALIASES,
+    FORM_TO_ROUTE,
+    ROUTE_ALIASES,
+    normalize_form,
+    normalize_route,
+    infer_route_from_form,
 )
 
 
@@ -32,17 +39,17 @@ FORM_EQUIVALENCE_GROUPS = [
     # Solid oral forms - generally interchangeable
     {"TABLET", "CAPSULE", "CAPLET"},
     # Liquid oral forms
-    {"SOLUTION", "SYRUP", "ELIXIR", "ORAL SOLUTION"},
+    {"SOLUTION", "SYRUP", "ELIXIR"},
     # Suspensions
-    {"SUSPENSION", "ORAL SUSPENSION"},
+    {"SUSPENSION"},
     # Topical semi-solids
     {"CREAM", "OINTMENT", "GEL"},
     # Injectable forms
-    {"INJECTION", "SOLUTION FOR INJECTION", "POWDER FOR INJECTION"},
+    {"INJECTION", "AMPULE", "VIAL"},
     # Inhalation forms
-    {"INHALER", "AEROSOL", "MDI", "DPI", "NEBULE"},
+    {"INHALER", "AEROSOL", "AEROSOL, METERED", "NEBULE"},
     # Eye preparations
-    {"EYE DROPS", "OPHTHALMIC SOLUTION", "DROPS"},
+    {"DROPS"},
 ]
 
 # Build lookup: form -> set of equivalent forms
@@ -297,14 +304,13 @@ def select_best_candidate(
         cand_route = str(cand.get("route", "")).upper()
         cand_source = str(cand.get("source", "")).lower()
         
-        # Priority 1: Match type (exact_with_subtype > exact > combo > substring)
+        # Priority 1: Match type (exact > substring > combo)
         match_priority = {
-            "exact_with_subtype": 0,  # Best: base + subtype both match
-            "exact": 1,
-            "combo_match": 2,
-            "substring": 3,
-            "combo_partial": 4,
-        }.get(match_reason, 5)
+            "exact": 0,
+            "combo_match": 1,
+            "substring": 2,
+            "combo_partial": 3,
+        }.get(match_reason, 4)
         
         # Priority 2: ATC type preference
         is_combo_atc = is_combination_atc(cand_atc)

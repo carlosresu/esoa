@@ -48,23 +48,21 @@ def load_synonyms(
     """
     synonyms: Dict[str, str] = {}
     
-    # Add hardcoded synonyms for common variations
+    # Hardcoded synonyms - ONLY for spelling variants not in reference datasets
+    # Regional/alternate spellings that map to the same drug
     hardcoded = {
-        # Regional/spelling variants
-        "ADRENALINE": "EPINEPHRINE",
-        "FRUSEMIDE": "FUROSEMIDE",
-        "LIGNOCAINE": "LIDOCAINE",
-        "PARACETAMOL": "ACETAMINOPHEN",
-        "SALBUTAMOL": "ALBUTEROL",
-        "POLYMYXIN": "POLYMIXIN",
+        # Spelling variants (different spellings of same drug)
+        "POLYMYXIN": "POLYMIXIN",  # X vs I spelling
         "POLYMYXIN B": "POLYMIXIN B",
-        "ALPHA-TOCOPHEROL": "TOCOPHEROL",
-        "TOCOPHEROL": "VITAMIN E",
-        # Combination drug synonyms
+        # Combination drug trade names -> generic components
         "CO-AMOXICLAV": "AMOXICILLIN + CLAVULANIC ACID",
+        "COTRIMOXAZOLE": "SULFAMETHOXAZOLE + TRIMETHOPRIM",
+        # Salt form synonyms
         "POTASSIUM CLAVULANATE": "CLAVULANIC ACID",
         "CLAVULANATE": "CLAVULANIC ACID",
-        "COTRIMOXAZOLE": "SULFAMETHOXAZOLE + TRIMETHOPRIM",
+        # Vitamin synonyms
+        "ALPHA-TOCOPHEROL": "VITAMIN E",
+        "TOCOPHEROL": "VITAMIN E",
         # Common abbreviations
         "VIT": "VITAMIN",
         "VIT A": "VITAMIN A",
@@ -74,6 +72,9 @@ def load_synonyms(
         "VIT E": "VITAMIN E",
         "VIT K": "VITAMIN K",
     }
+    # NOTE: Regional name variants (ADRENALINE->EPINEPHRINE, PARACETAMOL->ACETAMINOPHEN, etc.)
+    # should be in the unified reference dataset, not hardcoded here.
+    # They are valid alternate names, not spelling errors.
     synonyms.update(hardcoded)
     
     # Load from generics lookup
