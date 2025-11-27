@@ -1074,6 +1074,25 @@ class UnifiedTagger:
                         if combo_part and combo_part not in generic_tokens:
                             generic_tokens.append(combo_part)
             
+            # Handle " IN " separator for IV solutions
+            # e.g., "DEXTROSE IN SODIUM CHLORIDE" -> both DEXTROSE and SODIUM CHLORIDE
+            if " IN " in text_upper and "+" not in text_upper:
+                parts = text_upper.split(" IN ")
+                for part in parts:
+                    part = part.strip()
+                    # Extract drug name (before dose/form info)
+                    words = []
+                    skip_words = {"SOLUTION", "BOTTLE", "BAG", "VIAL", "AMPULE", "L", "ML"}
+                    for word in part.split():
+                        if word and not any(c.isdigit() for c in word) and word not in _UNIT_TOKENS and word not in skip_words:
+                            words.append(word)
+                        else:
+                            break
+                    if words:
+                        combo_part = " ".join(words)
+                        if combo_part and combo_part not in generic_tokens:
+                            generic_tokens.append(combo_part)
+            
             all_tokens.append(tokens)
             all_generic_tokens.append(generic_tokens)
         
@@ -1304,11 +1323,14 @@ class UnifiedTagger:
                     input_generics_normalized.add(normalized)
             
             num_input_generics = len(input_generics_normalized)
-            # Only treat as combination if there's a "+" in the original text
-            # "DEXTROSE IN SODIUM CHLORIDE" is NOT a combination
+            # Treat as combination if:
+            # 1. There's a "+" in the text, OR
+            # 2. There's " IN " connecting two chemicals (e.g., "DEXTROSE IN SODIUM CHLORIDE")
+            # 3. Multiple distinct generics are detected
             has_plus_separator = "+" in text
-            is_single_drug = num_input_generics == 1 or not has_plus_separator
-            is_combination = num_input_generics > 1 and has_plus_separator
+            has_in_separator = " IN " in text.upper() and num_input_generics > 1
+            is_combination = num_input_generics > 1 and (has_plus_separator or has_in_separator)
+            is_single_drug = num_input_generics == 1 or (num_input_generics > 1 and not is_combination)
             
             for cand in candidates:
                 cand_generic = _as_str_or_empty(cand.get("generic_name")).upper()
