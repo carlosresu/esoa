@@ -269,6 +269,66 @@ def split_with_parentheses(text: str) -> List[str]:
     return [tok.upper() for tok in cleaned if tok]
 
 
+def _detect_compound_salts(tokens: List[str], text: str) -> List[str]:
+    """
+    Detect compound salts like SODIUM CHLORIDE, CALCIUM CARBONATE.
+    
+    If a salt element (SODIUM, CALCIUM, etc.) is immediately followed by
+    a salt anion (CHLORIDE, CARBONATE, etc.), treat them as a single token.
+    """
+    # Salt cations (first part)
+    SALT_CATIONS = {
+        "SODIUM", "POTASSIUM", "CALCIUM", "MAGNESIUM", "ZINC", "IRON",
+        "FERROUS", "FERRIC", "ALUMINUM", "ALUMINIUM", "LITHIUM", "BARIUM",
+        "COPPER", "MANGANESE", "AMMONIUM",
+    }
+    
+    # Salt anions (second part)
+    SALT_ANIONS = {
+        "CHLORIDE", "SULFATE", "SULPHATE", "PHOSPHATE", "CARBONATE",
+        "BICARBONATE", "HYDROXIDE", "OXIDE", "CITRATE", "LACTATE",
+        "GLUCONATE", "ACETATE", "NITRATE", "FLUORIDE", "IODIDE", "BROMIDE",
+    }
+    
+    # Stopwords that can bridge compound salts
+    BRIDGE_WORDS = {"AS", "IN", "OF"}
+    
+    text_upper = text.upper()
+    result = []
+    i = 0
+    
+    while i < len(tokens):
+        tok = tokens[i].upper()
+        
+        # Check if this is a salt cation
+        if tok in SALT_CATIONS and i + 1 < len(tokens):
+            next_tok = tokens[i + 1].upper()
+            
+            # Direct follow: SODIUM CHLORIDE
+            if next_tok in SALT_ANIONS:
+                compound = f"{tok} {next_tok}"
+                # Verify it appears as compound in original text
+                if compound in text_upper:
+                    result.append(compound)
+                    i += 2
+                    continue
+            
+            # Bridged: SODIUM AS CHLORIDE (rare but possible)
+            if next_tok in BRIDGE_WORDS and i + 2 < len(tokens):
+                after_bridge = tokens[i + 2].upper()
+                if after_bridge in SALT_ANIONS:
+                    compound = f"{tok} {after_bridge}"
+                    if compound in text_upper or f"{tok} {next_tok} {after_bridge}" in text_upper:
+                        result.append(compound)
+                        i += 3
+                        continue
+        
+        result.append(tok)
+        i += 1
+    
+    return result
+
+
 def normalize_tokens(
     tokens: List[str],
     drop_stopwords: bool = False,
@@ -662,11 +722,11 @@ class UnifiedTagger:
         input_generic_count = sum(input_categories.get(CATEGORY_GENERIC, Counter()).values())
         ref_generic_count = sum(ref_categories.get(CATEGORY_GENERIC, Counter()).values())
         
-        # Generic overlap - also check synonyms
+        # Generic overlap - normalize with synonyms (NO PENALTY for synonyms)
         input_generics = set(input_categories.get(CATEGORY_GENERIC, {}).keys())
         ref_generics = set(ref_categories.get(CATEGORY_GENERIC, {}).keys())
         
-        # Normalize both sides with synonyms for comparison
+        # Normalize both sides with synonyms - synonyms are equivalent, no penalty
         input_generics_normalized = set()
         for g in input_generics:
             input_generics_normalized.add(self._apply_synonyms(g))
@@ -674,6 +734,7 @@ class UnifiedTagger:
         for g in ref_generics:
             ref_generics_normalized.add(self._apply_synonyms(g))
         
+        # Count overlap using normalized forms
         generic_overlap = len(input_generics_normalized & ref_generics_normalized)
         
         # If no direct overlap, check if input is contained in ref or vice versa
@@ -689,22 +750,35 @@ class UnifiedTagger:
         # Special case: if the ref_generic matches the full input text (for pure salts, multi-word)
         if generic_overlap == 0 and ref_generic:
             ref_generic_upper = ref_generic.upper()
-            # Check if any input generic is part of the ref generic name
-            for ig in input_generics:
-                if ig in ref_generic_upper:
+            ref_generic_normalized = self._apply_synonyms(ref_generic_upper)
+            # Check if any input generic (normalized) matches ref generic (normalized)
+            for ig in input_generics_normalized:
+                if ig in ref_generic_normalized or ref_generic_normalized in ig:
                     generic_overlap = 1
                     break
         
         if GENERIC_MATCH_REQUIRED and input_generic_count > 0 and generic_overlap == 0:
             return -1000, 0, "no_generic_overlap"
         
+        # For scoring, use the NORMALIZED generic count (synonyms count as matches)
+        # This ensures PARACETAMOL matching ACETAMINOPHEN gets full score
+        input_generic_count = len(input_generics_normalized)
+        ref_generic_count = len(ref_generics_normalized)
+        
         # Calculate category scores
         primary_score = 0.0
         for cat, weight in PRIMARY_WEIGHTS.items():
             input_counts = input_categories.get(cat, Counter())
             ref_counts = ref_categories.get(cat, Counter())
-            match_count = sum((input_counts & ref_counts).values())
-            mismatch = max(0, sum(ref_counts.values()) - match_count)
+            
+            if cat == CATEGORY_GENERIC:
+                # For generics, use normalized comparison (synonyms are equivalent)
+                # Count overlap based on normalized forms, not raw tokens
+                match_count = generic_overlap  # Already computed above with synonym normalization
+                mismatch = max(0, ref_generic_count - match_count)
+            else:
+                match_count = sum((input_counts & ref_counts).values())
+                mismatch = max(0, sum(ref_counts.values()) - match_count)
             
             mismatch_penalty = mismatch
             if cat == CATEGORY_GENERIC:
@@ -745,6 +819,10 @@ class UnifiedTagger:
         
         # Tokenize
         raw_tokens = split_with_parentheses(text)
+        
+        # Detect compound salts BEFORE normalization
+        raw_tokens = _detect_compound_salts(raw_tokens, text)
+        
         tokens = normalize_tokens(raw_tokens, drop_stopwords=True, multiword_generics=self.multiword_generics)
         
         if not tokens:
@@ -883,6 +961,7 @@ class UnifiedTagger:
         df: pd.DataFrame,
         text_column: str = "Drug Description",
         id_column: Optional[str] = None,
+        n_jobs: int = -1,
     ) -> pd.DataFrame:
         """
         Tag all drug descriptions in a DataFrame.
@@ -891,6 +970,7 @@ class UnifiedTagger:
             df: Input DataFrame
             text_column: Column containing drug descriptions
             id_column: Optional ID column to preserve
+            n_jobs: Number of parallel jobs (-1 = all cores)
         
         Returns:
             DataFrame with tagging results
@@ -898,24 +978,218 @@ class UnifiedTagger:
         if not self._loaded:
             self.load()
         
-        results = []
         total = len(df)
+        texts = df[text_column].fillna("").astype(str).tolist()
+        ids = df[id_column].tolist() if id_column and id_column in df.columns else list(range(total))
         
-        for idx, row in df.iterrows():
-            text = _as_str_or_empty(row.get(text_column))
-            result = self.tag_single(text)
-            
-            if id_column and id_column in row:
-                result["id"] = row[id_column]
-            result["input_text"] = text
-            result["row_idx"] = idx
-            
-            results.append(result)
-            
-            if self.verbose and (idx + 1) % 500 == 0:
-                self._log(f"  Processed {idx + 1:,}/{total:,} rows")
+        # Use batch processing for better performance
+        results = self._tag_batch(texts, ids)
         
         return pd.DataFrame(results)
+    
+    def _tag_batch(self, texts: List[str], ids: List[Any]) -> List[Dict]:
+        """
+        Tag a batch of texts efficiently.
+        
+        Uses vectorized operations where possible.
+        """
+        results = []
+        total = len(texts)
+        
+        # Pre-compute all tokens
+        all_tokens = []
+        all_generic_tokens = []
+        
+        for i, text in enumerate(texts):
+            raw_tokens = split_with_parentheses(text)
+            raw_tokens = _detect_compound_salts(raw_tokens, text)
+            tokens = normalize_tokens(raw_tokens, drop_stopwords=True, multiword_generics=self.multiword_generics)
+            
+            categories = categorize_tokens(tokens)
+            generic_tokens = list(categories.get(CATEGORY_GENERIC, {}).keys())
+            
+            # Check for multi-word generics and pure salts
+            text_upper = text.upper()
+            for mwg in self.multiword_generics:
+                if mwg in text_upper and mwg not in generic_tokens:
+                    generic_tokens.append(mwg)
+            for psc in PURE_SALT_COMPOUNDS:
+                if psc in text_upper and psc not in generic_tokens:
+                    generic_tokens.append(psc)
+            
+            all_tokens.append(tokens)
+            all_generic_tokens.append(generic_tokens)
+        
+        # Collect all unique generic tokens for batch lookup
+        unique_generics = set()
+        for gt in all_generic_tokens:
+            for g in gt:
+                if g.upper() in PURE_SALT_COMPOUNDS:
+                    unique_generics.add(g.upper())
+                else:
+                    base, _ = self._strip_salt(g)
+                    unique_generics.add(base)
+                # Also add synonym-normalized version
+                unique_generics.add(self._apply_synonyms(g))
+        
+        # Batch lookup all generics at once
+        generic_cache = {}
+        if unique_generics and self.con:
+            for token in unique_generics:
+                if token in generic_cache:
+                    continue
+                query = """
+                    SELECT DISTINCT generic_name, drugbank_id, atc_code, source
+                    FROM generics
+                    WHERE UPPER(generic_name) = ?
+                       OR UPPER(generic_name) LIKE ?
+                    LIMIT 10
+                """
+                try:
+                    df_result = self.con.execute(query, [token, f"%{token}%"]).fetchdf()
+                    generic_cache[token] = df_result.to_dict("records")
+                except Exception:
+                    generic_cache[token] = []
+        
+        # Now process each text using the cache
+        for i, (text, tokens, generic_tokens) in enumerate(zip(texts, all_tokens, all_generic_tokens)):
+            if not tokens:
+                results.append({
+                    "id": ids[i],
+                    "input_text": text,
+                    "row_idx": i,
+                    "atc_code": None,
+                    "drugbank_id": None,
+                    "generic_name": None,
+                    "match_score": 0,
+                    "match_reason": "no_tokens",
+                    "sources": "",
+                })
+                continue
+            
+            # Get cached matches
+            stripped_generics = []
+            for g in generic_tokens:
+                if g.upper() in PURE_SALT_COMPOUNDS:
+                    stripped_generics.append(g.upper())
+                else:
+                    base, _ = self._strip_salt(g)
+                    stripped_generics.append(base)
+            
+            # Collect matches from cache
+            generic_matches = []
+            for sg in stripped_generics:
+                if sg in generic_cache:
+                    generic_matches.extend(generic_cache[sg])
+                # Also check synonym
+                syn = self._apply_synonyms(sg)
+                if syn in generic_cache and syn != sg:
+                    generic_matches.extend(generic_cache[syn])
+            
+            # Deduplicate
+            seen = set()
+            unique_matches = []
+            for m in generic_matches:
+                key = m.get("generic_name", "")
+                if key not in seen:
+                    seen.add(key)
+                    unique_matches.append(m)
+            
+            if not unique_matches:
+                results.append({
+                    "id": ids[i],
+                    "input_text": text,
+                    "row_idx": i,
+                    "atc_code": None,
+                    "drugbank_id": None,
+                    "generic_name": "|".join(stripped_generics) if stripped_generics else None,
+                    "match_score": 0,
+                    "match_reason": "no_candidates",
+                    "sources": "",
+                })
+                continue
+            
+            # Build candidates
+            categories = categorize_tokens(tokens)
+            candidates = []
+            for gm in unique_matches:
+                atc_codes = _as_str_or_empty(gm.get("atc_code")).split("|")
+                for atc in atc_codes:
+                    if atc:
+                        candidates.append({
+                            "atc_code": atc,
+                            "drugbank_id": gm.get("drugbank_id"),
+                            "generic_name": gm.get("generic_name"),
+                            "source": gm.get("source"),
+                            "form": "",
+                            "route": "",
+                            "doses": "",
+                        })
+            
+            if not candidates:
+                results.append({
+                    "id": ids[i],
+                    "input_text": text,
+                    "row_idx": i,
+                    "atc_code": None,
+                    "drugbank_id": None,
+                    "generic_name": "|".join(stripped_generics) if stripped_generics else None,
+                    "match_score": 0,
+                    "match_reason": "no_candidates",
+                    "sources": "",
+                })
+                continue
+            
+            # Score candidates
+            best_score = -float("inf")
+            best_candidate = None
+            is_single_drug = len(set(stripped_generics)) == 1
+            
+            for cand in candidates:
+                primary, secondary, reason = self._score_candidate(tokens, categories, cand)
+                total_score = primary + secondary * 0.1
+                
+                # ATC preference
+                is_combo_atc = _is_combination_atc(_as_str_or_empty(cand.get("atc_code")))
+                if is_single_drug and is_combo_atc:
+                    total_score -= 5
+                elif not is_single_drug and not is_combo_atc:
+                    total_score -= 5
+                
+                if total_score > best_score:
+                    best_score = total_score
+                    best_candidate = cand
+            
+            if best_candidate:
+                results.append({
+                    "id": ids[i],
+                    "input_text": text,
+                    "row_idx": i,
+                    "atc_code": best_candidate.get("atc_code"),
+                    "drugbank_id": best_candidate.get("drugbank_id"),
+                    "generic_name": best_candidate.get("generic_name"),
+                    "match_score": best_score,
+                    "match_reason": "matched",
+                    "sources": best_candidate.get("source", ""),
+                })
+            else:
+                results.append({
+                    "id": ids[i],
+                    "input_text": text,
+                    "row_idx": i,
+                    "atc_code": None,
+                    "drugbank_id": None,
+                    "generic_name": None,
+                    "match_score": 0,
+                    "match_reason": "no_match",
+                    "sources": "",
+                })
+            
+            # Progress logging
+            if self.verbose and (i + 1) % 1000 == 0:
+                self._log(f"  Processed {i + 1:,}/{total:,} rows")
+        
+        return results
     
     def close(self):
         """Close DuckDB connection."""
