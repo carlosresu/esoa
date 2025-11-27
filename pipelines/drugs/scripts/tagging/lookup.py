@@ -64,6 +64,10 @@ def load_synonyms(
         "LIGNOCAINE": "LIDOCAINE",
         "PARACETAMOL": "ACETAMINOPHEN",
         "SALBUTAMOL": "ALBUTEROL",
+        "POLYMYXIN": "POLYMIXIN",
+        "POLYMYXIN B": "POLYMIXIN B",
+        "ALPHA-TOCOPHEROL": "TOCOPHEROL",
+        "TOCOPHEROL": "VITAMIN E",
         # Common abbreviations
         "VIT": "VITAMIN",
         "VIT A": "VITAMIN A",
