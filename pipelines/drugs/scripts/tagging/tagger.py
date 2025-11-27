@@ -95,6 +95,8 @@ class UnifiedTagger:
             "SODIUM CHLORIDE", "POTASSIUM CHLORIDE", "CALCIUM CHLORIDE",
             "MAGNESIUM SULFATE", "FERROUS SULFATE", "ZINC SULFATE",
             "INSULIN GLARGINE", "INSULIN LISPRO", "INSULIN ASPART",
+            # Vitamin variants with plural forms
+            "VITAMINS INTRAVENOUS, FAT-SOLUBLE", "VITAMINS INTRAVENOUS, WATER-SOLUBLE",
         })
         
         self._loaded = True
@@ -297,6 +299,11 @@ class UnifiedTagger:
             )
             
             if best:
+                # Use reference_text if available, otherwise use generic_name; always uppercase
+                ref_text = best.get("reference_text") or best.get("generic_name") or ""
+                if ref_text:
+                    ref_text = str(ref_text).upper()
+                
                 results.append({
                     "id": ids[i],
                     "input_text": text,
@@ -304,7 +311,7 @@ class UnifiedTagger:
                     "atc_code": best.get("atc_code"),
                     "drugbank_id": best.get("drugbank_id"),
                     "generic_name": best.get("generic_name"),
-                    "reference_text": best.get("reference_text", ""),
+                    "reference_text": ref_text,
                     "match_score": 1,
                     "match_reason": "matched",
                     "sources": best.get("source", ""),

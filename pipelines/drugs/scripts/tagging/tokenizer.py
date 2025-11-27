@@ -192,6 +192,17 @@ def extract_generic_tokens(
     if multiword_generics is None:
         multiword_generics = set()
     
+    # Check for multiword generics with commas BEFORE tokenizing
+    text_upper = text.upper()
+    matched_multiword = []
+    for mw in multiword_generics:
+        if mw in text_upper:
+            # Store with position for ordering
+            pos = text_upper.find(mw)
+            matched_multiword.append((pos, mw))
+    # Sort by position in text
+    matched_multiword.sort(key=lambda x: x[0])
+    
     # Tokenize
     raw_tokens = split_with_parentheses(text)
     raw_tokens = detect_compound_salts(raw_tokens, text)
@@ -200,6 +211,20 @@ def extract_generic_tokens(
     # Categorize
     categories = categorize_tokens(tokens)
     generic_tokens = list(categories.get(CATEGORY_GENERIC, {}).keys())
+    
+    # Add matched multiword generics that may have been split (in order of appearance)
+    for pos, mw in matched_multiword:
+        if mw not in generic_tokens:
+            # Insert at appropriate position based on text order
+            inserted = False
+            for i, gt in enumerate(generic_tokens):
+                gt_pos = text_upper.find(gt)
+                if gt_pos > pos:
+                    generic_tokens.insert(i, mw)
+                    inserted = True
+                    break
+            if not inserted:
+                generic_tokens.append(mw)
     
     # Add pure salt compounds that appear in text
     text_upper = text.upper()
@@ -224,25 +249,27 @@ def extract_generic_tokens(
                     generic_tokens.append(combo_part)
     
     # Handle " IN " separator for IV solutions
+    # Reorder generics so active ingredient (before IN) comes first
     if " IN " in text_upper and "+" not in text_upper:
         parts = text_upper.split(" IN ", 1)
         if len(parts) == 2:
             skip_words = {"SOLUTION", "BOTTLE", "BAG", "VIAL", "AMPULE", "L", "ML", "WATER"}
             
-            # Extract active ingredient
+            # Extract active ingredient (before IN)
+            # Skip leading dose tokens (e.g., "5%")
             active_words = []
             for word in parts[0].strip().split():
-                if word and not any(c.isdigit() for c in word) and word not in UNIT_TOKENS and word not in skip_words:
+                # Skip dose tokens at the start
+                if any(c.isdigit() for c in word) or word in UNIT_TOKENS:
+                    continue
+                if word in skip_words:
+                    continue
+                if word:
                     active_words.append(word)
-                else:
-                    break
             
-            if active_words:
-                active_name = " ".join(active_words)
-                if active_name not in generic_tokens:
-                    generic_tokens.insert(0, active_name)
+            active_name = " ".join(active_words) if active_words else None
             
-            # Extract solution base
+            # Extract solution base (after IN)
             base_words = []
             for word in parts[1].strip().split():
                 if word and not any(c.isdigit() for c in word) and word not in UNIT_TOKENS and word not in skip_words:
@@ -250,10 +277,24 @@ def extract_generic_tokens(
                 else:
                     break
             
-            if base_words:
-                base_name = " ".join(base_words)
-                if base_name not in generic_tokens:
-                    generic_tokens.append(base_name)
+            base_name = " ".join(base_words) if base_words else None
+            
+            # Reorder: active first, then base, then others
+            if active_name or base_name:
+                new_order = []
+                if active_name:
+                    # Move active to front if it exists in list
+                    if active_name in generic_tokens:
+                        generic_tokens.remove(active_name)
+                    new_order.append(active_name)
+                if base_name:
+                    # Move base to second position if it exists in list
+                    if base_name in generic_tokens:
+                        generic_tokens.remove(base_name)
+                    new_order.append(base_name)
+                # Add remaining generics
+                new_order.extend(generic_tokens)
+                generic_tokens = new_order
     
     return tokens, generic_tokens
 
@@ -280,6 +321,17 @@ def strip_salt_suffix(
     for suffix in sorted(salt_suffixes, key=len, reverse=True):
         if generic_upper.endswith(" " + suffix):
             base = generic_upper[:-len(suffix) - 1].strip()
+            # Also strip trailing "AS" (e.g., "AMLODIPINE AS BESILATE" -> "AMLODIPINE")
+            if base.endswith(" AS"):
+                base = base[:-3].strip()
             return base, suffix
+    
+    # Handle "X AS Y" pattern where Y is a salt
+    if " AS " in generic_upper:
+        parts = generic_upper.split(" AS ", 1)
+        if len(parts) == 2:
+            potential_salt = parts[1].strip()
+            if potential_salt in salt_suffixes:
+                return parts[0].strip(), potential_salt
     
     return generic_upper, None

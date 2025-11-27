@@ -4,6 +4,7 @@ Candidate scoring functions for drug tagging.
 
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .constants import (
@@ -123,12 +124,14 @@ def select_best_candidate(
     for cand in candidates:
         cand_generic = str(cand.get("generic_name", "")).upper()
         cand_generic_normalized = apply_synonyms_fn(cand_generic)
-        cand_is_combo = " + " in cand_generic
+        # Check for combination using multiple delimiters
+        cand_is_combo = " + " in cand_generic or " AND " in cand_generic or ", " in cand_generic
         
         # For combinations: check if candidate matches all input generics
         if is_combination:
             if cand_is_combo:
-                cand_parts = set(p.strip() for p in cand_generic.split(" + "))
+                # Split on multiple delimiters
+                cand_parts = set(p.strip() for p in re.split(r'\s*\+\s*|\s+AND\s+|,\s*', cand_generic) if p.strip())
                 input_base_parts = set()
                 for ig in input_generics_normalized:
                     base = ig
@@ -139,8 +142,15 @@ def select_best_candidate(
                     if base:
                         input_base_parts.add(base)
                 
-                if not input_base_parts.issubset(cand_parts) and not cand_parts.issubset(input_base_parts):
-                    if not all(any(cp in ig or ig in cp for ig in input_base_parts) for cp in cand_parts):
+                # Check if there's overlap between input and candidate parts
+                overlap = input_base_parts & cand_parts
+                if not overlap:
+                    # Try substring matching
+                    has_match = any(
+                        any(cp in ig or ig in cp for ig in input_base_parts)
+                        for cp in cand_parts
+                    )
+                    if not has_match:
                         continue
             else:
                 continue
@@ -152,16 +162,29 @@ def select_best_candidate(
                 if input_generic not in cand_generic and cand_generic not in input_generic:
                     continue
         
-        # For IV solutions: match on active ingredient
+        # For IV solutions (X IN Y pattern): prefer the first ingredient (active)
+        # e.g., "5% DEXTROSE IN SODIUM CHLORIDE" -> prefer DEXTROSE over SODIUM CHLORIDE
         if is_iv_solution and stripped_generics:
+            # First ingredient is the active, second is the vehicle
             active = stripped_generics[0].upper() if stripped_generics else None
+            vehicle = stripped_generics[1].upper() if len(stripped_generics) > 1 else None
+            
             if active:
                 active_normalized = apply_synonyms_fn(active)
-                if (active_normalized not in cand_generic and 
-                    cand_generic not in active_normalized and
-                    active_normalized != cand_generic_normalized and
-                    active not in cand_generic):
-                    continue
+                # Skip candidates that match only the vehicle, not the active
+                if vehicle:
+                    vehicle_normalized = apply_synonyms_fn(vehicle)
+                    is_vehicle_match = (vehicle_normalized in cand_generic or 
+                                       cand_generic in vehicle_normalized or
+                                       vehicle_normalized == cand_generic_normalized or
+                                       vehicle in cand_generic)
+                    is_active_match = (active_normalized in cand_generic or 
+                                      cand_generic in active_normalized or
+                                      active_normalized == cand_generic_normalized or
+                                      active in cand_generic)
+                    # Skip if matches vehicle but not active
+                    if is_vehicle_match and not is_active_match:
+                        continue
         
         # Score
         primary, secondary, reason = score_candidate(input_tokens, input_categories, cand)

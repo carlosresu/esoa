@@ -46,17 +46,46 @@ def load_synonyms(
     
     Synonyms are rows where generic_name != canonical_name.
     """
-    if "canonical_name" not in generics_df.columns:
-        return {}
+    synonyms: Dict[str, str] = {}
     
-    synonym_rows = generics_df[
-        generics_df["generic_name"].str.upper() != generics_df["canonical_name"].str.upper()
-    ]
+    # Add hardcoded synonyms for common variations
+    hardcoded = {
+        # Plural -> singular
+        "VITAMINS": "VITAMIN",
+        "VITAMINS FAT-SOLUBLE": "VITAMIN FAT-SOLUBLE",
+        "VITAMINS WATER-SOLUBLE": "VITAMIN WATER-SOLUBLE",
+        "VITAMINS INTRAVENOUS, FAT-SOLUBLE": "VITAMIN INTRAVENOUS, FAT-SOLUBLE",
+        "VITAMINS INTRAVENOUS, WATER-SOLUBLE": "VITAMIN INTRAVENOUS, WATER-SOLUBLE",
+        "VITAMINS INTRAVENOUS FAT-SOLUBLE": "VITAMIN INTRAVENOUS, FAT-SOLUBLE",
+        "VITAMINS INTRAVENOUS WATER-SOLUBLE": "VITAMIN INTRAVENOUS, WATER-SOLUBLE",
+        # Regional/spelling variants
+        "ADRENALINE": "EPINEPHRINE",
+        "FRUSEMIDE": "FUROSEMIDE",
+        "LIGNOCAINE": "LIDOCAINE",
+        "PARACETAMOL": "ACETAMINOPHEN",
+        "SALBUTAMOL": "ALBUTEROL",
+        # Common abbreviations
+        "VIT": "VITAMIN",
+        "VIT A": "VITAMIN A",
+        "VIT B": "VITAMIN B",
+        "VIT C": "VITAMIN C",
+        "VIT D": "VITAMIN D",
+        "VIT E": "VITAMIN E",
+        "VIT K": "VITAMIN K",
+    }
+    synonyms.update(hardcoded)
     
-    return dict(zip(
-        synonym_rows["generic_name"].str.upper(),
-        synonym_rows["canonical_name"].str.upper()
-    ))
+    # Load from generics lookup
+    if "canonical_name" in generics_df.columns:
+        synonym_rows = generics_df[
+            generics_df["generic_name"].str.upper() != generics_df["canonical_name"].str.upper()
+        ]
+        synonyms.update(dict(zip(
+            synonym_rows["generic_name"].str.upper(),
+            synonym_rows["canonical_name"].str.upper()
+        )))
+    
+    return synonyms
 
 
 def apply_synonym(
@@ -209,9 +238,29 @@ def build_combination_keys(
     if len(base_parts) < 2:
         return []
     
-    # Build keys
-    keys = []
-    keys.append(" + ".join(sorted(set(base_parts))))
-    keys.append(" + ".join(base_parts))
+    # Deduplicate while preserving order
+    seen = set()
+    unique_parts = []
+    for p in base_parts:
+        if p not in seen:
+            seen.add(p)
+            unique_parts.append(p)
     
-    return list(set(keys))
+    if len(unique_parts) < 2:
+        return []
+    
+    # Build keys in multiple formats
+    keys = set()
+    sorted_parts = sorted(unique_parts)
+    
+    # Format: "A + B" (sorted)
+    keys.add(" + ".join(sorted_parts))
+    # Format: "A AND B" (sorted, WHO style)
+    keys.add(" AND ".join(sorted_parts))
+    # Format: "B AND A" (reverse sorted, WHO style)
+    keys.add(" AND ".join(sorted_parts[::-1]))
+    # Format: "A, B AND C" (WHO style for 3+ components)
+    if len(sorted_parts) > 2:
+        keys.add(", ".join(sorted_parts[:-1]) + " AND " + sorted_parts[-1])
+    
+    return list(keys)
