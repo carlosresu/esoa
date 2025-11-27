@@ -1351,7 +1351,18 @@ def _score_annex_row(
     norm_desc = annex_row.get("norm_description") or ""
     generic_hits = annex_row.get("generic_hits") or set()
     if len(generic_hits) >= 2:
-        component_key = "||".join(sorted(generic_hits))
+        # Filter out substrings - keep only the longest matches
+        # e.g., if we have {"aluminum", "aluminum hydroxide"}, keep only "aluminum hydroxide"
+        filtered_hits = set()
+        for hit in generic_hits:
+            is_substring = any(
+                hit != other and hit in other
+                for other in generic_hits
+            )
+            if not is_substring:
+                filtered_hits.add(hit)
+        
+        component_key = "||".join(sorted(filtered_hits))
         mixture_rows = mixture_lookup.get(component_key, [])
         for mix in mixture_rows:
             mix_id = _as_str_or_empty(mix.get("mixture_drugbank_id")) or _as_str_or_empty(mix.get("mixture_id"))

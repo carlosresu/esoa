@@ -66,7 +66,8 @@ def run_part_2(workers: int = 8, use_threads: bool = False, standalone: bool = T
     mixture_path = DRUGS_DIR / "drugbank_mixtures_master.csv"
     
     annex_df = run_with_spinner("Load Annex F source", lambda: _read_table(annex_path, required=True))
-    annex_df = run_with_spinner("Normalize Annex F descriptions", lambda: _normalize_annex_df(annex_df))
+    brand_patterns: list = []  # Brand patterns not used in current implementation
+    annex_df = run_with_spinner("Normalize Annex F descriptions", lambda: _normalize_annex_df(annex_df, brand_patterns))
     mixture_df = run_with_spinner("Load DrugBank mixtures", lambda: _read_table(mixture_path, required=False))
     pnf_df = run_with_spinner("Load PNF lexicon", lambda: _read_table(pnf_path, required=False))
     drugbank_df = run_with_spinner("Load DrugBank generics", lambda: _read_table(drugbank_path, required=True))
@@ -94,7 +95,6 @@ def run_part_2(workers: int = 8, use_threads: bool = False, standalone: bool = T
     )
     
     # Prepare Annex F records
-    brand_patterns = []  # Not used in current implementation
     annex_records = run_with_spinner(
         "Prepare Annex F records",
         lambda: _precompute_annex_records(annex_df, brand_patterns, generic_phrases, generic_atc_map),
