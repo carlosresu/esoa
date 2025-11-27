@@ -113,13 +113,14 @@ def run_part_1(
     elif standalone:
         print("[skip] PNF preparation")
 
-    # 6. Annex F (just verify it exists)
+    # 6. Annex F (just verify it exists in raw/)
     def _verify_annex_f() -> Path:
-        annex_path = inputs_dir / "annex_f.csv"
+        raw_dir = project_root / "raw" / "drugs"
+        annex_path = raw_dir / "annex_f.csv"
         if not annex_path.is_file():
             raise FileNotFoundError(
                 f"Annex F CSV not found at {annex_path}. "
-                "Please provide a normalized annex_f.csv in inputs/drugs/."
+                "Please provide a normalized annex_f.csv in raw/drugs/."
             )
         _ensure_parquet_sibling(annex_path, verbose=False)
         return annex_path

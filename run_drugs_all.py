@@ -269,7 +269,8 @@ def _find_latest_file(directory: Path, pattern: str) -> Optional[Path]:
 def refresh_pnf(esoa_hint: Optional[str], *, verbose: bool = True) -> Path:
     """Run pipelines.drugs.scripts.prepare_drugs against the current PNF + eSOA inputs."""
     inputs_dir = _ensure_inputs_dir()
-    pnf_csv = _ensure_file(inputs_dir / "pnf.csv", "PNF source CSV")
+    raw_dir = PROJECT_ROOT / "raw" / "drugs"
+    pnf_csv = _ensure_file(raw_dir / "pnf.csv", "PNF source CSV (in raw/drugs/)")
     esoa_csv = _resolve_esoa_source(inputs_dir, esoa_hint)
     if verbose:
         print(f"[pnf] Preparing PNF dataset from {pnf_csv} and {esoa_csv}")

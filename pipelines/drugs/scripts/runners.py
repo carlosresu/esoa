@@ -19,9 +19,11 @@ from .tagging import UnifiedTagger
 
 # Default paths
 PROJECT_DIR = Path(__file__).resolve().parents[3]
+RAW_DIR = PROJECT_DIR / "raw" / "drugs"
 INPUTS_DIR = PROJECT_DIR / "inputs" / "drugs"
 OUTPUTS_DIR = PROJECT_DIR / "outputs" / "drugs"
 
+PIPELINE_RAW_DIR = Path(os.environ.get("PIPELINE_RAW_DIR", RAW_DIR))
 PIPELINE_INPUTS_DIR = Path(os.environ.get("PIPELINE_INPUTS_DIR", INPUTS_DIR))
 PIPELINE_OUTPUTS_DIR = Path(os.environ.get("PIPELINE_OUTPUTS_DIR", OUTPUTS_DIR))
 
@@ -37,7 +39,7 @@ def run_annex_f_tagging(
     Returns dict with results summary.
     """
     if annex_path is None:
-        annex_path = PIPELINE_INPUTS_DIR / "annex_f.csv"
+        annex_path = PIPELINE_RAW_DIR / "annex_f.csv"
     if output_path is None:
         output_path = PIPELINE_OUTPUTS_DIR / "annex_f_with_atc.csv"
     
