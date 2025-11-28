@@ -113,13 +113,10 @@
 
 **Completed (Nov 28, 2025):** Analysis found 181 common unknowns:
 - Added 15 missing salt tokens (ACETONIDE, BENZATHINE, CLAVULANATE, etc.)
-- Added 120 missing stopwords (ADULT, AQUEOUS, CHEWABLE, etc.)
-- Identified 39 drug names needing synonyms (for Phase 3):
-  - International: ACICLOVIR, CEFALEXIN, CHLORPHENAMINE, COTRIMOXAZOLE
-  - Philippine: LAGUNDI, SAMBONG
-  - Common: PARACETAMOL, SALBUTAMOL, ASPIRIN, INSULIN, PENICILLIN
-  - Vitamins: MULTIVITAMINS, RETINOL, PHYTOMENADIONE
-  - Others: CARBACHOL, DICYCLOVERINE, DILOXANIDE, EPOETIN, etc.
+- Added ~90 stopwords (ADULT, AQUEOUS, CHEWABLE, etc.) - refined to exclude drug components
+- **CORRECTION:** Most "unknowns" were actually in DrugBank/WHO/PNF but analysis only checked `name` column
+- Actual unknowns are **partial tokens from multi-word drug names** (e.g., MEFENAMIC from MEFENAMIC ACID)
+- These should be handled by multi-word generic preservation (AGENTS.md #15), not synonyms
 
 ---
 
