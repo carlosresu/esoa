@@ -331,12 +331,9 @@ def select_best_candidate(
             else:
                 form_priority = 2  # Different form
         
-        # Priority 4: Source preference (pnf > who > drugbank)
-        source_priority = {
-            "pnf": 0,
-            "who": 1,
-            "drugbank": 2,
-        }.get(cand_source.split("|")[0] if cand_source else "", 3)
+        # Priority 4: No source preference (all sources are equal)
+        # Sources are tracked for provenance but don't affect ranking
+        source_priority = 0
         
         return (match_priority, atc_priority, form_priority, source_priority, cand_atc)
     

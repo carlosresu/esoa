@@ -491,6 +491,259 @@ Some FDA rows have brand/generic swapped. Detect by:
 
 ---
 
+## State of the Pipeline
+
+### Current Metrics (Nov 27, 2025)
+
+| Metric | Value | Status |
+|--------|-------|--------|
+| **Annex F → ATC** | 94.1% (2,284/2,427) | ✅ Good |
+| **Annex F → DrugBank ID** | 73.6% (1,787/2,427) | ⚠️ Needs improvement |
+| **ESOA → ATC** | 55.6% (143,900/258,878) | ⚠️ Needs improvement |
+| **ESOA → Drug Code** | 40.5% (104,800/258,878) | ⚠️ Target: 60%+ |
+
+### Pipeline Parts Status
+
+#### Part 1: Prepare Dependencies ✅ WORKING
+**Script:** `run_drugs_pt_1_prepare_dependencies.py`
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| WHO ATC refresh | ✅ Working | Via `dependencies/atcd/` R scripts |
+| DrugBank refresh | ✅ Working | Via `dependencies/drugbank_generics/` R scripts |
+| FDA brand map | ✅ Working | Via `pipelines/drugs/scripts/brand_map_drugs.py` |
+| FDA food catalog | ✅ Working | Via `dependencies/fda_ph_scraper/` |
+| PNF preparation | ✅ Working | Via `pipelines/drugs/scripts/prepare_drugs.py` |
+| Annex F verification | ✅ Working | Checks `raw/drugs/annex_f.csv` exists |
+
+**Known Issues:**
+- ESOA part detection (`esoa_pt_*.csv`) not working properly - currently manually combined
+
+---
+
+#### Part 2: Tag Annex F ✅ WORKING
+**Script:** `run_drugs_pt_2_annex_f_atc.py` → `pipelines/drugs/scripts/runners.py`
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| UnifiedTagger | ✅ Working | Uses DuckDB for lookups |
+| Generic matching | ✅ Working | Synonym normalization, salt stripping |
+| ATC assignment | ✅ Working | 94.1% coverage |
+| DrugBank ID assignment | ⚠️ Partial | 73.6% coverage |
+
+**Output:** `outputs/drugs/annex_f_with_atc.csv`
+
+---
+
+#### Part 3: Tag ESOA ⚠️ NEEDS IMPROVEMENT
+**Script:** `run_drugs_pt_3_esoa_atc.py` → `pipelines/drugs/scripts/runners.py`
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| UnifiedTagger | ✅ Working | Same as Part 2 |
+| Batch processing | ⚠️ Slow | 5K batch size, no true batch tagging |
+| Brand → Generic | ❌ Not implemented | Major gap |
+| ATC assignment | ⚠️ Partial | 55.6% coverage |
+
+**Output:** `outputs/drugs/esoa_with_atc.csv`
+
+**Known Issues:**
+- No brand name resolution (BIOGESIC → PARACETAMOL)
+- Slow row-by-row processing (258K rows)
+- Many common drugs not getting ATC codes
+
+---
+
+#### Part 4: Bridge ESOA to Drug Code ⚠️ NEEDS IMPROVEMENT
+**Script:** `run_drugs_pt_4_esoa_to_annex_f.py`
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| ATC-based matching | ✅ Working | Primary matching method |
+| DrugBank ID matching | ✅ Working | Secondary matching method |
+| Dose-exact matching | ✅ Working | Required for Drug Code |
+| Form equivalence | ✅ Working | TABLET ≈ CAPSULE |
+| Fallback matching | ⚠️ Basic | Molecule-based fallback exists |
+| Order-independent combos | ❌ Not implemented | PIPERACILLIN + TAZOBACTAM ≠ TAZOBACTAM + PIPERACILLIN |
+
+**Output:** `outputs/drugs/esoa_matched_drug_codes.csv`
+
+**Known Issues:**
+- Low match rate (40.5%) due to Part 3 gaps
+- Combination drug order matters (shouldn't)
+- Missing synonym mappings for common drugs
+
+---
+
+### Reference Datasets Status
+
+#### Generated Lookups (in `outputs/drugs/`)
+
+| File | Rows | Status |
+|------|------|--------|
+| `generics_lookup.parquet` | ~6K | ✅ Generated |
+| `brands_lookup.parquet` | ~126K | ✅ Generated |
+| `mixtures_lookup.parquet` | ~153K | ✅ Generated |
+| `form_route_validity.parquet` | ~15K | ✅ Generated |
+| `unified_drug_reference.parquet` | ~15K | ⚠️ Needs rebuild with new schema |
+
+#### Input Datasets (in `inputs/drugs/`)
+
+| File | Rows | Status |
+|------|------|--------|
+| `drugbank_generics_master.csv` | ~392K | ✅ Fresh |
+| `drugbank_mixtures_master.csv` | ~153K | ✅ Fresh |
+| `drugbank_brands_master.csv` | ~209K | ✅ Fresh |
+| `drugbank_products_export.csv` | ~456K | ✅ Fresh |
+| `drugbank_salts_master.csv` | ~3K | ✅ Fresh |
+| `pnf_lexicon.csv` | ~3K | ✅ Fresh |
+| `who_atc_2025-11-27.parquet` | ~6K | ✅ Fresh |
+| `fda_drug_2025-11-12.parquet` | ~31K | ✅ Fresh |
+| `fda_food_2025-11-23.parquet` | ~135K | ✅ Fresh |
+| `esoa_combined.csv` | 258,878 | ⚠️ Has duplicates (~145K unique) |
+
+---
+
+### Scripts Status
+
+#### Active Scripts (in `pipelines/drugs/scripts/`)
+
+| Script | Purpose | Status |
+|--------|---------|--------|
+| `build_unified_reference.py` | Build unified dataset | ⚠️ Needs refactor for new schema |
+| `runners.py` | Part 2/3 entry points | ✅ Working |
+| `prepare_drugs.py` | PNF preparation | ✅ Working |
+| `brand_map_drugs.py` | FDA brand map | ✅ Working |
+| `reference_synonyms.py` | Synonym loading | ✅ Working |
+| `dose_drugs.py` | Dose extraction | ⚠️ Needs improvement |
+| `routes_forms_drugs.py` | Form/route parsing | ✅ Working |
+
+#### Tagging Module (in `pipelines/drugs/scripts/tagging/`)
+
+| Script | Purpose | Status |
+|--------|---------|--------|
+| `tagger.py` | UnifiedTagger class | ✅ Working, needs batch method |
+| `tokenizer.py` | Text tokenization | ✅ Working |
+| `scoring.py` | Candidate selection | ⚠️ Has deprecated source priority |
+| `lookup.py` | Reference lookups | ✅ Working |
+| `constants.py` | Token categories | ✅ Working |
+| `form_route_mapping.py` | Form-route inference | ⚠️ Needs data-driven approach |
+
+#### Potentially Unused/Legacy Scripts
+
+| Script | Purpose | Status |
+|--------|---------|--------|
+| `aho_drugs.py` | Aho-Corasick tries | ⚠️ Deprecated (using DuckDB now) |
+| `combos_drugs.py` | Combination handling | ⚠️ May have useful logic |
+| `concurrency_drugs.py` | Parallel processing | ⚠️ May be unused |
+| `debug_drugs.py` | Debug utilities | ✅ Utility |
+| `generic_normalization.py` | Generic name normalization | ⚠️ Check if used |
+| `pnf_aliases_drugs.py` | PNF aliases | ⚠️ Check if used |
+| `pnf_partial_drugs.py` | PNF partial matching | ⚠️ Check if used |
+| `resolve_unknowns_drugs.py` | Unknown resolution | ⚠️ Check if used |
+| `generate_route_form_mapping.py` | Generate mappings | ⚠️ One-time script |
+
+---
+
+### State of Submodules
+
+All submodules are in `./dependencies/`:
+
+#### `dependencies/atcd/` (WHO ATC Scraper)
+**Status:** ✅ WORKING
+
+| File | Purpose | Status |
+|------|---------|--------|
+| `atcd.R` | Main scraper | ✅ Working |
+| `export.R` | Export to CSV/Parquet | ✅ Working |
+| `filter.R` | Filter ATC data | ✅ Working |
+
+**Output:** `who_atc_YYYY-MM-DD.csv` in `output/`
+
+**Notes:**
+- Scrapes from WHO website
+- Parallelized with `future` package
+- Exports both CSV and Parquet
+
+---
+
+#### `dependencies/drugbank_generics/` (DrugBank Extractor)
+**Status:** ✅ WORKING (but slow)
+
+| File | Purpose | Status |
+|------|---------|--------|
+| `drugbank_all.R` | Orchestrator | ✅ Working |
+| `drugbank_generics.R` | Extract generics | ✅ Working, slow |
+| `drugbank_mixtures.R` | Extract mixtures | ✅ Working |
+| `drugbank_brands.R` | Extract brands | ✅ Working |
+| `drugbank_salts.R` | Extract salts | ✅ Working |
+
+**Outputs:**
+- `drugbank_generics_master.csv` (~392K rows)
+- `drugbank_mixtures_master.csv` (~153K rows)
+- `drugbank_brands_master.csv` (~209K rows)
+- `drugbank_products_export.csv` (~456K rows)
+- `drugbank_salts_master.csv` (~3K rows)
+- `drugbank_pure_salts.csv` (51 rows)
+- `drugbank_salt_suffixes.csv` (58 rows)
+
+**Known Issues:**
+- `drugbank_generics.R` is very slow (TODO #26)
+- May be over-parallelizing or under-vectorizing
+- Uses `dbdataset` package from GitHub
+
+---
+
+#### `dependencies/fda_ph_scraper/` (FDA Philippines Scraper)
+**Status:** ✅ WORKING
+
+| File | Purpose | Status |
+|------|---------|--------|
+| `drug_scraper.py` | Scrape FDA drug list | ✅ Working |
+| `food_scraper.py` | Scrape FDA food list | ✅ Working |
+| `routes_forms.py` | Form/route parsing | ✅ Working |
+| `text_utils.py` | Text normalization | ✅ Working |
+
+**Outputs:**
+- `fda_drug_YYYY-MM-DD.csv` (~31K rows)
+- `fda_food_YYYY-MM-DD.csv` (~135K rows)
+
+**Notes:**
+- Scrapes from FDA PH verification website
+- Supports both CSV download and HTML scraping fallback
+- Exports both CSV and Parquet
+
+---
+
+### Hardcoded Data Locations
+
+The following scripts contain hardcoded data that should be externalized (TODO #22):
+
+| Script | Hardcoded Data |
+|--------|----------------|
+| `tagging/constants.py` | `NATURAL_STOPWORDS`, `FORM_CANON`, `ROUTE_CANON`, `SALT_TOKENS`, `PURE_SALT_COMPOUNDS` |
+| `tagging/scoring.py` | `FORM_EQUIVALENCE_GROUPS`, source priority (deprecated) |
+| `tagging/lookup.py` | Hardcoded synonyms (partially cleaned) |
+| `run_drugs_pt_4_esoa_to_annex_f.py` | `EQUIVALENT_FORMS`, `FORM_NORMALIZE`, `FORM_TO_ROUTE`, `GENERIC_SYNONYMS` |
+| `reference_synonyms.py` | Regional variant synonyms |
+
+---
+
+### Planned Improvements (from implementation_plan_v2.md)
+
+| Priority | Item | Impact |
+|----------|------|--------|
+| HIGH | Brand → Generic swapping (#1) | +5-10% match rate |
+| HIGH | Order-independent combos (#2, #5) | +3% match rate |
+| HIGH | Expand synonyms (#11) | +5% match rate |
+| MEDIUM | Batch tagging (#10) | 10x performance |
+| MEDIUM | Fix ESOA deduplication (#16) | Data quality |
+| MEDIUM | Rebuild unified reference (#17) | Foundation |
+| LOW | Fuzzy matching (#3) | +1-2% match rate |
+| LOW | FDA food fallback (#21) | Edge cases |
+
+---
+
 ## Appendix: Pharmaceutical Glossary
 
 | Term | Definition |
