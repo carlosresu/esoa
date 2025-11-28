@@ -185,45 +185,35 @@ def run_esoa_tagging(
         lambda: UnifiedTagger(
             outputs_dir=PIPELINE_OUTPUTS_DIR,
             inputs_dir=PIPELINE_INPUTS_DIR,
-            verbose=False,
+            verbose=verbose,  # Enable for progress output
         )
     )
     run_with_spinner("Load reference data", lambda: tagger.load())
     
-    # Tag in batches
+    # Tag with deduplication (146K unique vs 258K total)
     total = len(esoa_df)
     if verbose:
-        print(f"\nTagging {total:,} ESOA entries...")
+        print(f"\nTagging {total:,} ESOA entries (with deduplication)...")
     
-    batch_size = 5000
-    results_list = []
+    # Use tag_batch with deduplication for performance
+    results_df = tagger.tag_batch(
+        esoa_df,
+        text_column=text_column,
+        chunk_size=10000,
+        show_progress=verbose,
+        deduplicate=True,
+    )
     
-    for start in range(0, total, batch_size):
-        end = min(start + batch_size, total)
-        batch_df = esoa_df.iloc[start:end].copy()
-        batch_df["_batch_idx"] = range(start, end)
-        
-        batch_results = tagger.tag_descriptions(
-            batch_df,
-            text_column=text_column,
-            id_column="_batch_idx",
-        )
-        batch_results = batch_results.rename(columns={"id": "_batch_idx"})
-        results_list.append(batch_results)
-        
-        if verbose:
-            pct = 100 * end / total
-            print(f"  Processed {end:,}/{total:,} ({pct:.1f}%)")
+    # Map results back to original rows by text
+    # results_df has 'input_text' column with the original text
+    results_df = results_df.rename(columns={"input_text": "_tag_text"})
+    esoa_df["_tag_text"] = esoa_df[text_column].fillna("").astype(str)
     
-    results_df = pd.concat(results_list, ignore_index=True)
-    
-    # Merge results
-    esoa_df["_batch_idx"] = range(len(esoa_df))
     merged = esoa_df.merge(
-        results_df[["_batch_idx", "atc_code", "drugbank_id", "generic_name", "reference_text", "match_score", "match_reason", "sources"]],
-        on="_batch_idx",
+        results_df[["_tag_text", "atc_code", "drugbank_id", "generic_name", "reference_text", "match_score", "match_reason", "sources"]],
+        on="_tag_text",
         how="left",
-    ).drop(columns=["_batch_idx"])
+    ).drop(columns=["_tag_text"])
     
     # Rename columns
     merged = merged.rename(columns={
