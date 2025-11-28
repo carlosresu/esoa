@@ -29,8 +29,15 @@
 
 ---
 
-#### #22. Compile and Externalize Hardcoded Data
+#### #22. Compile and Externalize Hardcoded Data ✅ DONE
 **What:** Consolidate all hardcoded token lists into a single unified constants file. Deduplicate across active scripts and `debug/old_files/`.
+
+**Completed (Nov 28, 2025):** Created `pipelines/drugs/scripts/tagging/unified_constants.py` with:
+- 119 stopwords, 69 salt tokens, 60 pure salt compounds
+- 119 form mappings, 46 route mappings, 72 form-to-route mappings
+- 7 form equivalence groups, 26 ATC combination patterns, 26 unit tokens
+- Helper functions: is_stopword, is_salt_token, is_combination_atc, etc.
+- Refactored imports in constants.py, text_utils_drugs.py, routes_forms_drugs.py, scoring.py
 
 **Target:** Create `pipelines/drugs/scripts/tagging/unified_constants.py` containing all token sets, then refactor all scripts to import from there.
 
