@@ -1,4 +1,9 @@
-# Pipeline Execution Walkthrough
+# Pipeline Execution Walkthrough (Legacy)
+
+> **⚠️ PARTIALLY OUTDATED:** This document describes the legacy pipeline architecture. The current 4-part pipeline is documented in:
+> - `debug/pipeline.md` - Algorithmic logic and pharmaceutical rules
+> - `debug/implementation_plan_v2.md` - Current TODO list and implementation status
+> - `docs/annex_f_atc_matching.md` - 4-part pipeline overview
 
 Detailed end-to-end view of the matching pipeline, from CLI invocation in [run_drugs_all_parts.py](https://github.com/carlosresu/esoa/blob/main/run_drugs_all_parts.py) (now a thin orchestrator that resolves the appropriate `ITEM_REF_CODE` pipeline from `pipelines/registry.py`) through feature building in [pipelines/drugs/scripts/match_features_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_features_drugs.py), scoring in [pipelines/drugs/scripts/match_scoring_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_scoring_drugs.py), and export logic in [pipelines/drugs/scripts/match_outputs_drugs.py](https://github.com/carlosresu/esoa/blob/main/pipelines/drugs/scripts/match_outputs_drugs.py).
 

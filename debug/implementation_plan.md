@@ -1,7 +1,9 @@
-# Drug Pipeline Implementation Plan
+# Drug Pipeline Implementation Plan (SUPERSEDED)
 
 **Created:** Nov 27, 2025  
 **Updated:** Nov 27, 2025  
+**Status:** ⚠️ **SUPERSEDED by `implementation_plan_v2.md`** - This file is kept for historical reference only.
+
 **Objective:** Unified drug tagging with consistent algorithms for Annex F and ESOA
 
 ---

@@ -1,7 +1,7 @@
 # Drug Pipeline Implementation Plan v2
 
 **Created:** Nov 27, 2025  
-**Updated:** Nov 27, 2025  
+**Updated:** Nov 28, 2025  
 **Objective:** Unified drug tagging with consistent algorithms for Annex F and ESOA
 
 > **IMPORTANT:** After every group of changes, update both `pipeline.md` (algorithmic logic) and this file (implementation status).
@@ -18,7 +18,7 @@
 
 ---
 
-## All 32 TODOs
+## All 34 TODOs
 
 ### Phase 1: Analysis
 
@@ -30,19 +30,70 @@
 ---
 
 #### #22. Compile and Externalize Hardcoded Data
-**What:** Search all scripts for hardcoded lists/dicts/tuples, compile them, show user, and migrate to reference datasets (preferably unified tier 1). Scripts should be logic only.
+**What:** Consolidate all hardcoded token lists into a single unified constants file. Deduplicate across active scripts and `debug/old_files/`.
 
-**Action:** Audit scripts, create migration plan.
+**Target:** Create `pipelines/drugs/scripts/tagging/unified_constants.py` containing all token sets, then refactor all scripts to import from there.
+
+**Conceptual categories (deduplicated):**
+
+| Category | Variables to Merge | Est. Unique Items |
+|----------|-------------------|-------------------|
+| **STOPWORDS** | `NATURAL_STOPWORDS`, `GENERIC_JUNK_TOKENS`, `BASE_GENERIC_IGNORE`, `GENERIC_BAD_SINGLE_TOKENS`, `COMMON_UNKNOWN_STOPWORDS`, `_GENERIC_NOISE_PHRASES` | ~80 |
+| **SALT_TOKENS** | `SALT_TOKENS` (3 copies), `SPECIAL_SALT_TOKENS`, `SALT_FORM_SUFFIXES`, `_SALT_MAP` | ~50 |
+| **PURE_SALT_COMPOUNDS** | `PURE_SALT_COMPOUNDS` (2 copies), `SALT_UNIT_SET`, `COMPOUND_GENERICS` | ~45 |
+| **FORM_CANON** | `FORM_CANON` (4 copies), `ESOA_FORM_CANON`, `_FORM_MAP` (2 copies), `FORMULATION_BOUNDARY_WORDS`, `FORMULATION_STRIP_WORDS`, `_PREFIX_PACKAGING_TOKENS`, `_TRAILING_DESCRIPTOR_WORDS` | ~60 |
+| **ROUTE_CANON** | `ROUTE_CANON` (4 copies), `ROUTE_ALIASES`, `_ROUTE_MAP` (2 copies), `ROUTE_WORDS` | ~25 |
+| **FORM_TO_ROUTE** | `FORM_TO_ROUTE` | ~35 |
+| **FORM_EQUIVALENCE** | `FORM_EQUIVALENCE_GROUPS` | ~6 groups |
+| **ELEMENT_DRUGS** | `ELEMENT_DRUGS` | ~11 |
+| **UNIT_TOKENS** | `UNIT_TOKENS`, `MEASUREMENT_TOKENS` (2 copies), `_PREFIX_UNIT_TOKENS`, `_UNIT_TOKENS`, `_WEIGHT_UNIT_FACTORS` | ~20 |
+| **ATC_COMBO_PATTERNS** | `ATC_COMBINATION_PATTERNS`, `COMBINATION_ATC_PATTERNS`, `COMBINATION_ATC_SUFFIXES` | ~25 |
+| **CONNECTIVES** | `CONNECTIVE_WORDS`, `_SALT_TAIL_BREAK_TOKENS` | ~8 |
+| **SCORING_WEIGHTS** | `PRIMARY_WEIGHTS` (2 copies), `SECONDARY_WEIGHTS` (2 copies) | keep in scoring.py |
+| **SYNONYMS** | `hardcoded` in lookup.py | move to unified synonyms dataset |
+| **DESCRIPTOR_VALUES** | `_DESCRIPTOR_VALUES` | ~10 |
+
+**Sources (active + old_files):**
+
+*Active scripts:*
+- `combos_drugs.py`, `text_utils_drugs.py`, `generic_normalization.py`
+- `routes_forms_drugs.py`, `dose_drugs.py`, `resolve_unknowns_drugs.py`
+- `tagging/constants.py`, `tagging/scoring.py`, `tagging/lookup.py`
+
+*Old files (recover useful terms):*
+- `match_annex_f_with_atc.py` - `COMPOUND_GENERICS`, `COMBINATION_ATC_*`
+- `unified_tagger.py` - duplicate constants
+- `pnf_aliases_drugs.py` - `SALT_FORM_SUFFIXES`
+- `run_drugs_pt_0_create_master_dataset.py` - `_FORM_MAP`, `_ROUTE_MAP`, `_SALT_MAP`, `_DESCRIPTOR_VALUES`
+- `run_drugs_pt_1_detect_annex_f.py` - `_FORM_MAP`, `_ROUTE_MAP`, `_SALT_MAP`
+- `run_drugs_pt_1_parse_annex_f.py` - `_GENERIC_NOISE_PHRASES`
+- `generate_route_form_mapping.py` - `FORM_CANON`, `ROUTE_CANON`
+- `match_outputs_drugs.py` - `FRIENDLY_*_LABELS`, `_ABBREVIATION_LOOKUP`
+- `match_esoa_with_annex_f.py` - `ESOA_FORM_CANON`
+
+**Action:**
+1. Create `unified_constants.py` with deduplicated sets for each category
+2. Add loader functions: `get_stopwords()`, `get_salt_tokens()`, `get_form_canon()`, etc.
+3. Refactor all active scripts to `from .tagging.unified_constants import ...`
+4. Delete `combos_drugs.py` (only kept for `SALT_TOKENS`)
+5. Keep regex patterns and scoring weights in their respective files (logic, not data)
 
 ---
 
-#### #24. Review and Classify Pipeline Scripts
+#### #24. Review and Classify Pipeline Scripts ✅ PARTIAL
 **What:** Audit all files in `./pipelines/drugs/scripts/`:
 - Classify into folders (tagging, reference, utils, deprecated)
 - Identify unused/legacy code
 - Flag important logic NOT being used (report to user)
 
-**Action:** Full audit with report.
+**Status (Nov 28, 2025):** Script audit completed. Moved 5 unused scripts to `debug/old_files/`:
+- `aho_drugs.py` - Deprecated (using DuckDB)
+- `debug_drugs.py` - References non-existent module
+- `pnf_aliases_drugs.py` - Only used by deprecated aho_drugs.py
+- `pnf_partial_drugs.py` - Not imported anywhere
+- `generate_route_form_mapping.py` - One-time script
+
+**Remaining:** Folder reorganization (tagging, reference, utils).
 
 ---
 

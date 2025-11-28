@@ -1,6 +1,8 @@
 # Drugs Pipeline: ESOA → Drug Code Matching
 
-This document describes the new 4-part ESOA → Drug Code matching pipeline that uses ATC/DrugBank ID as an intermediate step.
+> **Note:** For the latest implementation details, see `debug/pipeline.md` and `debug/implementation_plan_v2.md`.
+
+This document describes the 4-part ESOA → Drug Code matching pipeline that uses ATC/DrugBank ID as an intermediate step.
 
 ## Pipeline Overview
 
@@ -83,12 +85,13 @@ Tags each Annex F row with ATC code and DrugBank ID.
 python run_drugs_pt_2_annex_f_atc.py --workers 8
 ```
 
-**Current Results (2025-11-26):**
+**Current Results (2025-11-27):**
 | Metric | Value |
 |--------|-------|
 | Total Annex F rows | 2,427 |
-| Matched with ATC | 2,136 (88.0%) |
-| Has DrugBank ID | 1,478 (60.9%) |
+| Matched with ATC | 2,337 (96.3%) |
+| Has DrugBank ID | 1,787 (73.6%) |
+| Has either | 2,353 (97.0%) |
 
 ### Part 3: `run_drugs_pt_3_esoa_atc.py`
 
