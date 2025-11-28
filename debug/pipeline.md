@@ -624,24 +624,29 @@ Some FDA rows have brand/generic swapped. Detect by:
 |--------|---------|--------|
 | `tagger.py` | UnifiedTagger class | ✅ Working, needs batch method |
 | `tokenizer.py` | Text tokenization | ✅ Working |
-| `scoring.py` | Candidate selection | ⚠️ Has deprecated source priority |
+| `scoring.py` | Candidate selection | ✅ Working (source priority removed) |
 | `lookup.py` | Reference lookups | ✅ Working |
 | `constants.py` | Token categories | ✅ Working |
 | `form_route_mapping.py` | Form-route inference | ⚠️ Needs data-driven approach |
 
-#### Potentially Unused/Legacy Scripts
+#### Other Active Scripts
 
 | Script | Purpose | Status |
 |--------|---------|--------|
-| `aho_drugs.py` | Aho-Corasick tries | ⚠️ Deprecated (using DuckDB now) |
-| `combos_drugs.py` | Combination handling | ⚠️ May have useful logic |
-| `concurrency_drugs.py` | Parallel processing | ⚠️ May be unused |
-| `debug_drugs.py` | Debug utilities | ✅ Utility |
-| `generic_normalization.py` | Generic name normalization | ⚠️ Check if used |
-| `pnf_aliases_drugs.py` | PNF aliases | ⚠️ Check if used |
-| `pnf_partial_drugs.py` | PNF partial matching | ⚠️ Check if used |
-| `resolve_unknowns_drugs.py` | Unknown resolution | ⚠️ Check if used |
-| `generate_route_form_mapping.py` | Generate mappings | ⚠️ One-time script |
+| `combos_drugs.py` | `SALT_TOKENS` constant | ✅ Used by `text_utils_drugs.py` |
+| `concurrency_drugs.py` | `maybe_parallel_map` | ✅ Used by `prepare_drugs.py` |
+| `generic_normalization.py` | `normalize_generic` | ✅ Used by 3 test files |
+| `resolve_unknowns_drugs.py` | Unknown resolution | ✅ Used by `pipeline.py` |
+
+#### Moved to `debug/old_files/` (Nov 28, 2025)
+
+| Script | Reason |
+|--------|--------|
+| `aho_drugs.py` | Deprecated - using DuckDB instead of Aho-Corasick |
+| `debug_drugs.py` | References non-existent `run_drugs_all_parts` |
+| `pnf_aliases_drugs.py` | Only used by deprecated `aho_drugs.py` |
+| `pnf_partial_drugs.py` | Not imported anywhere |
+| `generate_route_form_mapping.py` | One-time script, not part of pipeline |
 
 ---
 
