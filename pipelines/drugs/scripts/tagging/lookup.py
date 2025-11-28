@@ -261,10 +261,73 @@ def lookup_generic_contains(
         return []
 
 
+def lookup_generic_fuzzy(
+    token: str,
+    con: duckdb.DuckDBPyConnection,
+    threshold: int = 85,
+    limit: int = 3,
+) -> List[Dict[str, Any]]:
+    """
+    Fuzzy match lookup for a generic token using rapidfuzz.
+    
+    Args:
+        token: The token to search for
+        con: DuckDB connection
+        threshold: Minimum similarity score (0-100), default 85
+        limit: Maximum number of results
+    
+    Returns:
+        List of matching records with similarity scores
+    """
+    try:
+        from rapidfuzz import fuzz, process
+    except ImportError:
+        return []  # rapidfuzz not installed
+    
+    if len(token) < 4:
+        return []  # Too short for fuzzy matching
+    
+    # Get all generic names for fuzzy matching
+    try:
+        all_generics = con.execute(
+            "SELECT DISTINCT generic_name FROM generics WHERE generic_name IS NOT NULL"
+        ).fetchdf()["generic_name"].tolist()
+    except Exception:
+        return []
+    
+    if not all_generics:
+        return []
+    
+    # Find best fuzzy matches
+    token_upper = token.upper()
+    matches = process.extract(
+        token_upper,
+        all_generics,
+        scorer=fuzz.ratio,
+        limit=limit,
+        score_cutoff=threshold,
+    )
+    
+    if not matches:
+        return []
+    
+    # Look up the matched generics
+    results = []
+    for match_name, score, _ in matches:
+        records = lookup_generic_exact(match_name, con)
+        for rec in records:
+            rec["fuzzy_score"] = score
+            rec["fuzzy_match"] = True
+            results.append(rec)
+    
+    return results
+
+
 def batch_lookup_generics(
     tokens: Set[str],
     con: duckdb.DuckDBPyConnection,
     synonyms: Optional[Dict[str, str]] = None,
+    enable_fuzzy: bool = True,
 ) -> Dict[str, List[Dict[str, Any]]]:
     """
     Batch lookup for multiple generic tokens.
@@ -305,6 +368,13 @@ def batch_lookup_generics(
         # Try contains match (only for multi-word)
         if " " in token:
             matches = lookup_generic_contains(token_upper, con)
+            if matches:
+                cache[token_upper] = matches
+                continue
+        
+        # Try fuzzy match as last resort (for potential misspellings)
+        if enable_fuzzy and len(token) >= 4:
+            matches = lookup_generic_fuzzy(token_upper, con, threshold=85, limit=1)
             cache[token_upper] = matches
         else:
             cache[token_upper] = []

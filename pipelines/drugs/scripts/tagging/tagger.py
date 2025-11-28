@@ -20,6 +20,7 @@ from .lookup import (
 from .scoring import select_best_candidate, sort_atc_codes
 from .tokenizer import (
     categorize_tokens, detect_compound_salts, extract_generic_tokens,
+    extract_form_detail, extract_release_detail, extract_type_detail,
     normalize_tokens, split_with_parentheses, strip_salt_suffix,
 )
 
@@ -314,9 +315,28 @@ class UnifiedTagger:
                 continue
             
             # Normalize input generics
+            # Include fuzzy-matched names so scoring works with misspellings
             input_generics_normalized = set()
+            fuzzy_corrections = {}  # misspelled -> corrected
+            
+            # First collect fuzzy corrections
+            for gm in unique_matches:
+                if gm.get("fuzzy_match"):
+                    matched_name = str(gm.get("generic_name", "")).upper()
+                    # Find which stripped generic this fuzzy match corresponds to
+                    for sg in stripped_generics:
+                        if sg.upper() not in fuzzy_corrections:
+                            fuzzy_corrections[sg.upper()] = matched_name
+                            break
+            
+            # Build normalized set using fuzzy corrections
             for sg in stripped_generics:
-                normalized = self._apply_synonyms(sg.upper())
+                sg_upper = sg.upper()
+                # Use fuzzy-corrected name if available
+                if sg_upper in fuzzy_corrections:
+                    normalized = fuzzy_corrections[sg_upper]
+                else:
+                    normalized = self._apply_synonyms(sg_upper)
                 if normalized and normalized not in {"+", "MG/5"}:
                     input_generics_normalized.add(normalized)
             
@@ -340,17 +360,29 @@ class UnifiedTagger:
                 apply_synonyms_fn=self._apply_synonyms,
             )
             
+            # Extract categorized tokens for output
+            from .constants import CATEGORY_DOSE, CATEGORY_FORM, CATEGORY_ROUTE
+            input_doses = list(categories.get(CATEGORY_DOSE, {}).keys())
+            input_forms = list(categories.get(CATEGORY_FORM, {}).keys())
+            input_routes = list(categories.get(CATEGORY_ROUTE, {}).keys())
+            
+            # Extract type detail from input text (before tokenization)
+            _, type_detail = extract_type_detail(text)
+            
+            # Extract release/form details from the full token list
+            # Join tokens to reconstruct text for detail extraction
+            token_text = " ".join(tokens)
+            _, release_detail = extract_release_detail(token_text)
+            _, form_detail = extract_form_detail(token_text) if not release_detail else (None, None)
+            
+            # Use normalized form from categories
+            base_form = input_forms[0] if input_forms else None
+            
             if best:
                 # Use reference_text if available, otherwise use generic_name; always uppercase
                 ref_text = best.get("reference_text") or best.get("generic_name") or ""
                 if ref_text:
                     ref_text = str(ref_text).upper()
-                
-                # Extract categorized tokens for output
-                from .constants import CATEGORY_DOSE, CATEGORY_FORM, CATEGORY_ROUTE
-                input_doses = list(categories.get(CATEGORY_DOSE, {}).keys())
-                input_forms = list(categories.get(CATEGORY_FORM, {}).keys())
-                input_routes = list(categories.get(CATEGORY_ROUTE, {}).keys())
                 
                 results.append({
                     "id": ids[i],
@@ -361,19 +393,16 @@ class UnifiedTagger:
                     "generic_name": best.get("generic_name"),
                     "reference_text": ref_text,
                     "dose": "|".join(input_doses) if input_doses else None,
-                    "form": "|".join(input_forms) if input_forms else None,
+                    "form": base_form,
                     "route": "|".join(input_routes) if input_routes else None,
+                    "type_detail": type_detail,
+                    "release_detail": release_detail,
+                    "form_detail": form_detail,
                     "match_score": 1,
                     "match_reason": "matched",
                     "sources": best.get("source", ""),
                 })
             else:
-                # Extract categorized tokens even when no match
-                from .constants import CATEGORY_DOSE, CATEGORY_FORM, CATEGORY_ROUTE
-                input_doses = list(categories.get(CATEGORY_DOSE, {}).keys())
-                input_forms = list(categories.get(CATEGORY_FORM, {}).keys())
-                input_routes = list(categories.get(CATEGORY_ROUTE, {}).keys())
-                
                 results.append({
                     "id": ids[i],
                     "input_text": text,
@@ -383,8 +412,11 @@ class UnifiedTagger:
                     "generic_name": None,
                     "reference_text": None,
                     "dose": "|".join(input_doses) if input_doses else None,
-                    "form": "|".join(input_forms) if input_forms else None,
+                    "form": base_form,
                     "route": "|".join(input_routes) if input_routes else None,
+                    "type_detail": type_detail,
+                    "release_detail": release_detail,
+                    "form_detail": form_detail,
                     "match_score": 0,
                     "match_reason": "no_match",
                     "sources": "",
