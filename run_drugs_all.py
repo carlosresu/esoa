@@ -589,8 +589,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
 
     # Import part functions
     from run_drugs_pt_1_prepare_dependencies import run_part_1
-    from pipelines.drugs.scripts.runners import run_annex_f_tagging, run_esoa_tagging
-    from run_drugs_pt_4_esoa_to_annex_f import run_part_4
+    from pipelines.drugs.scripts.runners import run_annex_f_tagging, run_esoa_tagging, run_esoa_to_drug_code
 
     # Run selected parts
     if 1 in parts_to_run:
@@ -626,7 +625,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         print("=" * 60)
         from pathlib import Path
         esoa_path = Path(args.esoa) if args.esoa else None
-        results = run_esoa_tagging(esoa_path=esoa_path, verbose=False)
+        results = run_esoa_tagging(esoa_path=esoa_path, verbose=True)
         print(f"\nPart 3 results:")
         print(f"  - Total rows: {results['total']}")
         print(f"  - Matched with ATC: {results['matched_atc']} ({results['matched_atc_pct']:.1f}%)")
@@ -636,16 +635,9 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         print("\n" + "=" * 60)
         print("PART 4: Bridge ESOA to Annex F Drug Codes")
         print("=" * 60)
-        results = run_part_4(
-            esoa_atc_filename="esoa_with_atc.csv",
-            annex_atc_filename="annex_f_with_atc.csv",
-            out_filename="esoa_matched_drug_codes.csv",
-            standalone=False,
-        )
+        results = run_esoa_to_drug_code(verbose=True)
         print(f"\nPart 4 results:")
         print(f"  - Matched to Drug Code: {results['matched']} ({results['matched_pct']:.1f}%)")
-        print(f"  - Unmatched: {results['unmatched']}")
-        print(f"  - Output: {results['output_path']}")
 
     print("\n" + "=" * 60)
     print("PIPELINE COMPLETE")
