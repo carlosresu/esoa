@@ -38,6 +38,75 @@ def load_generics_lookup(
     return pd.read_csv(path)
 
 
+def load_brands_lookup(
+    outputs_dir: Optional[Path] = None,
+) -> pd.DataFrame:
+    """Load brands lookup table."""
+    if outputs_dir is None:
+        outputs_dir = Path(os.environ.get("PIPELINE_OUTPUTS_DIR", OUTPUTS_DIR))
+    
+    path = outputs_dir / "brands_lookup.parquet"
+    if not path.exists():
+        path = outputs_dir / "brands_lookup.csv"
+    
+    if not path.exists():
+        return pd.DataFrame(columns=["brand_name", "generic_name", "drugbank_id", "source"])
+    
+    if path.suffix == ".parquet":
+        return pd.read_parquet(path)
+    return pd.read_csv(path)
+
+
+def build_brand_to_generic_map(
+    brands_df: pd.DataFrame,
+    generics_df: Optional[pd.DataFrame] = None,
+) -> Dict[str, str]:
+    """
+    Build a dictionary mapping brand names to generic names.
+    
+    Used to swap brand names to generics before matching.
+    Excludes entries where the brand_name is actually a known generic.
+    """
+    # Build set of known generic names to exclude
+    known_generics: Set[str] = set()
+    if generics_df is not None and "generic_name" in generics_df.columns:
+        known_generics = set(generics_df["generic_name"].str.upper().dropna())
+    
+    brand_map: Dict[str, str] = {}
+    
+    for _, row in brands_df.iterrows():
+        brand = str(row.get("brand_name", "")).upper().strip()
+        generic = str(row.get("generic_name", "")).upper().strip()
+        
+        if brand and generic and brand != generic:
+            # Skip if brand_name is actually a known generic (data error)
+            if brand in known_generics:
+                continue
+            # Don't overwrite existing entries (first wins)
+            if brand not in brand_map:
+                brand_map[brand] = generic
+    
+    return brand_map
+
+
+def swap_brand_to_generic(
+    token: str,
+    brand_map: Dict[str, str],
+) -> tuple:
+    """
+    Swap a brand name to its generic equivalent.
+    
+    Returns:
+        (swapped_name, was_swapped): Tuple of (result, bool indicating if swap occurred)
+    """
+    token_upper = token.upper().strip()
+    
+    if token_upper in brand_map:
+        return brand_map[token_upper], True
+    
+    return token_upper, False
+
+
 def load_synonyms(
     generics_df: pd.DataFrame,
 ) -> Dict[str, str]:

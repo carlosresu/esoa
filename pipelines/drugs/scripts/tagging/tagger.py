@@ -14,7 +14,8 @@ import pandas as pd
 from .constants import PURE_SALT_COMPOUNDS, UNIT_TOKENS
 from .lookup import (
     apply_synonym, batch_lookup_generics, build_combination_keys,
-    load_generics_lookup, load_synonyms,
+    build_brand_to_generic_map, load_brands_lookup, load_generics_lookup,
+    load_synonyms, swap_brand_to_generic,
 )
 from .scoring import select_best_candidate, sort_atc_codes
 from .tokenizer import (
@@ -52,6 +53,7 @@ class UnifiedTagger:
         
         self.con: Optional[duckdb.DuckDBPyConnection] = None
         self.synonyms: Dict[str, str] = {}
+        self.brand_map: Dict[str, str] = {}
         self.multiword_generics: Set[str] = set()
         self._loaded = False
     
@@ -80,6 +82,12 @@ class UnifiedTagger:
         generics_df = load_generics_lookup(self.outputs_dir)
         self.synonyms = load_synonyms(generics_df)
         self._log(f"  - synonyms: {len(self.synonyms):,} entries")
+        
+        # Load brands for brand → generic swapping
+        # Pass generics_df to exclude known generic names from brand map
+        brands_df = load_brands_lookup(self.outputs_dir)
+        self.brand_map = build_brand_to_generic_map(brands_df, generics_df)
+        self._log(f"  - brands: {len(self.brand_map):,} entries")
         
         # Build multiword generics set
         self.multiword_generics = set()
@@ -112,6 +120,10 @@ class UnifiedTagger:
     
     def _apply_synonyms(self, generic: str) -> str:
         return apply_synonym(generic, self.synonyms)
+    
+    def _swap_brand(self, token: str) -> tuple:
+        """Swap brand to generic if found in brand_map."""
+        return swap_brand_to_generic(token, self.brand_map)
     
     def _strip_salt(self, generic: str) -> tuple:
         return strip_salt_suffix(generic)
@@ -166,26 +178,48 @@ class UnifiedTagger:
         # Pre-process all texts
         all_tokens = []
         all_generic_tokens = []
+        all_brand_swaps = []  # Track which tokens were brand-swapped
         
         for text in texts:
             tokens, generic_tokens = extract_generic_tokens(text, self.multiword_generics)
+            
+            # Apply brand → generic swapping
+            swapped_generics = []
+            brand_swaps = []
+            for g in generic_tokens:
+                swapped, was_swapped = self._swap_brand(g)
+                swapped_generics.append(swapped)
+                if was_swapped:
+                    brand_swaps.append((g, swapped))
+            
             all_tokens.append(tokens)
-            all_generic_tokens.append(generic_tokens)
+            all_generic_tokens.append(swapped_generics)
+            all_brand_swaps.append(brand_swaps)
         
         # Collect unique generics for batch lookup
         unique_generics: Set[str] = set()
         for gt in all_generic_tokens:
+            # Normalize each component through synonyms
+            normalized_components = []
             for g in gt:
                 if g.upper() in PURE_SALT_COMPOUNDS:
                     unique_generics.add(g.upper())
+                    normalized_components.append(g.upper())
                 else:
                     base, _ = self._strip_salt(g)
                     unique_generics.add(base)
-                unique_generics.add(self._apply_synonyms(g))
+                    # Apply synonym to get canonical form
+                    canonical = self._apply_synonyms(base)
+                    unique_generics.add(canonical)
+                    normalized_components.append(canonical)
             
-            # Add combination keys
+            # Add combination keys (sorted for order-independent matching)
+            # Build from both original and normalized components for #7 (synonym swapping in mixtures)
             combo_keys = build_combination_keys(gt)
             unique_generics.update(combo_keys)
+            # Also build from normalized components (e.g., SALBUTAMOL -> ALBUTEROL)
+            normalized_combo_keys = build_combination_keys(normalized_components)
+            unique_generics.update(normalized_combo_keys)
         
         # Batch lookup
         generic_cache = batch_lookup_generics(unique_generics, self.con, self.synonyms)
@@ -312,6 +346,12 @@ class UnifiedTagger:
                 if ref_text:
                     ref_text = str(ref_text).upper()
                 
+                # Extract categorized tokens for output
+                from .constants import CATEGORY_DOSE, CATEGORY_FORM, CATEGORY_ROUTE
+                input_doses = list(categories.get(CATEGORY_DOSE, {}).keys())
+                input_forms = list(categories.get(CATEGORY_FORM, {}).keys())
+                input_routes = list(categories.get(CATEGORY_ROUTE, {}).keys())
+                
                 results.append({
                     "id": ids[i],
                     "input_text": text,
@@ -320,11 +360,20 @@ class UnifiedTagger:
                     "drugbank_id": best.get("drugbank_id"),
                     "generic_name": best.get("generic_name"),
                     "reference_text": ref_text,
+                    "dose": "|".join(input_doses) if input_doses else None,
+                    "form": "|".join(input_forms) if input_forms else None,
+                    "route": "|".join(input_routes) if input_routes else None,
                     "match_score": 1,
                     "match_reason": "matched",
                     "sources": best.get("source", ""),
                 })
             else:
+                # Extract categorized tokens even when no match
+                from .constants import CATEGORY_DOSE, CATEGORY_FORM, CATEGORY_ROUTE
+                input_doses = list(categories.get(CATEGORY_DOSE, {}).keys())
+                input_forms = list(categories.get(CATEGORY_FORM, {}).keys())
+                input_routes = list(categories.get(CATEGORY_ROUTE, {}).keys())
+                
                 results.append({
                     "id": ids[i],
                     "input_text": text,
@@ -333,6 +382,9 @@ class UnifiedTagger:
                     "drugbank_id": None,
                     "generic_name": None,
                     "reference_text": None,
+                    "dose": "|".join(input_doses) if input_doses else None,
+                    "form": "|".join(input_forms) if input_forms else None,
+                    "route": "|".join(input_routes) if input_routes else None,
                     "match_score": 0,
                     "match_reason": "no_match",
                     "sources": "",
