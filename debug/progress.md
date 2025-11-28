@@ -1,7 +1,7 @@
 # Drug Pipeline Progress Tracker
 
 **Started:** Nov 28, 2025  
-**Last Updated:** Nov 28, 2025 (Phase 4 COMPLETE)
+**Last Updated:** Nov 28, 2025 (Phase 5 COMPLETE)
 
 ---
 
@@ -162,14 +162,26 @@
 
 ---
 
-## Phase 5: Normalization 🔲 PENDING
+## Phase 5: Normalization ✅ COMPLETE
 
 **Goal:** Dose normalization, PNF improvements, stop words
 
-### TODOs
-- [ ] #8: Dose normalization to mg
-- [ ] #20: PNF lexicon improvements
-- [ ] #34: Dynamic stopword loading
+### Completed Work
+
+#### #34: Stop Word Filtering ✅
+- Already implemented via STOPWORDS in unified_constants.py
+- Tokenizer filters stopwords (AS, IN, FOR, WITH, etc.)
+- Multi-word generics preserved before filtering
+
+#### #8: Dose Denominator Normalization ✅
+- `normalize_dose_ratio()`: 500MG/5ML → 100MG/ML
+- `normalize_weight_to_mg()`: 1G → 1000MG, 500MCG → 0.5MG
+- Converts g/mcg/ug to mg, ratios to per-1-ML
+
+#### #20: PNF Lexicon Improvements ✅
+- prepare_drugs.py already applies all normalizations
+- Includes: extract_base_and_salts, clean_atc, dose parsing
+- pnf_lexicon.parquet properly normalized
 
 ---
 
@@ -251,3 +263,6 @@
 ### Phase 4
 13. `Phase 4: Enhancements` - Fuzzy matching, type/release/form detail extraction
 14. `Phase 4 Complete: #4 Compound salt recognition` - Cation/anion parsing
+
+### Phase 5
+15. `Phase 5 Complete: Normalization` - Dose ratio normalization, stopwords, PNF improvements
