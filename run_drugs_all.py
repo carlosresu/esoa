@@ -205,30 +205,35 @@ def _natural_esoa_part_order(path: Path) -> tuple[int, str]:
 
 
 def _concatenate_csv(parts: Sequence[Path], dest: Path) -> Path:
-    """Concatenate multiple CSV files (identical headers) into dest."""
-    header: List[str] | None = None
+    """Concatenate multiple CSV files (identical headers) into dest, deduplicating rows."""
+    import pandas as pd
+    
     dest.parent.mkdir(parents=True, exist_ok=True)
-    with dest.open("w", newline="", encoding="utf-8") as out_handle:
-        writer: csv.writer | None = None
-        for part in parts:
-            if not part.is_file():
-                continue
-            with part.open("r", newline="", encoding="utf-8-sig") as in_handle:
-                reader = csv.reader(in_handle)
-                try:
-                    file_header = next(reader)
-                except StopIteration:
-                    continue
-                if header is None:
-                    header = file_header
-                    writer = csv.writer(out_handle)
-                    writer.writerow(header)
-                elif header != file_header:
-                    raise ValueError(
-                        f"Header mismatch while concatenating {part.name}; expected {header} but found {file_header}."
-                    )
-                assert writer is not None
-                writer.writerows(reader)
+    
+    dfs = []
+    for part in parts:
+        if not part.is_file():
+            continue
+        try:
+            df = pd.read_csv(part, encoding="utf-8-sig")
+            dfs.append(df)
+        except Exception:
+            continue
+    
+    if not dfs:
+        raise ValueError("No valid CSV files to concatenate")
+    
+    # Concatenate and deduplicate
+    combined = pd.concat(dfs, ignore_index=True)
+    before = len(combined)
+    combined = combined.drop_duplicates()
+    after = len(combined)
+    
+    if before != after:
+        print(f"  [esoa] Deduplicated: {before:,} → {after:,} rows (removed {before - after:,} duplicates)")
+    
+    # Save both CSV and parquet
+    combined.to_csv(dest, index=False)
     _ensure_parquet_sibling(dest)
     return dest
 

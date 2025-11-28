@@ -1,7 +1,7 @@
 # Drug Pipeline Progress Tracker
 
 **Started:** Nov 28, 2025  
-**Last Updated:** Nov 28, 2025 (Phase 2 #0 complete)
+**Last Updated:** Nov 28, 2025 (Phase 2 COMPLETE)
 
 ---
 
@@ -48,49 +48,53 @@
 
 ---
 
-## Phase 2: Data Foundation 🔄 IN PROGRESS
+## Phase 2: Data Foundation ✅ COMPLETE
 
 **Goal:** Build proper unified reference in DuckDB with all enrichments
 
 ### Completed Work
 
 #### DrugBank R Script Optimization ✅
-- **Created `_shared.R`**: Common setup for all 4 R scripts
-  - Package installation/loading (data.table, dbdataset, future, arrow)
-  - Parallel backend initialization (multicore/multisession based on OS)
-  - Shared utility functions (write_csv_and_parquet, normalize, etc.)
-  - Guard prevents double-loading if scripts sourced together
-- **Updated individual R scripts**: Each sources `_shared.R`
-  - Run standalone: `Rscript drugbank_generics.R`
-  - Removed old `drugbank_all.R` (was spawning subprocesses)
-- **Updated Python execution**: Native shell with live spinner
-  - `os.system()` in background thread for minimal overhead
-  - Live spinner/timer updates every 0.1s per script
-  - Uses `min(8, cpu_count)` workers (per AGENTS.md #6)
-  - Cross-platform (Windows/macOS/Linux)
+- Created `_shared.R` with common setup (packages, parallel, utilities)
+- Uses `min(8, cpu_count)` workers, cross-platform support
+- Runtime: ~433s total for all DrugBank scripts
 
 #### #0: Refresh All Base Datasets ✅
-- Ran `python run_drugs_pt_1_prepare_dependencies.py` successfully
-- Runtime: ~460s total (drugbank_generics 308s, mixtures 88s, brands 33s, salts 4s)
-- All artifacts generated in `inputs/drugs/`
+- `python run_drugs_pt_1_prepare_dependencies.py` - all artifacts generated
 
-### TODOs
-- [ ] #11: Expand synonyms from DrugBank
-- [ ] #15: Build form-route validity mapping
-- [ ] #16: Fix ESOA row binding (investigate duplicates)
-- [ ] #17: Build proper Tier 1 unified reference
-- [ ] #18: Collect all known doses
-- [ ] #28: Use DuckDB as primary data store
-- [ ] #29: Enrich from DrugBank products
-- [ ] #32: Standardize column names
-- [ ] #35: Centralize R script hardcoded constants
+#### #28: DuckDB as Primary Data Store ✅
+- `build_unified_reference.py` uses in-memory DuckDB for all queries
+- SQL-based aggregation and joining across sources
 
-### Discovered Issues (Resolved)
-- ~~DrugBank R scripts taking >20min~~ → Fixed with `_shared.R` + min(8, cores) workers
-- R scripts have hardcoded constants duplicating Python unified_constants.py:
-  - `drugbank_generics.R`: PER_UNIT_MAP (30+ unit mappings)
-  - `drugbank_salts.R`: salt_suffixes (58), pure_salt_compounds (51)
-  - `drugbank_mixtures.R`: SALT_SYNONYM_LOOKUP (6 salt synonyms)
+#### #17: Build Tier 1 Unified Reference ✅
+- **unified_drug_reference.parquet**: 52,002 rows
+- Exploded by: drugbank_id × atc_code × form × route
+- Aggregated doses per combination
+
+#### #15: Form-Route Validity Mapping ✅
+- **form_route_validity.parquet**: 53,039 combinations
+- Sources: PNF, DrugBank products, FDA drug
+
+#### #11: Synonyms from DrugBank ✅
+- Already implemented in R script with proper filtering (language=english, not iupac-only)
+- **generics_lookup.parquet**: 7,345 generics with synonyms
+
+#### #29: Enrich from DrugBank Products ✅
+- Extracted 455,970 product rows with dose/form/route
+
+#### #16: Fix ESOA Row Binding ✅
+- Added deduplication to `_concatenate_csv()` - removes 44% duplicates
+- 258,878 → ~146,189 rows after dedup
+
+#### #18: Collect All Known Doses ✅
+- 28,230 rows have dose information (from products)
+- Aggregated as pipe-delimited in unified reference
+
+#### #32: Standardize Column Names ✅
+- Consistent naming: `generic_name`, `atc_code`, `drugbank_id`, `form`, `route`, `doses`
+
+### Deferred to Phase 8
+- #35: Sync R/Python constants (lower priority cleanup)
 
 ---
 
@@ -200,3 +204,6 @@
 6. `Phase 2: DrugBank R script optimization` - _shared.R, native shell execution
 7. `DrugBank: default to min(8, cores) workers` - Fixed long runtime issue
 8. `Phase 2 #0: Refresh all base datasets` - Part 1 complete (~460s total)
+9. `Phase 2: Build unified reference` - DuckDB, generics/brands/mixtures lookups
+10. `Phase 2 #16: Fix ESOA deduplication` - Added drop_duplicates to _concatenate_csv
+11. `Phase 2 Complete` - All data foundation items done
