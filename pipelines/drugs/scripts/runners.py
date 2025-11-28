@@ -126,6 +126,15 @@ def run_annex_f_tagging(
         for reason, count in merged["match_reason"].value_counts().items():
             print(f"  {reason}: {count:,} ({100*count/total:.1f}%)")
     
+    # Log metrics
+    log_metrics("annex_f", {
+        "total": total,
+        "matched_atc": matched_atc,
+        "matched_atc_pct": round(results["matched_atc_pct"], 2),
+        "matched_drugbank": matched_drugbank,
+        "matched_drugbank_pct": round(results["matched_drugbank_pct"], 2),
+    })
+    
     return results
 
 
@@ -258,6 +267,15 @@ def run_esoa_tagging(
         print("\nMatch reasons:")
         for reason, count in merged["match_reason"].value_counts().head(10).items():
             print(f"  {reason}: {count:,} ({100*count/total:.1f}%)")
+    
+    # Log metrics
+    log_metrics("esoa", {
+        "total": total,
+        "matched_atc": matched_atc_count,
+        "matched_atc_pct": round(results["matched_atc_pct"], 2),
+        "matched_drugbank": matched_drugbank_count,
+        "matched_drugbank_pct": round(results["matched_drugbank_pct"], 2),
+    })
     
     return results
 
@@ -394,6 +412,13 @@ def run_esoa_to_drug_code(
         for reason, count in esoa_df["drug_code_match_reason"].value_counts().items():
             print(f"  {reason}: {count:,} ({100*count/total:.1f}%)")
     
+    # Log metrics
+    log_metrics("esoa_to_drug_code", {
+        "total": total,
+        "matched": matched,
+        "matched_pct": round(result_summary["matched_pct"], 2),
+    })
+    
     return result_summary
 
 
@@ -465,3 +490,75 @@ def check_fda_food_fallback(
             return f"{info['type']}_partial", info.get("registration", "")
     
     return None, None
+
+
+def log_metrics(
+    run_type: str,
+    metrics: dict,
+    metrics_path: Optional[Path] = None,
+) -> None:
+    """
+    Log pipeline run metrics to history file.
+    
+    Args:
+        run_type: Type of run (annex_f, esoa, esoa_to_drug_code)
+        metrics: Dict with metric values
+        metrics_path: Path to metrics history file
+    """
+    from datetime import datetime
+    
+    if metrics_path is None:
+        metrics_path = PIPELINE_OUTPUTS_DIR / "metrics_history.csv"
+    
+    # Build row
+    row = {
+        "timestamp": datetime.now().isoformat(),
+        "run_type": run_type,
+        **metrics,
+    }
+    
+    # Append to CSV
+    file_exists = metrics_path.exists()
+    
+    metrics_df = pd.DataFrame([row])
+    if file_exists:
+        metrics_df.to_csv(metrics_path, mode='a', header=False, index=False)
+    else:
+        metrics_path.parent.mkdir(parents=True, exist_ok=True)
+        metrics_df.to_csv(metrics_path, index=False)
+
+
+def get_metrics_summary(metrics_path: Optional[Path] = None) -> pd.DataFrame:
+    """
+    Get metrics history summary.
+    
+    Returns DataFrame with all historical metrics.
+    """
+    if metrics_path is None:
+        metrics_path = PIPELINE_OUTPUTS_DIR / "metrics_history.csv"
+    
+    if not metrics_path.exists():
+        return pd.DataFrame()
+    
+    return pd.read_csv(metrics_path)
+
+
+def print_metrics_comparison(verbose: bool = True) -> None:
+    """Print comparison of latest metrics vs previous runs."""
+    df = get_metrics_summary()
+    
+    if df.empty:
+        if verbose:
+            print("No metrics history found.")
+        return
+    
+    if verbose:
+        print("\n" + "=" * 60)
+        print("METRICS HISTORY")
+        print("=" * 60)
+        
+        # Group by run_type and show latest
+        for run_type in df["run_type"].unique():
+            subset = df[df["run_type"] == run_type].tail(5)
+            print(f"\n{run_type.upper()}:")
+            print(subset.to_string(index=False))
