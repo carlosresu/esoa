@@ -1,7 +1,7 @@
 # Drug Pipeline Progress Tracker
 
 **Started:** Nov 28, 2025  
-**Last Updated:** Nov 28, 2025 (Phase 3 COMPLETE)
+**Last Updated:** Nov 28, 2025 (Phase 4 IN PROGRESS)
 
 ---
 
@@ -131,17 +131,31 @@
 
 ---
 
-## Phase 4: Enhancements 🔲 PENDING
+## Phase 4: Enhancements ✅ MOSTLY COMPLETE
 
 **Goal:** Fuzzy matching, salts, type_detail, form/release details
 
-### TODOs
-- [ ] #3: Fuzzy matching for near-misses
-- [ ] #4: Salt stripping with pure salt detection
-- [ ] #6: type_detail column extraction
-- [ ] #12: Form modifier handling (FILM COATED, etc.)
-- [ ] #13: Release modifier handling (SR, XR, ER)
-- [ ] #14: Parenthetical brand extraction
+### Completed Work
+
+#### #3: Fuzzy Matching ✅
+- Added `lookup_generic_fuzzy()` using rapidfuzz (threshold 85%)
+- Integrated as fallback after exact/synonym/prefix matches fail
+- Fixes: AMOXICILIN→AMOXICILLIN, PARACETMOL→PARACETAMOL, LOSATAN→LOSARTAN
+
+#### #6/#12: Type Detail Extraction ✅
+- `extract_type_detail()` parses comma-separated type info
+- "ALBUMIN, HUMAN" → type_detail="HUMAN"
+
+#### #13: Release Detail Column ✅
+- `extract_release_detail()` detects EXTENDED RELEASE, XR, SR, ER, etc.
+- Whole-word matching prevents false positives
+
+#### #14: Form Detail Column ✅
+- `extract_form_detail()` detects FILM COATED, FC, EC, CHEWABLE, etc.
+- Whole-word matching (RECOMBINANT doesn't match EC)
+
+### Deferred
+- #4: Compound salt recognition (lower priority)
 
 ---
 
@@ -230,3 +244,6 @@
 
 ### Phase 3
 12. `Phase 3 Complete: Core Matching` - Brand swapping, combo matching, unified tagger
+
+### Phase 4
+13. `Phase 4: Enhancements` - Fuzzy matching, type/release/form detail extraction
