@@ -7,8 +7,14 @@ import re
 import unicodedata
 from typing import Iterable, Optional, List, Tuple
 
-from .combos_drugs import SALT_TOKENS
+from .tagging.unified_constants import (
+    SALT_TOKENS,
+    SALT_TOKENS_LOWER,
+    STOPWORDS_LOWER,
+    UNIT_TOKENS_LOWER,
+)
 
+# Legacy set - now using STOPWORDS_LOWER from unified_constants
 BASE_GENERIC_IGNORE = {
     "and",
     "with",

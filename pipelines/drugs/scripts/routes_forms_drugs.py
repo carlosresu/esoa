@@ -1,9 +1,20 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+"""Route and form parsing utilities.
+
+Note: Canonical mappings are now in unified_constants.py.
+This file provides parsing functions that use those constants.
+"""
 
 import re
 from typing import List, Optional, Tuple
 
+from .tagging.unified_constants import (
+    FORM_TO_ROUTE as UNIFIED_FORM_TO_ROUTE,
+    ROUTE_CANON as UNIFIED_ROUTE_CANON,
+)
+
+# Re-export for backward compatibility (extends unified with local additions)
 FORM_TO_ROUTE = {
     "tablet": "oral", "tab": "oral", "tabs": "oral", "chewing gum": "oral",
     "capsule": "oral", "cap": "oral", "caps": "oral",

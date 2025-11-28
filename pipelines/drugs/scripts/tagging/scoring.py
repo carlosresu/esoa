@@ -16,9 +16,18 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from .constants import (
-    ATC_COMBINATION_PATTERNS,
+from .unified_constants import (
+    # Categories
     CATEGORY_DOSE, CATEGORY_FORM, CATEGORY_GENERIC, CATEGORY_ROUTE, CATEGORY_SALT,
+    # ATC patterns
+    ATC_COMBINATION_PATTERNS,
+    COMBINATION_ATC_SUFFIXES,
+    # Form equivalence
+    FORM_EQUIVALENCE_GROUPS,
+    FORM_EQUIVALENTS,
+    # Helper functions
+    is_combination_atc as _is_combination_atc,
+    forms_are_equivalent,
 )
 from .form_route_mapping import (
     FORM_ALIASES,
@@ -28,35 +37,6 @@ from .form_route_mapping import (
     normalize_route,
     infer_route_from_form,
 )
-
-
-# ============================================================================
-# FORM EQUIVALENCE GROUPS
-# Forms within the same group are considered interchangeable
-# ============================================================================
-
-FORM_EQUIVALENCE_GROUPS = [
-    # Solid oral forms - generally interchangeable
-    {"TABLET", "CAPSULE", "CAPLET"},
-    # Liquid oral forms
-    {"SOLUTION", "SYRUP", "ELIXIR"},
-    # Suspensions
-    {"SUSPENSION"},
-    # Topical semi-solids
-    {"CREAM", "OINTMENT", "GEL"},
-    # Injectable forms
-    {"INJECTION", "AMPULE", "VIAL"},
-    # Inhalation forms
-    {"INHALER", "AEROSOL", "AEROSOL, METERED", "NEBULE"},
-    # Eye preparations
-    {"DROPS"},
-]
-
-# Build lookup: form -> set of equivalent forms
-FORM_EQUIVALENTS: Dict[str, Set[str]] = {}
-for group in FORM_EQUIVALENCE_GROUPS:
-    for form in group:
-        FORM_EQUIVALENTS[form] = group
 
 
 def is_combination_atc(atc_code: str) -> bool:
