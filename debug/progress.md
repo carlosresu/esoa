@@ -1,7 +1,7 @@
 # Drug Pipeline Progress Tracker
 
 **Started:** Nov 28, 2025  
-**Last Updated:** Nov 28, 2025 (Phase 5 COMPLETE)
+**Last Updated:** Nov 28, 2025 (Phase 6 COMPLETE)
 
 ---
 
@@ -185,12 +185,22 @@
 
 ---
 
-## Phase 6: Performance 🔲 PENDING
+## Phase 6: Performance ✅ COMPLETE
 
-**Goal:** Batch tagging
+**Goal:** Batch tagging with chunking and caching
 
-### TODOs
-- [ ] #10: Add `tag_batch()` method to UnifiedTagger
+### Completed Work
+
+#### #10: Batch Tagging Implementation ✅
+- `tag_batch()`: Chunked processing with progress reporting
+- `benchmark()`: Test chunk sizes 5K/10K/15K to find optimal
+- Cached generics list for faster fuzzy matching
+
+### Performance Results
+- Before: ~168 rows/s
+- After: ~230 rows/s (37% faster)
+- 258K rows: ~19 minutes (was ~25 minutes)
+- Optimal chunk size: 10,000 rows
 
 ---
 
@@ -266,3 +276,6 @@
 
 ### Phase 5
 15. `Phase 5 Complete: Normalization` - Dose ratio normalization, stopwords, PNF improvements
+
+### Phase 6
+16. `Phase 6 Complete: Performance` - Batch tagging with chunking, cached fuzzy matching
