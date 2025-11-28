@@ -1,7 +1,7 @@
 # Drug Pipeline Progress Tracker
 
 **Started:** Nov 28, 2025  
-**Last Updated:** Nov 28, 2025 (Phase 2 COMPLETE)
+**Last Updated:** Nov 28, 2025 (Phase 3 COMPLETE)
 
 ---
 
@@ -98,16 +98,36 @@
 
 ---
 
-## Phase 3: Core Matching 🔲 PENDING
+## Phase 3: Core Matching ✅ COMPLETE
 
 **Goal:** Brand swapping, combo matching, unified tagger
 
-### TODOs
-- [ ] #1: Improve brand → generic swapping
-- [ ] #2: Fix combo drug ATC assignment (single vs combo)
-- [ ] #5: Order-independent combo matching
-- [ ] #7: Unified tagger for Annex F and ESOA
-- [ ] #27: Molecule-based fallback matching
+### Completed Work
+
+#### #1: Brand → Generic Swapping ✅
+- Added `load_brands_lookup()`, `build_brand_to_generic_map()` to lookup.py
+- Excludes known generics from brand map (prevents AMOXICILLIN→combo bug)
+- 126,413 brand entries loaded
+
+#### #2/#5: Order-Independent Combination Matching ✅
+- `build_combination_keys()` sorts components alphabetically
+- PIPERACILLIN + TAZOBACTAM == TAZOBACTAM + PIPERACILLIN
+
+#### #7: Synonym Swapping in Mixtures ✅
+- Normalizes each component through synonyms before combo matching
+- IPRATROPIUM + SALBUTAMOL matches via ALBUTEROL synonym
+
+#### #27: Unified Tagger with Pharmaceutical Scoring ✅
+- Generic must match (required)
+- Salt forms flexible (except pure salts like NaCl)
+- Single vs combo ATC preference based on input
+- Output includes dose, form, route extracted from input
+
+### Test Results
+- BIOGESIC 500MG TAB → ACETAMINOPHEN, N02BE01 (brand swap)
+- AMOXICILLIN 500MG CAP → AMOXICILLIN, J01CA04 (single ATC preferred)
+- IPRATROPIUM + SALBUTAMOL → R03AL02 (combo matching)
+- LOSARTAN POTASSIUM 50MG → LOSARTAN, C09CA01 (salt strip)
 
 ---
 
@@ -207,3 +227,6 @@
 9. `Phase 2: Build unified reference` - DuckDB, generics/brands/mixtures lookups
 10. `Phase 2 #16: Fix ESOA deduplication` - Added drop_duplicates to _concatenate_csv
 11. `Phase 2 Complete` - All data foundation items done
+
+### Phase 3
+12. `Phase 3 Complete: Core Matching` - Brand swapping, combo matching, unified tagger
