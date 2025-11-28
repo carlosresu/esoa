@@ -9,7 +9,7 @@ Sources: constants.py, combos_drugs.py, text_utils_drugs.py, routes_forms_drugs.
          generic_normalization.py, scoring.py, and debug/old_files/*.py
 """
 
-from typing import Dict, Set, List
+from typing import Dict, List, Optional, Set, Tuple
 
 # ============================================================================
 # TOKEN CATEGORIES
@@ -188,6 +188,101 @@ PURE_SALT_COMPOUNDS: Set[str] = {
     "SODIUM SELENITE", "SODIUM THIOSULFATE",
     "FERROUS FUMARATE",
 }
+
+# ============================================================================
+# COMPOUND SALT RECOGNITION - Cation/Anion mapping
+# Used to identify related salts (e.g., SODIUM CHLORIDE and POTASSIUM CHLORIDE
+# share the CHLORIDE anion)
+# ============================================================================
+
+# Common pharmaceutical cations (positively charged ions)
+SALT_CATIONS: Set[str] = {
+    "SODIUM", "POTASSIUM", "CALCIUM", "MAGNESIUM", "ZINC", "IRON",
+    "FERROUS", "FERRIC", "ALUMINUM", "ALUMINIUM", "AMMONIUM",
+    "COPPER", "MANGANESE", "SILVER", "LITHIUM", "BARIUM",
+}
+
+# Common pharmaceutical anions (negatively charged ions)
+SALT_ANIONS: Set[str] = {
+    # Halides
+    "CHLORIDE", "BROMIDE", "IODIDE", "FLUORIDE",
+    # Oxygen-containing
+    "SULFATE", "SULPHATE", "PHOSPHATE", "NITRATE", "CARBONATE", "BICARBONATE",
+    "ACETATE", "CITRATE", "LACTATE", "GLUCONATE", "FUMARATE", "SUCCINATE",
+    "TARTRATE", "MALEATE", "MALATE", "OXIDE", "HYDROXIDE",
+    # Other
+    "SELENITE", "THIOSULFATE",
+}
+
+# Map anion to all its common cation pairs (for identifying related compounds)
+ANION_TO_CATIONS: Dict[str, Set[str]] = {
+    "CHLORIDE": {"SODIUM", "POTASSIUM", "CALCIUM", "MAGNESIUM", "ZINC", "AMMONIUM"},
+    "SULFATE": {"MAGNESIUM", "SODIUM", "POTASSIUM", "CALCIUM", "FERROUS", "ZINC", "COPPER", "MANGANESE"},
+    "SULPHATE": {"MAGNESIUM", "SODIUM", "POTASSIUM", "CALCIUM", "FERROUS", "ZINC"},
+    "PHOSPHATE": {"SODIUM", "POTASSIUM", "CALCIUM", "MAGNESIUM"},
+    "CARBONATE": {"CALCIUM", "MAGNESIUM", "SODIUM"},
+    "BICARBONATE": {"SODIUM", "POTASSIUM"},
+    "CITRATE": {"SODIUM", "POTASSIUM", "CALCIUM", "MAGNESIUM"},
+    "LACTATE": {"SODIUM", "CALCIUM"},
+    "ACETATE": {"SODIUM", "POTASSIUM", "CALCIUM", "MAGNESIUM"},
+    "GLUCONATE": {"SODIUM", "CALCIUM", "MAGNESIUM", "POTASSIUM", "ZINC", "FERROUS"},
+    "HYDROXIDE": {"SODIUM", "POTASSIUM", "CALCIUM", "MAGNESIUM", "ALUMINUM", "ALUMINIUM"},
+    "NITRATE": {"SODIUM", "POTASSIUM", "SILVER"},
+    "BROMIDE": {"SODIUM", "POTASSIUM"},
+    "IODIDE": {"SODIUM", "POTASSIUM"},
+    "FLUORIDE": {"SODIUM", "CALCIUM"},
+    "FUMARATE": {"FERROUS"},
+}
+
+
+def parse_compound_salt(name: str) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Parse a compound salt into its cation and anion components.
+    
+    Examples:
+    - "SODIUM CHLORIDE" -> ("SODIUM", "CHLORIDE")
+    - "CALCIUM CARBONATE" -> ("CALCIUM", "CARBONATE")
+    - "FERROUS SULFATE" -> ("FERROUS", "SULFATE")
+    - "PARACETAMOL" -> (None, None)
+    
+    Returns (cation, anion) or (None, None) if not a compound salt.
+    """
+    name_upper = name.upper().strip()
+    words = name_upper.split()
+    
+    if len(words) != 2:
+        return None, None
+    
+    first, second = words
+    
+    # Check if first word is cation and second is anion
+    if first in SALT_CATIONS and second in SALT_ANIONS:
+        return first, second
+    
+    return None, None
+
+
+def get_related_salts(name: str) -> Set[str]:
+    """
+    Get all related compound salts that share the same anion.
+    
+    Example:
+    - "SODIUM CHLORIDE" -> {"POTASSIUM CHLORIDE", "CALCIUM CHLORIDE", ...}
+    """
+    cation, anion = parse_compound_salt(name)
+    
+    if not anion:
+        return set()
+    
+    related = set()
+    related_cations = ANION_TO_CATIONS.get(anion, set())
+    
+    for c in related_cations:
+        if c != cation:  # Don't include self
+            related.add(f"{c} {anion}")
+    
+    return related
+
 
 # ============================================================================
 # ELEMENT DRUGS - Elements that can be standalone drugs
@@ -615,6 +710,7 @@ __all__ = [
     "STOPWORDS", "STOPWORDS_LOWER",
     "SALT_TOKENS", "SALT_TOKENS_LOWER",
     "PURE_SALT_COMPOUNDS",
+    "SALT_CATIONS", "SALT_ANIONS", "ANION_TO_CATIONS",
     "ELEMENT_DRUGS",
     "UNIT_TOKENS", "UNIT_TOKENS_LOWER",
     "CONNECTIVE_WORDS", "SALT_TAIL_BREAK_TOKENS",
@@ -632,4 +728,5 @@ __all__ = [
     "is_stopword", "is_salt_token", "is_pure_salt_compound",
     "is_element_drug", "is_unit_token", "is_combination_atc",
     "forms_are_equivalent", "infer_route_from_form",
+    "parse_compound_salt", "get_related_salts",
 ]
