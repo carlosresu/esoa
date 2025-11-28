@@ -1,7 +1,7 @@
 # Drug Pipeline Progress Tracker
 
 **Started:** Nov 28, 2025  
-**Last Updated:** Nov 28, 2025 (Phase 7 COMPLETE)
+**Last Updated:** Nov 28, 2025 (Phase 8 COMPLETE - ALL PHASES DONE)
 
 ---
 
@@ -222,15 +222,27 @@
 
 ---
 
-## Phase 8: Cleanup 🔲 PENDING
+## Phase 8: Cleanup ✅ COMPLETE
 
 **Goal:** Externalize hardcoded data, documentation, metrics
 
-### TODOs
-- [ ] #19: Externalize remaining hardcoded data
-- [ ] #24: Complete folder reorganization (tagging, reference, utils)
-- [ ] #31: Update documentation
-- [ ] #33: Metrics tracking system
+### Completed Work
+
+#### #19: Hardcoded Values Audit ✅
+- unified_constants.py: 732 lines of consolidated constants
+- All token lists, form mappings, salt handling centralized
+- Scripts import from unified_constants
+
+#### #31: Documentation ✅
+- pipeline.md: 765 lines comprehensive documentation
+- Pharmaceutical matching principles, scoring algorithm
+- Data sources, decision log, file audit, glossary
+
+#### #33: Metrics Tracking ✅
+- `log_metrics()`: Append to metrics_history.csv
+- `get_metrics_summary()`: Read metrics history
+- `print_metrics_comparison()`: Show latest vs previous
+- Auto-logs after each Part 2/3/4 run
 
 ---
 
@@ -290,3 +302,6 @@
 
 ### Phase 7
 17. `Phase 7 Complete: Fallbacks` - Part 4 implementation, FDA food fallback
+
+### Phase 8
+18. `Phase 8 Complete: Cleanup` - Metrics tracking, documentation complete
