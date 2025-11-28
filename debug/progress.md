@@ -1,7 +1,7 @@
 # Drug Pipeline Progress Tracker
 
 **Started:** Nov 28, 2025  
-**Last Updated:** Nov 28, 2025 (Phase 4 IN PROGRESS)
+**Last Updated:** Nov 28, 2025 (Phase 4 COMPLETE)
 
 ---
 
@@ -131,7 +131,7 @@
 
 ---
 
-## Phase 4: Enhancements ✅ MOSTLY COMPLETE
+## Phase 4: Enhancements ✅ COMPLETE
 
 **Goal:** Fuzzy matching, salts, type_detail, form/release details
 
@@ -141,6 +141,12 @@
 - Added `lookup_generic_fuzzy()` using rapidfuzz (threshold 85%)
 - Integrated as fallback after exact/synonym/prefix matches fail
 - Fixes: AMOXICILIN→AMOXICILLIN, PARACETMOL→PARACETAMOL, LOSATAN→LOSARTAN
+
+#### #4: Compound Salt Recognition ✅
+- `SALT_CATIONS`: SODIUM, POTASSIUM, CALCIUM, etc.
+- `SALT_ANIONS`: CHLORIDE, SULFATE, ACETATE, etc.
+- `parse_compound_salt()`: "SODIUM CHLORIDE" → (SODIUM, CHLORIDE)
+- `get_related_salts()`: Find salts sharing same anion
 
 #### #6/#12: Type Detail Extraction ✅
 - `extract_type_detail()` parses comma-separated type info
@@ -153,9 +159,6 @@
 #### #14: Form Detail Column ✅
 - `extract_form_detail()` detects FILM COATED, FC, EC, CHEWABLE, etc.
 - Whole-word matching (RECOMBINANT doesn't match EC)
-
-### Deferred
-- #4: Compound salt recognition (lower priority)
 
 ---
 
@@ -247,3 +250,4 @@
 
 ### Phase 4
 13. `Phase 4: Enhancements` - Fuzzy matching, type/release/form detail extraction
+14. `Phase 4 Complete: #4 Compound salt recognition` - Cation/anion parsing
