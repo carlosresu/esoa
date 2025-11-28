@@ -355,7 +355,6 @@ def refresh_drugbank_generics_exports(*, verbose: bool = True) -> tuple[Optional
     """Run DrugBank R scripts with minimal Python overhead using native shell."""
     import time
     import shutil
-    import multiprocessing
     
     drugbank_dir = PROJECT_DIR / "dependencies" / "drugbank_generics"
     
@@ -364,8 +363,9 @@ def refresh_drugbank_generics_exports(*, verbose: bool = True) -> tuple[Optional
     if not rscript:
         raise FileNotFoundError("Rscript not found on PATH")
     
-    # Use cores-1 workers (leave one for system)
-    worker_count = max(1, multiprocessing.cpu_count() - 1)
+    # Default to 8 workers or fewer on smaller systems (AGENTS.md #6)
+    import multiprocessing
+    worker_count = min(8, multiprocessing.cpu_count())
     
     scripts = [
         "drugbank_generics.R",
