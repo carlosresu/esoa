@@ -260,3 +260,208 @@ def run_esoa_tagging(
             print(f"  {reason}: {count:,} ({100*count/total:.1f}%)")
     
     return results
+
+
+def run_esoa_to_drug_code(
+    esoa_path: Optional[Path] = None,
+    annex_path: Optional[Path] = None,
+    output_path: Optional[Path] = None,
+    verbose: bool = True,
+) -> dict:
+    """
+    Run ESOA to Drug Code matching (Part 4).
+    
+    Matches ESOA items to Annex F drug codes using EXACT matching:
+    - Generic name must match exactly
+    - ATC code must match (drug_code is unique per ATC)
+    
+    Returns dict with results summary.
+    """
+    if esoa_path is None:
+        esoa_path = PIPELINE_OUTPUTS_DIR / "esoa_with_atc.parquet"
+        if not esoa_path.exists():
+            esoa_path = PIPELINE_OUTPUTS_DIR / "esoa_with_atc.csv"
+    if annex_path is None:
+        annex_path = PIPELINE_OUTPUTS_DIR / "annex_f_with_atc.parquet"
+        if not annex_path.exists():
+            annex_path = PIPELINE_OUTPUTS_DIR / "annex_f_with_atc.csv"
+    if output_path is None:
+        output_path = PIPELINE_OUTPUTS_DIR / "esoa_with_drug_code.csv"
+    
+    if verbose:
+        print("=" * 60)
+        print("Part 4: Match ESOA to Annex F Drug Codes")
+        print("=" * 60)
+    
+    # Load data
+    if not esoa_path.exists():
+        raise FileNotFoundError(f"ESOA with ATC not found: {esoa_path}")
+    if not annex_path.exists():
+        raise FileNotFoundError(f"Annex F with ATC not found: {annex_path}")
+    
+    if str(esoa_path).endswith('.parquet'):
+        esoa_df = run_with_spinner("Load ESOA", lambda: pd.read_parquet(esoa_path))
+    else:
+        esoa_df = run_with_spinner("Load ESOA", lambda: pd.read_csv(esoa_path))
+    
+    if str(annex_path).endswith('.parquet'):
+        annex_df = run_with_spinner("Load Annex F", lambda: pd.read_parquet(annex_path))
+    else:
+        annex_df = run_with_spinner("Load Annex F", lambda: pd.read_csv(annex_path))
+    
+    if verbose:
+        print(f"  ESOA rows: {len(esoa_df):,}")
+        print(f"  Annex F rows: {len(annex_df):,}")
+    
+    # Build Annex F lookup index by generic name
+    def normalize_for_match(s):
+        if pd.isna(s):
+            return ""
+        return str(s).upper().strip()
+    
+    annex_lookup = {}
+    for _, row in annex_df.iterrows():
+        drug_code = row.get("Drug Code")
+        if pd.isna(drug_code):
+            continue
+        
+        generic = normalize_for_match(row.get("matched_generic_name") or row.get("generic_name"))
+        if not generic:
+            continue
+        
+        atc = normalize_for_match(row.get("atc_code"))
+        
+        if generic not in annex_lookup:
+            annex_lookup[generic] = []
+        annex_lookup[generic].append({
+            "drug_code": drug_code,
+            "atc_code": atc,
+            "generic_name": generic,
+        })
+    
+    if verbose:
+        print(f"  Annex F lookup: {len(annex_lookup):,} unique generics")
+    
+    # Match ESOA to Annex F
+    def match_to_drug_code(row):
+        generic = normalize_for_match(row.get("generic_final") or row.get("generic_name"))
+        atc = normalize_for_match(row.get("atc_code_final") or row.get("atc_code"))
+        
+        if not generic:
+            return None, "no_generic"
+        
+        candidates = annex_lookup.get(generic, [])
+        if not candidates:
+            return None, "generic_not_in_annex"
+        
+        # Filter by ATC if available
+        if atc:
+            atc_matches = [c for c in candidates if c["atc_code"] == atc]
+            if atc_matches:
+                return atc_matches[0]["drug_code"], "matched_generic_atc"
+        
+        # Fall back to generic-only match
+        return candidates[0]["drug_code"], "matched_generic_only"
+    
+    if verbose:
+        print("\nMatching ESOA to Drug Codes...")
+    
+    results = esoa_df.apply(match_to_drug_code, axis=1, result_type="expand")
+    esoa_df["drug_code"] = results[0]
+    esoa_df["drug_code_match_reason"] = results[1]
+    
+    # Write outputs
+    PIPELINE_OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+    run_with_spinner("Write outputs", lambda: write_csv_and_parquet(esoa_df, output_path))
+    
+    # Summary
+    total = len(esoa_df)
+    matched = esoa_df["drug_code"].notna().sum()
+    
+    result_summary = {
+        "total": total,
+        "matched": matched,
+        "matched_pct": 100 * matched / total if total else 0,
+        "output_path": output_path,
+    }
+    
+    if verbose:
+        print(f"\nPart 4 complete: {output_path}")
+        print(f"  Total: {total:,}")
+        print(f"  Matched: {matched:,} ({result_summary['matched_pct']:.1f}%)")
+        
+        print("\nMatch reasons:")
+        for reason, count in esoa_df["drug_code_match_reason"].value_counts().items():
+            print(f"  {reason}: {count:,} ({100*count/total:.1f}%)")
+    
+    return result_summary
+
+
+def load_fda_food_lookup(inputs_dir: Path = None) -> dict:
+    """
+    Load FDA food data for fallback matching.
+    
+    Returns dict mapping normalized product names to registration info.
+    """
+    import glob
+    
+    if inputs_dir is None:
+        inputs_dir = PIPELINE_INPUTS_DIR
+    
+    # Find latest FDA food file
+    food_files = sorted(glob.glob(str(inputs_dir / "fda_food_*.parquet")))
+    if not food_files:
+        food_files = sorted(glob.glob(str(inputs_dir / "fda_food_*.csv")))
+    
+    if not food_files:
+        return {}
+    
+    food_path = Path(food_files[-1])
+    
+    if str(food_path).endswith('.parquet'):
+        food_df = pd.read_parquet(food_path)
+    else:
+        food_df = pd.read_csv(food_path)
+    
+    # Build lookup by brand_name and product_name
+    lookup = {}
+    for _, row in food_df.iterrows():
+        brand = str(row.get("brand_name", "")).upper().strip()
+        product = str(row.get("product_name", "")).upper().strip()
+        reg_num = row.get("registration_number", "")
+        
+        if brand and brand != "-":
+            lookup[brand] = {"type": "fda_food_brand", "registration": reg_num}
+        if product and product != "-":
+            lookup[product] = {"type": "fda_food_product", "registration": reg_num}
+    
+    return lookup
+
+
+def check_fda_food_fallback(
+    text: str,
+    food_lookup: dict,
+) -> tuple:
+    """
+    Check if text matches FDA food database.
+    
+    Returns (match_type, registration_number) or (None, None).
+    """
+    if not text or not food_lookup:
+        return None, None
+    
+    text_upper = text.upper().strip()
+    
+    # Direct match
+    if text_upper in food_lookup:
+        info = food_lookup[text_upper]
+        return info["type"], info.get("registration", "")
+    
+    # Token-based match (check if any token matches)
+    tokens = text_upper.split()
+    for token in tokens:
+        if len(token) >= 4 and token in food_lookup:
+            info = food_lookup[token]
+            return f"{info['type']}_partial", info.get("registration", "")
+    
+    return None, None
