@@ -48,19 +48,27 @@
 
 ---
 
-## Phase 2: Data Foundation 🔲 PENDING
+## Phase 2: Data Foundation 🔄 IN PROGRESS
 
 **Goal:** Build proper unified reference in DuckDB with all enrichments
 
 ### TODOs
 - [ ] #11: Expand synonyms from DrugBank
 - [ ] #15: Build form-route validity mapping
-- [ ] #16: Create unified reference dataset
-- [ ] #17: Load all sources into DuckDB
-- [ ] #18: Build reference indexes
-- [ ] #28: Extract multi-word generics list
-- [ ] #29: Build brand → generic mapping
-- [ ] #32: Dose normalization reference
+- [ ] #16: Fix ESOA row binding (investigate duplicates)
+- [ ] #17: Build proper Tier 1 unified reference
+- [ ] #18: Collect all known doses
+- [ ] #28: Use DuckDB as primary data store
+- [ ] #29: Enrich from DrugBank products
+- [ ] #32: Standardize column names
+- [ ] #35: Centralize R script hardcoded constants (NEW)
+
+### Discovered Issues
+- DrugBank R scripts taking >20min (was ~300s) - needs investigation
+- R scripts have hardcoded constants duplicating Python unified_constants.py:
+  - `drugbank_generics.R`: PER_UNIT_MAP (30+ unit mappings)
+  - `drugbank_salts.R`: salt_suffixes (58), pure_salt_compounds (51)
+  - `drugbank_mixtures.R`: SALT_SYNONYM_LOOKUP (6 salt synonyms)
 
 ---
 

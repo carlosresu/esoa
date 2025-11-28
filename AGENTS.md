@@ -56,7 +56,14 @@ These rules are meant for GPT agents. Apply them whenever you are editing this r
 
 16. **Single vs combination ATC codes.** When an input row contains a single molecule, prefer single-drug ATC codes over combination ATCs. For example, LOSARTAN alone should get C09CA01, not C09DA01 (losartan+HCTZ combo).
 
-17. **Scoring algorithm.** Use deterministic pharmaceutical-principled scoring (NOT numeric weights):
+17. **R and Python constants sync.** The DrugBank R scripts (`dependencies/drugbank_generics/*.R`) have hardcoded constants that must stay in sync with Python constants (`pipelines/drugs/scripts/tagging/unified_constants.py`):
+   - Salt suffixes: `drugbank_salts.R:salt_suffixes` ↔ `SALT_TOKENS`
+   - Pure salts: `drugbank_salts.R:pure_salt_compounds` ↔ `PURE_SALT_COMPOUNDS`
+   - Unit mappings: `drugbank_generics.R:PER_UNIT_MAP` ↔ `UNIT_TOKENS`
+   - Salt synonyms: `drugbank_mixtures.R:SALT_SYNONYM_LOOKUP` ↔ (should be added to Python)
+   When modifying constants in either location, update the other to match.
+
+18. **Scoring algorithm.** Use deterministic pharmaceutical-principled scoring (NOT numeric weights):
     - Generic match is REQUIRED (no match without it)
     - Salt forms are IGNORED (unless pure salt compound)
     - Dose is FLEXIBLE for ATC tagging, EXACT for Drug Code matching

@@ -219,6 +219,28 @@ Normalize all to standard units (mg, mg/mL, %). Propagate as pipe-delimited for 
 
 ---
 
+#### #35. Centralize Hardcoded Constants in DrugBank R Scripts (NEW)
+**What:** The R scripts in `dependencies/drugbank_generics/` have hardcoded constants that duplicate our Python constants:
+
+**drugbank_generics.R:**
+- `PER_UNIT_MAP` (lines 390-404): 30+ unit abbreviation mappings (tab→tablet, ml, cap→capsule, etc.)
+- Unit normalization patterns: microgram→mcg, milligram→mg, cc→ml, etc.
+
+**drugbank_salts.R:**
+- `salt_suffixes` (lines 98-115): 58 salt suffixes (HYDROCHLORIDE, SODIUM, SULFATE, etc.)
+- `pure_salt_compounds` (lines 169-188): 51 pure salts (SODIUM CHLORIDE, etc.)
+
+**drugbank_mixtures.R:**
+- `SALT_SYNONYM_LOOKUP` (lines 281-288): Salt synonym mappings (hydrochloride↔hcl, sodium↔na, etc.)
+- Excluded groups: "vet" (veterinary drugs)
+
+**Action:**
+1. Create `dependencies/drugbank_generics/constants.R` to centralize all hardcoded data
+2. Export constants as CSV during R script run for Python sync
+3. Add AGENTS.md rule to keep R and Python constants in sync
+
+---
+
 #### #32. Standardize Column Names Across Datasets
 **What:** Ensure consistent column names:
 
