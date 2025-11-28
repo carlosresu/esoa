@@ -104,7 +104,7 @@
 - `pnf_partial_drugs.py` - Not imported anywhere
 - `generate_route_form_mapping.py` - One-time script
 
-**Remaining:** Folder reorganization (tagging, reference, utils).
+**Remaining:** Folder reorganization (tagging, reference, utils) - deferred to Phase 8 (Cleanup).
 
 ---
 
@@ -123,13 +123,18 @@
 
 ---
 
-#### #26. DrugBank R Script Performance
+#### #26. DrugBank R Script Performance ✅ DONE
 **What:** Profile `drugbank_generics.R` and related scripts. Check if:
 - Over-parallelizing (too much overhead)
 - Under-parallelizing (not using all cores)
 - Not vectorized (row-by-row operations)
 
-**Action:** R script optimization.
+**Completed (Nov 28, 2025):** Already well-optimized:
+- Parallel processing via `future`/`mclapply` with chunking
+- `data.table` threading via `setDTthreads()`
+- Configurable workers: `ESOA_DRUGBANK_WORKERS` env var (default 8)
+- OS-aware backend: multicore on Unix, multisession on Windows
+- No changes needed.
 
 ---
 
