@@ -56,6 +56,7 @@ class UnifiedTagger:
         self.synonyms: Dict[str, str] = {}
         self.brand_map: Dict[str, str] = {}
         self.multiword_generics: Set[str] = set()
+        self.cached_generics_list: List[str] = []
         self._loaded = False
     
     def _log(self, msg: str) -> None:
@@ -83,6 +84,9 @@ class UnifiedTagger:
         generics_df = load_generics_lookup(self.outputs_dir)
         self.synonyms = load_synonyms(generics_df)
         self._log(f"  - synonyms: {len(self.synonyms):,} entries")
+        
+        # Cache generics list for fuzzy matching performance
+        self.cached_generics_list = generics_df["generic_name"].dropna().tolist()
         
         # Load brands for brand → generic swapping
         # Pass generics_df to exclude known generic names from brand map
@@ -168,6 +172,145 @@ class UnifiedTagger:
         results = self._tag_batch(texts, ids)
         return pd.DataFrame(results)
     
+    def tag_batch(
+        self,
+        df: pd.DataFrame,
+        text_column: str,
+        id_column: Optional[str] = None,
+        chunk_size: int = 10000,
+        show_progress: bool = True,
+    ) -> pd.DataFrame:
+        """
+        Tag descriptions in a DataFrame using chunked processing.
+        
+        Processes data in chunks of `chunk_size` rows for better memory
+        efficiency and progress reporting on large datasets.
+        
+        Args:
+            df: Input DataFrame
+            text_column: Column containing drug descriptions
+            id_column: Optional column for row IDs
+            chunk_size: Number of rows per chunk (default 10K)
+            show_progress: Whether to print progress updates
+        
+        Returns:
+            DataFrame with tagging results
+        """
+        import time
+        
+        if not self._loaded:
+            self.load()
+        
+        total_rows = len(df)
+        if total_rows == 0:
+            return pd.DataFrame()
+        
+        texts = df[text_column].fillna("").astype(str).tolist()
+        
+        if id_column and id_column in df.columns:
+            ids = df[id_column].tolist()
+        else:
+            ids = list(range(len(df)))
+        
+        # Process in chunks
+        all_results = []
+        num_chunks = (total_rows + chunk_size - 1) // chunk_size
+        start_time = time.time()
+        
+        for i in range(0, total_rows, chunk_size):
+            chunk_start = time.time()
+            chunk_num = i // chunk_size + 1
+            end_idx = min(i + chunk_size, total_rows)
+            
+            chunk_texts = texts[i:end_idx]
+            chunk_ids = ids[i:end_idx]
+            
+            chunk_results = self._tag_batch(chunk_texts, chunk_ids)
+            all_results.extend(chunk_results)
+            
+            if show_progress:
+                chunk_time = time.time() - chunk_start
+                elapsed = time.time() - start_time
+                rows_done = end_idx
+                rate = rows_done / elapsed if elapsed > 0 else 0
+                eta = (total_rows - rows_done) / rate if rate > 0 else 0
+                
+                self._log(
+                    f"  Chunk {chunk_num}/{num_chunks}: "
+                    f"{rows_done:,}/{total_rows:,} rows "
+                    f"({chunk_time:.1f}s, {rate:.0f} rows/s, ETA {eta:.0f}s)"
+                )
+        
+        total_time = time.time() - start_time
+        if show_progress:
+            self._log(
+                f"  Total: {total_rows:,} rows in {total_time:.1f}s "
+                f"({total_rows/total_time:.0f} rows/s)"
+            )
+        
+        return pd.DataFrame(all_results)
+    
+    def benchmark(
+        self,
+        df: pd.DataFrame,
+        text_column: str,
+        chunk_sizes: List[int] = None,
+    ) -> Dict[str, Any]:
+        """
+        Benchmark tagging performance with different chunk sizes.
+        
+        Args:
+            df: Input DataFrame (will use first 50K rows)
+            text_column: Column containing drug descriptions
+            chunk_sizes: List of chunk sizes to test (default [5000, 10000, 15000])
+        
+        Returns:
+            Dictionary with benchmark results
+        """
+        import time
+        
+        if chunk_sizes is None:
+            chunk_sizes = [5000, 10000, 15000]
+        
+        # Use subset for benchmark
+        sample_size = min(50000, len(df))
+        sample_df = df.head(sample_size).copy()
+        
+        results = {
+            "sample_size": sample_size,
+            "chunk_results": [],
+        }
+        
+        for chunk_size in chunk_sizes:
+            self._log(f"Benchmarking chunk_size={chunk_size}...")
+            
+            start = time.time()
+            _ = self.tag_batch(
+                sample_df,
+                text_column,
+                chunk_size=chunk_size,
+                show_progress=False,
+            )
+            elapsed = time.time() - start
+            
+            rate = sample_size / elapsed
+            results["chunk_results"].append({
+                "chunk_size": chunk_size,
+                "time_seconds": round(elapsed, 2),
+                "rows_per_second": round(rate, 0),
+            })
+            
+            self._log(f"  chunk_size={chunk_size}: {elapsed:.2f}s ({rate:.0f} rows/s)")
+        
+        # Find optimal
+        best = max(results["chunk_results"], key=lambda x: x["rows_per_second"])
+        results["optimal_chunk_size"] = best["chunk_size"]
+        results["optimal_rate"] = best["rows_per_second"]
+        
+        self._log(f"Optimal: chunk_size={best['chunk_size']} ({best['rows_per_second']:.0f} rows/s)")
+        
+        return results
+    
     def _tag_batch(
         self,
         texts: List[str],
@@ -222,8 +365,11 @@ class UnifiedTagger:
             normalized_combo_keys = build_combination_keys(normalized_components)
             unique_generics.update(normalized_combo_keys)
         
-        # Batch lookup
-        generic_cache = batch_lookup_generics(unique_generics, self.con, self.synonyms)
+        # Batch lookup with cached generics for faster fuzzy matching
+        generic_cache = batch_lookup_generics(
+            unique_generics, self.con, self.synonyms,
+            enable_fuzzy=True, cached_generics=self.cached_generics_list
+        )
         
         # Process each text
         results = []

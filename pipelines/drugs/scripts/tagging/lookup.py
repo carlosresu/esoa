@@ -266,6 +266,7 @@ def lookup_generic_fuzzy(
     con: duckdb.DuckDBPyConnection,
     threshold: int = 85,
     limit: int = 3,
+    cached_generics: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Fuzzy match lookup for a generic token using rapidfuzz.
@@ -275,6 +276,7 @@ def lookup_generic_fuzzy(
         con: DuckDB connection
         threshold: Minimum similarity score (0-100), default 85
         limit: Maximum number of results
+        cached_generics: Pre-loaded list of generic names (for performance)
     
     Returns:
         List of matching records with similarity scores
@@ -287,13 +289,16 @@ def lookup_generic_fuzzy(
     if len(token) < 4:
         return []  # Too short for fuzzy matching
     
-    # Get all generic names for fuzzy matching
-    try:
-        all_generics = con.execute(
-            "SELECT DISTINCT generic_name FROM generics WHERE generic_name IS NOT NULL"
-        ).fetchdf()["generic_name"].tolist()
-    except Exception:
-        return []
+    # Use cached generics if provided, otherwise query
+    if cached_generics is not None:
+        all_generics = cached_generics
+    else:
+        try:
+            all_generics = con.execute(
+                "SELECT DISTINCT generic_name FROM generics WHERE generic_name IS NOT NULL"
+            ).fetchdf()["generic_name"].tolist()
+        except Exception:
+            return []
     
     if not all_generics:
         return []
@@ -328,6 +333,7 @@ def batch_lookup_generics(
     con: duckdb.DuckDBPyConnection,
     synonyms: Optional[Dict[str, str]] = None,
     enable_fuzzy: bool = True,
+    cached_generics: Optional[List[str]] = None,
 ) -> Dict[str, List[Dict[str, Any]]]:
     """
     Batch lookup for multiple generic tokens.
@@ -374,7 +380,9 @@ def batch_lookup_generics(
         
         # Try fuzzy match as last resort (for potential misspellings)
         if enable_fuzzy and len(token) >= 4:
-            matches = lookup_generic_fuzzy(token_upper, con, threshold=85, limit=1)
+            matches = lookup_generic_fuzzy(
+                token_upper, con, threshold=85, limit=1, cached_generics=cached_generics
+            )
             cache[token_upper] = matches
         else:
             cache[token_upper] = []
