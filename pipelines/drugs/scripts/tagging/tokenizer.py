@@ -22,6 +22,125 @@ _DOSE_PATTERN = re.compile(
 )
 _PARENTHESES_PATTERN = re.compile(r"\([^)]*\)")
 
+# Dose with denominator pattern: 500MG/5ML, 10MG/ML, etc.
+_DOSE_RATIO_PATTERN = re.compile(
+    r"(\d+(?:\.\d+)?)\s*(mg|g|mcg|ug|iu)\s*/\s*(\d+(?:\.\d+)?)\s*(ml|l)",
+    re.IGNORECASE,
+)
+
+# Weight unit conversion factors to mg
+_WEIGHT_TO_MG: Dict[str, float] = {
+    "MG": 1.0,
+    "G": 1000.0,
+    "MCG": 0.001,
+    "UG": 0.001,
+    "IU": 1.0,  # Keep IU as-is (no standard conversion)
+}
+
+# Volume unit conversion factors to ml
+_VOLUME_TO_ML: Dict[str, float] = {
+    "ML": 1.0,
+    "L": 1000.0,
+}
+
+
+def normalize_dose_ratio(dose_str: str) -> Tuple[str, bool]:
+    """
+    Normalize a dose ratio to per-1-unit format.
+    
+    Examples:
+    - "500MG/5ML" -> ("100MG/ML", True)
+    - "10MG/ML" -> ("10MG/ML", True)
+    - "1G/100ML" -> ("10MG/ML", True)
+    - "500MG" -> ("500MG", False)  # Not a ratio
+    
+    Returns (normalized_dose, was_normalized).
+    """
+    match = _DOSE_RATIO_PATTERN.match(dose_str.strip())
+    if not match:
+        return dose_str, False
+    
+    numerator = float(match.group(1))
+    num_unit = match.group(2).upper()
+    denominator = float(match.group(3))
+    denom_unit = match.group(4).upper()
+    
+    # Convert numerator to mg
+    mg_factor = _WEIGHT_TO_MG.get(num_unit, 1.0)
+    mg_value = numerator * mg_factor
+    
+    # Convert denominator to ml
+    ml_factor = _VOLUME_TO_ML.get(denom_unit, 1.0)
+    ml_value = denominator * ml_factor
+    
+    # Calculate per-1-ml concentration
+    if ml_value == 0:
+        return dose_str, False
+    
+    per_ml = mg_value / ml_value
+    
+    # Format result
+    # Use integer if whole number, otherwise 2 decimal places
+    if per_ml == int(per_ml):
+        normalized = f"{int(per_ml)}MG/ML"
+    else:
+        normalized = f"{per_ml:.2f}MG/ML"
+    
+    # Remove trailing zeros
+    if "." in normalized:
+        normalized = normalized.rstrip("0").rstrip(".")
+        if not normalized.endswith("MG/ML"):
+            normalized += "MG/ML"
+    
+    return normalized, True
+
+
+def normalize_weight_to_mg(dose_str: str) -> Tuple[str, bool]:
+    """
+    Normalize a weight dose to mg.
+    
+    Examples:
+    - "1G" -> ("1000MG", True)
+    - "500MCG" -> ("0.5MG", True)
+    - "500MG" -> ("500MG", False)  # Already in mg
+    
+    Returns (normalized_dose, was_normalized).
+    """
+    # Pattern for simple weight doses
+    pattern = re.compile(r"^(\d+(?:\.\d+)?)\s*(g|mcg|ug)$", re.IGNORECASE)
+    match = pattern.match(dose_str.strip())
+    
+    if not match:
+        return dose_str, False
+    
+    value = float(match.group(1))
+    unit = match.group(2).upper()
+    
+    factor = _WEIGHT_TO_MG.get(unit, 1.0)
+    if factor == 1.0:
+        return dose_str, False
+    
+    mg_value = value * factor
+    
+    # Format result
+    if mg_value == int(mg_value):
+        normalized = f"{int(mg_value)}MG"
+    elif mg_value < 1:
+        # For small values, keep more precision
+        normalized = f"{mg_value}MG"
+        # Clean up: 0.5000 -> 0.5
+        parts = normalized.split("MG")
+        clean_num = parts[0].rstrip("0").rstrip(".")
+        if clean_num.startswith("."):
+            clean_num = "0" + clean_num
+        normalized = clean_num + "MG"
+    else:
+        normalized = f"{mg_value:.2f}MG".rstrip("0").rstrip(".")
+        if not normalized.endswith("MG"):
+            normalized += "MG"
+    
+    return normalized, True
+
 # Release detail keywords
 # Note: Short abbreviations are checked as whole words only
 _RELEASE_KEYWORDS = {
