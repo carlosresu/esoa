@@ -1,7 +1,7 @@
 # Drug Pipeline Progress Tracker
 
 **Started:** Nov 28, 2025  
-**Last Updated:** Nov 28, 2025 (Phase 6 COMPLETE)
+**Last Updated:** Nov 28, 2025 (Phase 7 COMPLETE)
 
 ---
 
@@ -204,13 +204,21 @@
 
 ---
 
-## Phase 7: Fallbacks 🔲 PENDING
+## Phase 7: Fallbacks ✅ COMPLETE
 
-**Goal:** FDA food fallback, exact dose matching
+**Goal:** FDA food fallback, Part 4 implementation
 
-### TODOs
-- [ ] #21: FDA food catalog fallback
-- [ ] #23: Exact dose matching mode for Part 4
+### Completed Work
+
+#### #21: FDA Food Fallback ✅
+- `load_fda_food_lookup()`: Load 31K FDA food entries
+- `check_fda_food_fallback()`: Match untagged items against food data
+- Identifies food/supplement items vs unknown drugs
+
+#### #23: Part 4 - ESOA to Drug Code ✅
+- `run_esoa_to_drug_code()`: New runner function
+- Exact matching: generic name + ATC code
+- Match reasons: matched_generic_atc, matched_generic_only, generic_not_in_annex
 
 ---
 
@@ -279,3 +287,6 @@
 
 ### Phase 6
 16. `Phase 6 Complete: Performance` - Batch tagging with chunking, cached fuzzy matching
+
+### Phase 7
+17. `Phase 7 Complete: Fallbacks` - Part 4 implementation, FDA food fallback
