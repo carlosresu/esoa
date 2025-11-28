@@ -1,7 +1,7 @@
 # Drug Pipeline Progress Tracker
 
 **Started:** Nov 28, 2025  
-**Last Updated:** Nov 28, 2025
+**Last Updated:** Nov 28, 2025 (Phase 2 #0 complete)
 
 ---
 
@@ -66,11 +66,15 @@
 - **Updated Python execution**: Native shell with live spinner
   - `os.system()` in background thread for minimal overhead
   - Live spinner/timer updates every 0.1s per script
-  - Uses `cores - 1` workers (leaves one for system)
+  - Uses `min(8, cpu_count)` workers (per AGENTS.md #6)
   - Cross-platform (Windows/macOS/Linux)
 
+#### #0: Refresh All Base Datasets ✅
+- Ran `python run_drugs_pt_1_prepare_dependencies.py` successfully
+- Runtime: ~460s total (drugbank_generics 308s, mixtures 88s, brands 33s, salts 4s)
+- All artifacts generated in `inputs/drugs/`
+
 ### TODOs
-- [ ] **#0: Refresh all base datasets** ← START HERE
 - [ ] #11: Expand synonyms from DrugBank
 - [ ] #15: Build form-route validity mapping
 - [ ] #16: Fix ESOA row binding (investigate duplicates)
@@ -82,7 +86,7 @@
 - [ ] #35: Centralize R script hardcoded constants
 
 ### Discovered Issues (Resolved)
-- ~~DrugBank R scripts taking >20min~~ → Fixed with `_shared.R` and `drugbank_all_v2.R`
+- ~~DrugBank R scripts taking >20min~~ → Fixed with `_shared.R` + min(8, cores) workers
 - R scripts have hardcoded constants duplicating Python unified_constants.py:
   - `drugbank_generics.R`: PER_UNIT_MAP (30+ unit mappings)
   - `drugbank_salts.R`: salt_suffixes (58), pure_salt_compounds (51)
@@ -193,4 +197,6 @@
 5. `Complete Phase 1 Analysis` - Phase completion
 
 ### Phase 2
-6. `Phase 2: DrugBank R script optimization` - _shared.R, drugbank_all_v2.R, native shell execution
+6. `Phase 2: DrugBank R script optimization` - _shared.R, native shell execution
+7. `DrugBank: default to min(8, cores) workers` - Fixed long runtime issue
+8. `Phase 2 #0: Refresh all base datasets` - Part 1 complete (~460s total)

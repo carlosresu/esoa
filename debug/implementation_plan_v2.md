@@ -137,16 +137,17 @@
 
 ### Phase 2: Data Foundation
 
-#### #0. Refresh All Base Datasets ← START HERE
-**What:** Run Part 1 to refresh all base datasets before proceeding with other Phase 2 work:
-- WHO ATC exports
-- DrugBank exports (generics, mixtures, brands, salts)
-- FDA brand map
-- PNF preparation
+#### #0. Refresh All Base Datasets ✅ DONE
+**What:** Run Part 1 to refresh all base datasets before proceeding with other Phase 2 work.
+
+**Completed (Nov 28, 2025):**
+- WHO ATC exports: 3.4s
+- DrugBank generics: 308s, mixtures: 88s, brands: 33s, salts: 4s
+- FDA brand map: 3.1s
+- FDA food catalog: 21s
+- PNF preparation: 0.8s
 
 **Command:** `python run_drugs_pt_1_prepare_dependencies.py`
-
-**Status:** PENDING
 
 ---
 
