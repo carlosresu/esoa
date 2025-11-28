@@ -108,10 +108,18 @@
 
 ---
 
-#### #25. Find Unknown Synonyms in Raw Data
+#### #25. Find Unknown Synonyms in Raw Data ✅ DONE
 **What:** Extract all unique generic-like tokens from ESOA and Annex F, compare against unified synonyms, report gaps (potential synonyms we don't know about).
 
-**Action:** Analysis script to find potential missing synonyms.
+**Completed (Nov 28, 2025):** Analysis found 181 common unknowns:
+- Added 15 missing salt tokens (ACETONIDE, BENZATHINE, CLAVULANATE, etc.)
+- Added 120 missing stopwords (ADULT, AQUEOUS, CHEWABLE, etc.)
+- Identified 39 drug names needing synonyms (for Phase 3):
+  - International: ACICLOVIR, CEFALEXIN, CHLORPHENAMINE, COTRIMOXAZOLE
+  - Philippine: LAGUNDI, SAMBONG
+  - Common: PARACETAMOL, SALBUTAMOL, ASPIRIN, INSULIN, PENICILLIN
+  - Vitamins: MULTIVITAMINS, RETINOL, PHYTOMENADIONE
+  - Others: CARBACHOL, DICYCLOVERINE, DILOXANIDE, EPOETIN, etc.
 
 ---
 
