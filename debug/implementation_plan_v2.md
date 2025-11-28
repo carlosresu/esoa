@@ -154,15 +154,14 @@
 **What:** Optimize DrugBank R scripts for faster execution when called from Python.
 
 **Completed (Nov 28, 2025):**
-- Created `_shared.R`: Common setup (packages, parallel backend, utilities) loaded ONCE
-- Created `drugbank_all_v2.R`: Runs all 4 scripts in single R session with progress markers
-- Updated individual scripts to conditionally source `_shared.R`
+- Created `_shared.R`: Common setup (packages, parallel backend, utilities)
+- Removed `drugbank_all.R`: No longer needed, Python calls scripts directly
+- Updated individual scripts to source `_shared.R` (guard prevents double-loading)
 - Updated Python to use native shell (`os.system()`) with live spinner/timer
-- Uses `cores - 1` workers, cross-platform support
+- Uses `cores - 1` workers, cross-platform support (Windows/macOS/Linux)
 
-**Files created/modified:**
+**Files:**
 - `dependencies/drugbank_generics/_shared.R` (NEW)
-- `dependencies/drugbank_generics/drugbank_all_v2.R` (NEW)
 - `dependencies/drugbank_generics/drugbank_*.R` (MODIFIED)
 - `run_drugs_all.py` - `refresh_drugbank_generics_exports()` (MODIFIED)
 

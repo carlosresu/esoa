@@ -59,14 +59,10 @@
   - Package installation/loading (data.table, dbdataset, future, arrow)
   - Parallel backend initialization (multicore/multisession based on OS)
   - Shared utility functions (write_csv_and_parquet, normalize, etc.)
-  - Loaded ONCE, reused by all scripts
-- **Created `drugbank_all_v2.R`**: Runs all 4 scripts in single R session
-  - Sets `DRUGBANK_ALL_RUNNING` flag to prevent plan resets
-  - Sources scripts sequentially, parallel backend stays alive
-  - Progress markers (`@@START@@`, `@@DONE@@`) for Python to parse
-- **Updated individual R scripts**: Conditional `_shared.R` sourcing
-  - Work standalone (`Rscript drugbank_generics.R`) or via `_all`
-  - Memory cleanup between scripts when running via `_all`
+  - Guard prevents double-loading if scripts sourced together
+- **Updated individual R scripts**: Each sources `_shared.R`
+  - Run standalone: `Rscript drugbank_generics.R`
+  - Removed old `drugbank_all.R` (was spawning subprocesses)
 - **Updated Python execution**: Native shell with live spinner
   - `os.system()` in background thread for minimal overhead
   - Live spinner/timer updates every 0.1s per script
@@ -183,7 +179,6 @@
 | `AGENTS.md` | Agent instructions and policies |
 | `pipelines/drugs/scripts/tagging/unified_constants.py` | Consolidated token sets |
 | `dependencies/drugbank_generics/_shared.R` | Common R setup (packages, parallel, utilities) |
-| `dependencies/drugbank_generics/drugbank_all_v2.R` | Unified R runner with progress markers |
 | `run_drugs_all.py` | Main pipeline runner + DrugBank execution |
 
 ---
