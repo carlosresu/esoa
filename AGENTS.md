@@ -5,8 +5,9 @@ These rules are meant for GPT agents. Apply them whenever you are editing this r
 > **IMPORTANT:** Before making changes to the drugs pipeline, read:
 > - `debug/pipeline.md` - Algorithmic logic, pharmaceutical rules, and decision rationale
 > - `debug/implementation_plan_v2.md` - Current TODO list and implementation status
+> - `debug/progress.md` - Phase-based progress tracker (what's done)
 >
-> After every group of changes, UPDATE BOTH FILES with what was changed and any new decisions made.
+> After every group of changes, UPDATE THESE FILES with what was changed and any new decisions made.
 
 1. **Keep the standalone FDA scraper dependency files aligned.** Whenever you touch `pipelines/drugs/scripts/` (especially the normalization helpers or third-party imports) make sure the counterpart `dependencies/fda_ph_scraper/text_utils.py` captures the same text-processing logic and the `dependencies/fda_ph_scraper/requirements.txt` lists the packages needed by those scripts so the standalone scraper runs with the same dependencies as the pipeline helpers.
 2. **Standalone runner behavior.** The scripts under `dependencies/fda_ph_scraper`, `dependencies/atcd`, and `dependencies/drugbank_generics` must continue to be runnable on their own roots; they should default to writing outputs under their own `output/` directories while downstream runners copy those exports into `inputs/drugs/`.
