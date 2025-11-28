@@ -22,10 +22,14 @@
 
 ### Phase 1: Analysis
 
-#### #9. Research Unknown Acronyms
+#### #9. Research Unknown Acronyms ✅ DONE
 **What:** Google/research: NEBS, GTTS, SOLN, SUSP, and compile complete form abbreviation list.
 
-**Action:** Web search, then update `form_route_mapping.py` with findings.
+**Completed (Nov 28, 2025):** All abbreviations added to `unified_constants.py`:
+- NEBS → NEBULE (added)
+- GTTS → DROPS (already in)
+- SOLN → SOLUTION (already in)
+- SUSP → SUSPENSION (already in)
 
 ---
 
