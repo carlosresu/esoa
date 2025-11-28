@@ -179,6 +179,7 @@ class UnifiedTagger:
         id_column: Optional[str] = None,
         chunk_size: int = 10000,
         show_progress: bool = True,
+        deduplicate: bool = True,
     ) -> pd.DataFrame:
         """
         Tag descriptions in a DataFrame using chunked processing.
@@ -192,6 +193,7 @@ class UnifiedTagger:
             id_column: Optional column for row IDs
             chunk_size: Number of rows per chunk (default 10K)
             show_progress: Whether to print progress updates
+            deduplicate: If True, deduplicate by text_column before tagging (default True)
         
         Returns:
             DataFrame with tagging results
@@ -201,16 +203,25 @@ class UnifiedTagger:
         if not self._loaded:
             self.load()
         
-        total_rows = len(df)
-        if total_rows == 0:
+        original_rows = len(df)
+        if original_rows == 0:
             return pd.DataFrame()
         
-        texts = df[text_column].fillna("").astype(str).tolist()
-        
-        if id_column and id_column in df.columns:
-            ids = df[id_column].tolist()
+        # Deduplicate by text column to avoid redundant work
+        if deduplicate:
+            unique_texts = df[[text_column]].drop_duplicates()
+            total_rows = len(unique_texts)
+            if show_progress and total_rows < original_rows:
+                self._log(f"Deduplicated: {original_rows:,} → {total_rows:,} unique texts")
+            texts = unique_texts[text_column].fillna("").astype(str).tolist()
+            ids = list(range(total_rows))
         else:
-            ids = list(range(len(df)))
+            total_rows = original_rows
+            texts = df[text_column].fillna("").astype(str).tolist()
+            if id_column and id_column in df.columns:
+                ids = df[id_column].tolist()
+            else:
+                ids = list(range(total_rows))
         
         # Process in chunks
         all_results = []
