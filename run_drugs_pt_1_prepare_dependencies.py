@@ -69,18 +69,14 @@ def run_part_1(
     elif standalone:
         print("[skip] WHO ATC exports")
 
-    # 2. DrugBank
+    # 2. DrugBank (runs each R script via native shell with live spinner/timer)
     if not skip_drugbank:
-        generics_path, brands_path = run_with_spinner(
-            "Refresh DrugBank generics exports",
-            lambda: refresh_drugbank_generics_exports(verbose=False),
-        )
+        # Each script: os.system() in thread + live timer, cores-1 workers
+        generics_path, brands_path = refresh_drugbank_generics_exports(verbose=False)
         if generics_path:
             artifacts["drugbank_generics"] = generics_path
-        mixtures_path = run_with_spinner(
-            "Check DrugBank mixtures output",
-            lambda: ensure_drugbank_mixtures_output(verbose=False),
-        )
+        # Quick check, no spinner needed
+        mixtures_path = ensure_drugbank_mixtures_output(verbose=False)
         if mixtures_path:
             artifacts["drugbank_mixtures"] = mixtures_path
     elif standalone:

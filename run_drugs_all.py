@@ -112,24 +112,45 @@ def _run_with_spinner(label: str, func: Callable[[], T]) -> T:
     return result[0] if result else None  # type: ignore[return-value]
 
 
-def _run_r_script(script_path: Path, *, verbose: bool = True) -> None:
+def _run_r_script(
+    script_path: Path,
+    *,
+    verbose: bool = True,
+    quiet_mode: bool = True,
+    workers: Optional[int] = None,
+) -> None:
+    """Run an R script via Rscript.
+    
+    Args:
+        script_path: Path to the .R script
+        verbose: If True, show R output in terminal; if False, redirect to log file
+        quiet_mode: If True, set ESOA_DRUGBANK_QUIET=1 to suppress R messages
+        workers: Number of parallel workers (None = let R auto-detect like RStudio)
+    """
     rscript = _find_rscript()
     if not rscript:
         raise FileNotFoundError(
             "Rscript executable not found. Install R or set RSCRIPT_PATH/R_HOME or add Rscript to PATH."
         )
     env = os.environ.copy()
-    env.setdefault("ESOA_DRUGBANK_QUIET", "1")
     env.setdefault("RSCRIPT_PATH", str(rscript))
-    # Allow R helpers to use all local cores by default (tunable via env).
-    if "ESOA_DRUGBANK_WORKERS" not in env:
-        cpu_count = os.cpu_count() or 13
-        env["ESOA_DRUGBANK_WORKERS"] = str(max(1, cpu_count - 1))
-    log_path: Path | None = None
+    
+    # Only set quiet mode if explicitly requested (RStudio doesn't set this)
+    if quiet_mode:
+        env["ESOA_DRUGBANK_QUIET"] = "1"
+    elif "ESOA_DRUGBANK_QUIET" in env:
+        del env["ESOA_DRUGBANK_QUIET"]
+    
+    # Only set workers if explicitly provided (otherwise let R auto-detect like RStudio)
+    if workers is not None:
+        env["ESOA_DRUGBANK_WORKERS"] = str(workers)
+    # If not set, don't override - let R use detectCores() like RStudio does
+    
+    # Avoid file redirection which causes buffering delays
+    # Use DEVNULL to discard output without buffering overhead
     if not verbose:
-        log_path = script_path.with_suffix(".log")
-        stdout = log_path.open("w", encoding="utf-8")
-        stderr = subprocess.STDOUT
+        stdout = subprocess.DEVNULL
+        stderr = subprocess.DEVNULL
     else:
         stdout = None
         stderr = None
@@ -143,15 +164,7 @@ def _run_r_script(script_path: Path, *, verbose: bool = True) -> None:
             stderr=stderr,
         )
     except subprocess.CalledProcessError as exc:
-        if log_path and log_path.is_file():
-            print(f"[rscript] Failure log: {log_path}")
         raise RuntimeError(f"{script_path.name} exited with status {exc.returncode}") from exc
-    finally:
-        if stdout not in (None, sys.stdout, sys.stderr):
-            try:
-                stdout.close()  # type: ignore[arg-type]
-            except Exception:
-                pass
 
 
 def _copy_to_pipeline_inputs(source: Path, dest: Path) -> None:
@@ -339,14 +352,78 @@ def refresh_fda_food(
 
 
 def refresh_drugbank_generics_exports(*, verbose: bool = True) -> tuple[Optional[Path], Optional[Path]]:
-    """Invoke the DrugBank R helper to regenerate generics + brand exports."""
-    if verbose:
-        print("[drugbank_generics] Launching dependencies/drugbank_generics/drugbank_all.R...")
-    script_path = PROJECT_DIR / "dependencies" / "drugbank_generics" / "drugbank_all.R"
-    if not script_path.is_file():
-        raise FileNotFoundError(f"DrugBank helper not found at {script_path}")
-    _run_r_script(script_path, verbose=verbose)
-    module_output = script_path.parent / "output"
+    """Run DrugBank R scripts with minimal Python overhead using native shell."""
+    import time
+    import shutil
+    import multiprocessing
+    
+    drugbank_dir = PROJECT_DIR / "dependencies" / "drugbank_generics"
+    
+    # Find Rscript
+    rscript = shutil.which("Rscript")
+    if not rscript:
+        raise FileNotFoundError("Rscript not found on PATH")
+    
+    # Use cores-1 workers (leave one for system)
+    worker_count = max(1, multiprocessing.cpu_count() - 1)
+    
+    scripts = [
+        "drugbank_generics.R",
+        "drugbank_mixtures.R",
+        "drugbank_brands.R",
+        "drugbank_salts.R",
+    ]
+    
+    # Set env vars for R scripts
+    os.environ["ESOA_DRUGBANK_WORKERS"] = str(worker_count)
+    os.environ["ESOA_DRUGBANK_QUIET"] = "1"
+    
+    import threading
+    
+    for script_name in scripts:
+        script_path = drugbank_dir / script_name
+        if not script_path.is_file():
+            print(f"[skip] {script_name} (not found)")
+            continue
+        
+        # Build shell command - keep stderr visible for debugging
+        if sys.platform == "win32":
+            cmd = f'cd /d "{drugbank_dir}" && "{rscript}" "{script_path}" >nul'
+        else:
+            cmd = f'cd "{drugbank_dir}" && "{rscript}" "{script_path}" >/dev/null'
+        
+        # Run with live timer update
+        start = time.perf_counter()
+        done_event = threading.Event()
+        exit_code_holder = [0]
+        
+        def run_r(shell_cmd=cmd):
+            exit_code_holder[0] = os.system(shell_cmd)
+            done_event.set()
+        
+        # Start R in background thread
+        r_thread = threading.Thread(target=run_r, daemon=True)
+        r_thread.start()
+        
+        # Update timer while R runs
+        frames = "|/-\\"
+        idx = 0
+        while not done_event.wait(0.1):
+            elapsed = time.perf_counter() - start
+            sys.stdout.write(f"\r{frames[idx % 4]} {elapsed:6.1f}s {script_name}")
+            sys.stdout.flush()
+            idx += 1
+        
+        r_thread.join()
+        elapsed = time.perf_counter() - start
+        
+        if exit_code_holder[0] == 0:
+            sys.stdout.write(f"\r[done] {elapsed:6.1f}s {script_name}\n")
+        else:
+            sys.stdout.write(f"\r[fail] {elapsed:6.1f}s {script_name} (exit {exit_code_holder[0]})\n")
+        sys.stdout.flush()
+    
+    module_output = drugbank_dir / "output"
     for filename in (
         "drugbank_generics_master.csv",
         "drugbank_mixtures_master.csv",

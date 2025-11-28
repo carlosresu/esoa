@@ -137,6 +137,37 @@
 
 ### Phase 2: Data Foundation
 
+#### #0. Refresh All Base Datasets ← START HERE
+**What:** Run Part 1 to refresh all base datasets before proceeding with other Phase 2 work:
+- WHO ATC exports
+- DrugBank exports (generics, mixtures, brands, salts)
+- FDA brand map
+- PNF preparation
+
+**Command:** `python run_drugs_pt_1_prepare_dependencies.py`
+
+**Status:** PENDING
+
+---
+
+#### DrugBank R Script Optimization ✅ DONE
+**What:** Optimize DrugBank R scripts for faster execution when called from Python.
+
+**Completed (Nov 28, 2025):**
+- Created `_shared.R`: Common setup (packages, parallel backend, utilities) loaded ONCE
+- Created `drugbank_all_v2.R`: Runs all 4 scripts in single R session with progress markers
+- Updated individual scripts to conditionally source `_shared.R`
+- Updated Python to use native shell (`os.system()`) with live spinner/timer
+- Uses `cores - 1` workers, cross-platform support
+
+**Files created/modified:**
+- `dependencies/drugbank_generics/_shared.R` (NEW)
+- `dependencies/drugbank_generics/drugbank_all_v2.R` (NEW)
+- `dependencies/drugbank_generics/drugbank_*.R` (MODIFIED)
+- `run_drugs_all.py` - `refresh_drugbank_generics_exports()` (MODIFIED)
+
+---
+
 #### #11. Expand Synonyms from DrugBank
 **What:** Extract synonyms where:
 - `language == 'english'`
