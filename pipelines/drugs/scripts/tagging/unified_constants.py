@@ -695,6 +695,70 @@ def infer_route_from_form(form: str) -> str | None:
 
 
 # ============================================================================
+# SPELLING SYNONYMS - Not regional variants, just spelling corrections
+# These are ONLY for spelling variants that cannot be in the unified dataset
+# ============================================================================
+
+SPELLING_SYNONYMS: Dict[str, str] = {
+    # Spelling variants (different spellings of same drug)
+    "POLYMYXIN": "POLYMIXIN",  # X vs I spelling
+    "POLYMYXIN B": "POLYMIXIN B",
+    # Combination drug trade names -> generic components
+    "CO-AMOXICLAV": "AMOXICILLIN + CLAVULANIC ACID",
+    "COTRIMOXAZOLE": "SULFAMETHOXAZOLE + TRIMETHOPRIM",
+    # Salt form synonyms
+    "POTASSIUM CLAVULANATE": "CLAVULANIC ACID",
+    "CLAVULANATE": "CLAVULANIC ACID",
+    # Vitamin synonyms
+    "ALPHA-TOCOPHEROL": "VITAMIN E",
+    "TOCOPHEROL": "VITAMIN E",
+    # Common abbreviations
+    "VIT": "VITAMIN",
+    "VIT A": "VITAMIN A",
+    "VIT B": "VITAMIN B",
+    "VIT C": "VITAMIN C",
+    "VIT D": "VITAMIN D",
+    "VIT E": "VITAMIN E",
+    "VIT K": "VITAMIN K",
+}
+
+# ============================================================================
+# MULTIWORD GENERICS - Drug names that contain spaces
+# These should be preserved as single tokens during tokenization
+# ============================================================================
+
+MULTIWORD_GENERICS: Set[str] = {
+    # Acids
+    "TRANEXAMIC ACID", "FOLIC ACID", "ASCORBIC ACID", "VALPROIC ACID",
+    "ACETYLSALICYLIC ACID", "HYALURONIC ACID", "RETINOIC ACID",
+    "CLAVULANIC ACID", "FUSIDIC ACID", "NALIDIXIC ACID", "MEFENAMIC ACID",
+    "URSODEOXYCHOLIC ACID", "CHENODEOXYCHOLIC ACID", "AMINO ACID",
+    # Nitrates
+    "ISOSORBIDE MONONITRATE", "ISOSORBIDE DINITRATE",
+    "GLYCERYL TRINITRATE",
+    # Salts (the compound IS the drug)
+    "SODIUM CHLORIDE", "POTASSIUM CHLORIDE", "CALCIUM CHLORIDE",
+    "MAGNESIUM SULFATE", "FERROUS SULFATE", "ZINC SULFATE",
+    "SODIUM BICARBONATE", "CALCIUM CARBONATE", "MAGNESIUM HYDROXIDE",
+    "ALUMINUM HYDROXIDE", "FERROUS FUMARATE", "CALCIUM GLUCONATE",
+    # Insulins
+    "INSULIN GLARGINE", "INSULIN LISPRO", "INSULIN ASPART",
+    "INSULIN DETEMIR", "INSULIN DEGLUDEC", "INSULIN GLULISINE",
+    "INSULIN HUMAN", "INSULIN REGULAR",
+    # Biologics
+    "HUMAN ALBUMIN", "ALBUMIN HUMAN",
+    "TETANUS ANTITOXIN", "TETANUS IMMUNOGLOBULIN",
+    "HEPATITIS B IMMUNOGLOBULIN",
+    # Others
+    "VITAMIN A", "VITAMIN B", "VITAMIN B1", "VITAMIN B2", "VITAMIN B6",
+    "VITAMIN B12", "VITAMIN C", "VITAMIN D", "VITAMIN D3", "VITAMIN E",
+    "VITAMIN K", "VITAMIN K1",
+    "FERRIC CARBOXYMALTOSE", "IRON SUCROSE", "IRON DEXTRAN",
+    "SODIUM HYALURONATE", "CHONDROITIN SULFATE",
+}
+
+
+# ============================================================================
 # EXPORTS
 # ============================================================================
 
@@ -722,6 +786,9 @@ __all__ = [
     
     # ATC patterns
     "ATC_COMBINATION_PATTERNS", "COMBINATION_ATC_SUFFIXES",
+    
+    # Synonyms and multiword generics
+    "SPELLING_SYNONYMS", "MULTIWORD_GENERICS",
     
     # Helper functions
     "get_canonical_form", "get_canonical_route",

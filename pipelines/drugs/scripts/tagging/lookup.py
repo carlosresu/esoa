@@ -115,36 +115,14 @@ def load_synonyms(
     
     Synonyms are rows where generic_name != canonical_name.
     """
+    from .unified_constants import SPELLING_SYNONYMS
+    
     synonyms: Dict[str, str] = {}
     
-    # Hardcoded synonyms - ONLY for spelling variants not in reference datasets
-    # Regional/alternate spellings that map to the same drug
-    hardcoded = {
-        # Spelling variants (different spellings of same drug)
-        "POLYMYXIN": "POLYMIXIN",  # X vs I spelling
-        "POLYMYXIN B": "POLYMIXIN B",
-        # Combination drug trade names -> generic components
-        "CO-AMOXICLAV": "AMOXICILLIN + CLAVULANIC ACID",
-        "COTRIMOXAZOLE": "SULFAMETHOXAZOLE + TRIMETHOPRIM",
-        # Salt form synonyms
-        "POTASSIUM CLAVULANATE": "CLAVULANIC ACID",
-        "CLAVULANATE": "CLAVULANIC ACID",
-        # Vitamin synonyms
-        "ALPHA-TOCOPHEROL": "VITAMIN E",
-        "TOCOPHEROL": "VITAMIN E",
-        # Common abbreviations
-        "VIT": "VITAMIN",
-        "VIT A": "VITAMIN A",
-        "VIT B": "VITAMIN B",
-        "VIT C": "VITAMIN C",
-        "VIT D": "VITAMIN D",
-        "VIT E": "VITAMIN E",
-        "VIT K": "VITAMIN K",
-    }
+    # Load spelling synonyms from unified_constants.py
     # NOTE: Regional name variants (ADRENALINE->EPINEPHRINE, PARACETAMOL->ACETAMINOPHEN, etc.)
-    # should be in the unified reference dataset, not hardcoded here.
-    # They are valid alternate names, not spelling errors.
-    synonyms.update(hardcoded)
+    # should be in the unified reference dataset (generics_master.parquet), not here.
+    synonyms.update(SPELLING_SYNONYMS)
     
     # Load from generics lookup
     if "canonical_name" in generics_df.columns:

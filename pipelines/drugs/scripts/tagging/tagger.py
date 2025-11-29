@@ -94,21 +94,16 @@ class UnifiedTagger:
         self.brand_map = build_brand_to_generic_map(brands_df, generics_df)
         self._log(f"  - brands: {len(self.brand_map):,} entries")
         
-        # Build multiword generics set
+        # Build multiword generics set from data + constants
+        from .unified_constants import MULTIWORD_GENERICS
+        
         self.multiword_generics = set()
         for name in generics_df["generic_name"]:
             if " " in str(name):
                 self.multiword_generics.add(str(name).upper())
         
-        # Add common multi-word generics
-        self.multiword_generics.update({
-            "ISOSORBIDE MONONITRATE", "ISOSORBIDE DINITRATE",
-            "TRANEXAMIC ACID", "FOLIC ACID", "ASCORBIC ACID", "VALPROIC ACID",
-            "ACETYLSALICYLIC ACID", "HYALURONIC ACID", "RETINOIC ACID",
-            "SODIUM CHLORIDE", "POTASSIUM CHLORIDE", "CALCIUM CHLORIDE",
-            "MAGNESIUM SULFATE", "FERROUS SULFATE", "ZINC SULFATE",
-            "INSULIN GLARGINE", "INSULIN LISPRO", "INSULIN ASPART",
-        })
+        # Add multiword generics from unified_constants.py
+        self.multiword_generics.update(MULTIWORD_GENERICS)
         
         # Add plural forms of multiword generics for detection
         plural_forms = set()
