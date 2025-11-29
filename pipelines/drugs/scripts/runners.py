@@ -327,6 +327,22 @@ def run_esoa_to_drug_code(
             return ""
         return str(s).upper().strip()
     
+    # Regional synonyms: US name → PH/WHO name (Annex F uses PH names)
+    REGIONAL_SYNONYMS = {
+        "ACETAMINOPHEN": "PARACETAMOL",
+        "ALBUTEROL": "SALBUTAMOL",
+        "EPINEPHRINE": "ADRENALINE",
+        "NOREPINEPHRINE": "NORADRENALINE",
+        "FUROSEMIDE": "FRUSEMIDE",
+        "LIDOCAINE": "LIGNOCAINE",
+        "MEPERIDINE": "PETHIDINE",
+        "ACETYLSALICYLIC ACID": "ASPIRIN",
+    }
+    
+    def apply_regional_synonym(name):
+        """Convert US drug names to PH/WHO equivalents."""
+        return REGIONAL_SYNONYMS.get(name, name)
+    
     annex_lookup = {}
     for _, row in annex_df.iterrows():
         drug_code = row.get("Drug Code")
@@ -358,7 +374,15 @@ def run_esoa_to_drug_code(
         if not generic:
             return None, "no_generic"
         
+        # Try exact match first
         candidates = annex_lookup.get(generic, [])
+        
+        # Try regional synonym if no match
+        if not candidates:
+            synonym = apply_regional_synonym(generic)
+            if synonym != generic:
+                candidates = annex_lookup.get(synonym, [])
+        
         if not candidates:
             return None, "generic_not_in_annex"
         
