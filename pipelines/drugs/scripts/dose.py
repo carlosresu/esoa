@@ -5,7 +5,7 @@ import re
 from typing import Any, Dict, Optional
 from math import isclose
 
-from .text_utils_drugs import safe_to_float
+from .text_utils import safe_to_float
 
 PACK_RX = re.compile(r"\b(\d+)\s*(?:x|×)\s*(\d+(?:[.,]\d+)?)\s*(mg|g|mcg|ug|iu)\b", re.I)
 RATIO_RX_EXTRA = re.compile(r"(?P<num>\d+(?:[.,]\d+)?)\s?(?P<num_unit>mg|g|mcg|ug)\s*/\s?(?P<den>\d+(?:[.,]\d+)?)\s?(?P<den_unit>ml|l)\b", re.I)

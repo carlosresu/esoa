@@ -23,7 +23,7 @@ from ..base import (
     TimingHook,
 )
 from ..registry import register_pipeline
-from .scripts.prepare_drugs import prepare
+from .scripts.prepare import prepare
 from .scripts.runners import run_annex_f_tagging, run_esoa_tagging
 
 THIS_DIR = Path(__file__).resolve().parents[2]
