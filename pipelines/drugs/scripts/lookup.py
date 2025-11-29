@@ -309,7 +309,32 @@ def build_combination_keys(
     """
     # Filter junk
     junk = {"+", "MG/5", "MG", "G", "MCG", "ML", "L", "PCT"}
-    clean = [g for g in generic_tokens if g and g.upper() not in junk and not any(c.isdigit() for c in g)]
+    clean = []
+    for g in generic_tokens:
+        if not g:
+            continue
+        g_upper = g.upper()
+        # Skip junk tokens
+        if g_upper in junk:
+            continue
+        # Skip tokens with digits (doses)
+        if any(c.isdigit() for c in g):
+            continue
+        # Skip tokens with parentheses (brand names)
+        if "(" in g or ")" in g:
+            continue
+        # Strip trailing + from tokens like "SALBUTAMOL+"
+        g_clean = g_upper.rstrip("+").strip()
+        if not g_clean:
+            continue
+        # Split brand-swapped values that contain + (e.g., "SALBUTAMOL SULFATE + IPRATROPIUM BROMIDE")
+        if " + " in g_clean:
+            for part in g_clean.split(" + "):
+                part = part.strip()
+                if part and part not in junk:
+                    clean.append(part)
+        else:
+            clean.append(g_clean)
     
     if len(clean) < 2:
         return []
