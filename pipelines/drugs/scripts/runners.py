@@ -327,21 +327,46 @@ def run_esoa_to_drug_code(
             return ""
         return str(s).upper().strip()
     
-    # Regional synonyms: US name → PH/WHO name (Annex F uses PH names)
+    # Build synonym mappings from generics_lookup (bidirectional)
+    from .tagging.lookup import load_generics_lookup, load_synonyms
+    try:
+        generics_df = load_generics_lookup(PIPELINE_OUTPUTS_DIR)
+        base_synonyms = load_synonyms(generics_df)
+    except Exception:
+        base_synonyms = {}
+    
+    # Regional synonyms: US name ↔ PH/WHO name (bidirectional for flexibility)
     REGIONAL_SYNONYMS = {
+        # US → PH/WHO
         "ACETAMINOPHEN": "PARACETAMOL",
         "ALBUTEROL": "SALBUTAMOL",
         "EPINEPHRINE": "ADRENALINE",
         "NOREPINEPHRINE": "NORADRENALINE",
-        "FUROSEMIDE": "FRUSEMIDE",
-        "LIDOCAINE": "LIGNOCAINE",
         "MEPERIDINE": "PETHIDINE",
-        "ACETYLSALICYLIC ACID": "ASPIRIN",
+        # PH/WHO → US (reverse)
+        "PARACETAMOL": "ACETAMINOPHEN",
+        "SALBUTAMOL": "ALBUTEROL",
+        "ADRENALINE": "EPINEPHRINE",
+        "NORADRENALINE": "NOREPINEPHRINE",
+        "FRUSEMIDE": "FUROSEMIDE",
+        "LIGNOCAINE": "LIDOCAINE",
+        "PETHIDINE": "MEPERIDINE",
     }
     
-    def apply_regional_synonym(name):
-        """Convert US drug names to PH/WHO equivalents."""
-        return REGIONAL_SYNONYMS.get(name, name)
+    # Merge all synonyms
+    all_synonyms = {**base_synonyms, **REGIONAL_SYNONYMS}
+    
+    def get_all_name_variants(name):
+        """Get all possible name variants for matching."""
+        variants = {name}
+        # Add direct synonym
+        if name in all_synonyms:
+            variants.add(all_synonyms[name])
+        # Add reverse lookups
+        for syn, canonical in all_synonyms.items():
+            if canonical == name:
+                variants.add(syn)
+        return variants
     
     annex_lookup = {}
     for _, row in annex_df.iterrows():
@@ -374,14 +399,10 @@ def run_esoa_to_drug_code(
         if not generic:
             return None, "no_generic"
         
-        # Try exact match first
-        candidates = annex_lookup.get(generic, [])
-        
-        # Try regional synonym if no match
-        if not candidates:
-            synonym = apply_regional_synonym(generic)
-            if synonym != generic:
-                candidates = annex_lookup.get(synonym, [])
+        # Try all name variants (original + synonyms)
+        candidates = []
+        for variant in get_all_name_variants(generic):
+            candidates.extend(annex_lookup.get(variant, []))
         
         if not candidates:
             return None, "generic_not_in_annex"
