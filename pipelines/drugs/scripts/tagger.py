@@ -11,7 +11,10 @@ from typing import Any, Dict, List, Optional, Set
 import duckdb
 import pandas as pd
 
-from .unified_constants import PURE_SALT_COMPOUNDS, UNIT_TOKENS, get_regional_canonical
+from .unified_constants import (
+    PURE_SALT_COMPOUNDS, UNIT_TOKENS, get_regional_canonical,
+    CATEGORY_DOSE, CATEGORY_FORM, CATEGORY_ROUTE,
+)
 from .lookup import (
     apply_synonym, batch_lookup_generics, build_combination_keys,
     swap_brand_to_generic,
@@ -77,6 +80,8 @@ class UnifiedTagger:
         if not generics_path.exists():
             raise FileNotFoundError(f"unified_generics.parquet not found: {generics_path}")
         self.con.execute(f"CREATE TABLE unified AS SELECT * FROM read_parquet('{generics_path}')")
+        # Create index for faster lookups
+        self.con.execute("CREATE INDEX IF NOT EXISTS idx_unified_generic ON unified(generic_name)")
         count = self.con.execute("SELECT COUNT(*) FROM unified").fetchone()[0]
         unique_generics = self.con.execute("SELECT COUNT(DISTINCT generic_name) FROM unified").fetchone()[0]
         self._log(f"  - unified_generics: {count:,} rows ({unique_generics:,} unique)")
@@ -560,7 +565,6 @@ class UnifiedTagger:
             )
             
             # Extract categorized tokens for output
-            from .unified_constants import CATEGORY_DOSE, CATEGORY_FORM, CATEGORY_ROUTE
             input_doses = list(categories.get(CATEGORY_DOSE, {}).keys())
             input_forms = list(categories.get(CATEGORY_FORM, {}).keys())
             input_routes = list(categories.get(CATEGORY_ROUTE, {}).keys())

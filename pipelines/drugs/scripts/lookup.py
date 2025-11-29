@@ -6,13 +6,22 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import duckdb
 import pandas as pd
 
 from .unified_constants import PURE_SALT_COMPOUNDS
 from .tokenizer import strip_salt_suffix
+
+# Import rapidfuzz at module level for performance
+try:
+    from rapidfuzz import fuzz, process as rapidfuzz_process
+    RAPIDFUZZ_AVAILABLE = True
+except ImportError:
+    RAPIDFUZZ_AVAILABLE = False
+    fuzz = None
+    rapidfuzz_process = None
 
 
 # Default paths
@@ -153,44 +162,22 @@ def lookup_generic_fuzzy(
 ) -> List[Dict[str, Any]]:
     """
     Fuzzy match lookup for a generic token using rapidfuzz.
-    
-    Args:
-        token: The token to search for
-        con: DuckDB connection
-        threshold: Minimum similarity score (0-100), default 85
-        limit: Maximum number of results
-        cached_generics: Pre-loaded list of generic names (for performance)
-    
-    Returns:
-        List of matching records with similarity scores
     """
-    try:
-        from rapidfuzz import fuzz, process
-    except ImportError:
-        return []  # rapidfuzz not installed
+    if not RAPIDFUZZ_AVAILABLE:
+        return []
     
     if len(token) < 4:
-        return []  # Too short for fuzzy matching
-    
-    # Use cached generics if provided, otherwise query
-    if cached_generics is not None:
-        all_generics = cached_generics
-    else:
-        try:
-            all_generics = con.execute(
-                "SELECT DISTINCT generic_name FROM unified WHERE generic_name IS NOT NULL"
-            ).fetchdf()["generic_name"].tolist()
-        except Exception:
-            return []
-    
-    if not all_generics:
         return []
+    
+    # Use cached generics if provided
+    if cached_generics is None or not cached_generics:
+        return []  # Require pre-loaded cache for performance
     
     # Find best fuzzy matches
     token_upper = token.upper()
-    matches = process.extract(
+    matches = rapidfuzz_process.extract(
         token_upper,
-        all_generics,
+        cached_generics,
         scorer=fuzz.ratio,
         limit=limit,
         score_cutoff=threshold,
@@ -199,16 +186,26 @@ def lookup_generic_fuzzy(
     if not matches:
         return []
     
-    # Look up the matched generics
-    results = []
-    for match_name, score, _ in matches:
-        records = lookup_generic_exact(match_name, con)
-        for rec in records:
-            rec["fuzzy_score"] = score
-            rec["fuzzy_match"] = True
-            results.append(rec)
+    # Batch lookup matched generics
+    match_names = [m[0] for m in matches]
+    match_scores = {m[0]: m[1] for m in matches}
     
-    return results
+    placeholders = ",".join(["?" for _ in match_names])
+    query = f"""
+        SELECT DISTINCT generic_name, drugbank_id, atc_code, source,
+               generic_name as reference_text
+        FROM unified
+        WHERE generic_name IN ({placeholders})
+    """
+    try:
+        df = con.execute(query, match_names).fetchdf()
+        results = df.to_dict("records")
+        for rec in results:
+            rec["fuzzy_score"] = match_scores.get(rec.get("generic_name"), 0)
+            rec["fuzzy_match"] = True
+        return results
+    except Exception:
+        return []
 
 
 def batch_lookup_generics(
@@ -219,7 +216,7 @@ def batch_lookup_generics(
     cached_generics: Optional[List[str]] = None,
 ) -> Dict[str, List[Dict[str, Any]]]:
     """
-    Batch lookup for multiple generic tokens.
+    Batch lookup for multiple generic tokens using optimized SQL.
     
     Returns dict of {token: [matches]}.
     """
@@ -227,48 +224,68 @@ def batch_lookup_generics(
         synonyms = {}
     
     cache: Dict[str, List[Dict[str, Any]]] = {}
+    if not tokens:
+        return cache
     
-    for token in tokens:
-        if not token or token in cache:
+    # Normalize tokens
+    token_list = [t.upper() for t in tokens if t]
+    if not token_list:
+        return cache
+    
+    # Also add synonyms to lookup
+    all_lookups = set(token_list)
+    for t in token_list:
+        syn = synonyms.get(t)
+        if syn and syn != t:
+            all_lookups.add(syn)
+    
+    # BATCH EXACT MATCH - single SQL query for all tokens
+    if all_lookups:
+        placeholders = ",".join(["?" for _ in all_lookups])
+        query = f"""
+            SELECT generic_name, drugbank_id, atc_code, source,
+                   generic_name as reference_text
+            FROM unified
+            WHERE UPPER(generic_name) IN ({placeholders})
+        """
+        try:
+            df = con.execute(query, list(all_lookups)).fetchdf()
+            # Group by generic_name
+            for _, row in df.iterrows():
+                gn = row["generic_name"]
+                gn_upper = gn.upper() if gn else ""
+                if gn_upper not in cache:
+                    cache[gn_upper] = []
+                cache[gn_upper].append(row.to_dict())
+        except Exception:
+            pass
+    
+    # Map synonyms back to original tokens
+    for t in token_list:
+        if t in cache:
             continue
-        
-        token_upper = token.upper()
-        
-        # First try exact match
-        matches = lookup_generic_exact(token_upper, con)
-        if matches:
-            cache[token_upper] = matches
-            continue
-        
-        # Try synonym
-        syn = synonyms.get(token_upper)
-        if syn and syn != token_upper:
-            matches = lookup_generic_exact(syn, con)
-            if matches:
-                cache[token_upper] = matches
-                continue
-        
+        syn = synonyms.get(t)
+        if syn and syn in cache:
+            cache[t] = cache[syn]
+    
+    # For tokens still missing, try prefix/fuzzy (slower path)
+    missing = [t for t in token_list if t not in cache]
+    
+    for token in missing:
         # Try prefix match
-        matches = lookup_generic_prefix(token_upper, con)
+        matches = lookup_generic_prefix(token, con, limit=3)
         if matches:
-            cache[token_upper] = matches
+            cache[token] = matches
             continue
         
-        # Try contains match (only for multi-word)
-        if " " in token:
-            matches = lookup_generic_contains(token_upper, con)
-            if matches:
-                cache[token_upper] = matches
-                continue
-        
-        # Try fuzzy match as last resort (for potential misspellings)
+        # Try fuzzy match (last resort)
         if enable_fuzzy and len(token) >= 4:
             matches = lookup_generic_fuzzy(
-                token_upper, con, threshold=85, limit=1, cached_generics=cached_generics
+                token, con, threshold=85, limit=1, cached_generics=cached_generics
             )
-            cache[token_upper] = matches
+            cache[token] = matches
         else:
-            cache[token_upper] = []
+            cache[token] = []
     
     return cache
 
