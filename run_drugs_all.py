@@ -31,6 +31,54 @@ PROJECT_DIR = PROJECT_ROOT
 DRUGS_INPUTS_DIR = PIPELINE_INPUTS_DIR
 T = TypeVar("T")
 
+# Regex to match dated files: name_YYYY-MM-DD.ext or name_YYYY-MM-DD_*.ext
+DATED_FILE_PATTERN = re.compile(r"^(.+?)_(\d{4}-\d{2}-\d{2})(?:_.*)?(\.\w+)$")
+
+
+def purge_old_dated_files(directory: Path, quiet: bool = False) -> int:
+    """
+    Remove all but the latest version of dated files in a directory.
+    
+    Files matching pattern: name_YYYY-MM-DD.ext or name_YYYY-MM-DD_suffix.ext
+    Keeps the most recent date for each (name, ext) group.
+    
+    Returns count of deleted files.
+    """
+    if not directory.exists():
+        return 0
+    
+    # Group files by (base_name, extension)
+    groups: dict[tuple[str, str], list[tuple[str, Path]]] = {}
+    
+    for path in directory.iterdir():
+        if not path.is_file():
+            continue
+        match = DATED_FILE_PATTERN.match(path.name)
+        if match:
+            base_name, date_str, ext = match.groups()
+            key = (base_name, ext)
+            if key not in groups:
+                groups[key] = []
+            groups[key].append((date_str, path))
+    
+    deleted = 0
+    for (base_name, ext), files in groups.items():
+        if len(files) <= 1:
+            continue
+        # Sort by date descending, keep the latest
+        files.sort(key=lambda x: x[0], reverse=True)
+        latest_date, latest_path = files[0]
+        for date_str, path in files[1:]:
+            try:
+                path.unlink()
+                deleted += 1
+                if not quiet:
+                    print(f"[purge] Removed old file: {path.name} (keeping {latest_path.name})")
+            except Exception:
+                pass
+    
+    return deleted
+
 
 def _ensure_inputs_dir() -> Path:
     DRUGS_INPUTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -576,6 +624,11 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     _ensure_inputs_dir()
+    
+    # Auto-purge old dated files in inputs/drugs
+    deleted = purge_old_dated_files(DRUGS_INPUTS_DIR, quiet=True)
+    if deleted > 0:
+        print(f"[cleanup] Removed {deleted} old dated files from inputs/drugs")
 
     print("=" * 60)
     print("ESOA DRUGS PIPELINE")
