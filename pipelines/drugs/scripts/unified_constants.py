@@ -725,6 +725,28 @@ SPELLING_SYNONYMS: Dict[str, str] = {
 }
 
 # ============================================================================
+# REGIONAL CANONICAL NAMES - Map US names to PH/WHO names
+# Philippines uses WHO naming conventions (e.g., PARACETAMOL not ACETAMINOPHEN)
+# Applied when generating output to prefer regional names
+# ============================================================================
+
+REGIONAL_CANONICAL: Dict[str, str] = {
+    # US name → PH/WHO name
+    "ACETAMINOPHEN": "PARACETAMOL",
+    "ALBUTEROL": "SALBUTAMOL",
+    "EPINEPHRINE": "ADRENALINE",
+    "NOREPINEPHRINE": "NORADRENALINE",
+    "MEPERIDINE": "PETHIDINE",
+    "ACETAZOLAMIDE": "ACETAZOLAMIDE",  # Same in both
+    "FUROSEMIDE": "FUROSEMIDE",  # Also FRUSEMIDE in some countries
+}
+
+def get_regional_canonical(name: str) -> str:
+    """Get the regional (PH/WHO) canonical name for a drug."""
+    return REGIONAL_CANONICAL.get(name.upper(), name.upper())
+
+
+# ============================================================================
 # MULTIWORD GENERICS - Drug names that contain spaces
 # These should be preserved as single tokens during tokenization
 # ============================================================================
@@ -789,8 +811,9 @@ __all__ = [
     # ATC patterns
     "ATC_COMBINATION_PATTERNS", "COMBINATION_ATC_SUFFIXES",
     
-    # Synonyms and multiword generics
+    # Synonyms, multiword generics, regional names
     "SPELLING_SYNONYMS", "MULTIWORD_GENERICS",
+    "REGIONAL_CANONICAL", "get_regional_canonical",
     
     # Helper functions
     "get_canonical_form", "get_canonical_route",

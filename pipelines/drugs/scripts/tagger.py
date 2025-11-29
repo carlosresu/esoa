@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional, Set
 import duckdb
 import pandas as pd
 
-from .unified_constants import PURE_SALT_COMPOUNDS, UNIT_TOKENS
+from .unified_constants import PURE_SALT_COMPOUNDS, UNIT_TOKENS, get_regional_canonical
 from .lookup import (
     apply_synonym, batch_lookup_generics, build_combination_keys,
     swap_brand_to_generic,
@@ -574,13 +574,18 @@ class UnifiedTagger:
                 if ref_text:
                     ref_text = str(ref_text).upper()
                 
+                # Apply regional canonical name (PH uses WHO names like PARACETAMOL)
+                generic_name = best.get("generic_name")
+                if generic_name:
+                    generic_name = get_regional_canonical(generic_name)
+                
                 results.append({
                     "id": ids[i],
                     "input_text": text,
                     "row_idx": i,
                     "atc_code": best.get("atc_code"),
                     "drugbank_id": best.get("drugbank_id"),
-                    "generic_name": best.get("generic_name"),
+                    "generic_name": generic_name,
                     "reference_text": ref_text,
                     "dose": "|".join(input_doses) if input_doses else None,
                     "form": base_form,
