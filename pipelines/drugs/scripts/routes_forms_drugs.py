@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """Route and form parsing utilities.
 
-Note: Canonical mappings are now in unified_constants.py.
+All mappings are sourced from unified_constants.py (converted to lowercase).
 This file provides parsing functions that use those constants.
 """
 
@@ -10,74 +10,15 @@ import re
 from typing import List, Optional, Tuple
 
 from .tagging.unified_constants import (
-    FORM_TO_ROUTE as UNIFIED_FORM_TO_ROUTE,
-    ROUTE_CANON as UNIFIED_ROUTE_CANON,
+    FORM_TO_ROUTE as _UNIFIED_FORM_TO_ROUTE,
+    ROUTE_CANON as _UNIFIED_ROUTE_CANON,
 )
 
-# Re-export for backward compatibility (extends unified with local additions)
-FORM_TO_ROUTE = {
-    "tablet": "oral", "tab": "oral", "tabs": "oral", "chewing gum": "oral",
-    "capsule": "oral", "cap": "oral", "caps": "oral",
-    "syrup": "oral", "syrups": "oral",
-    "suspension": "oral", "suspensions": "oral",
-    "solution": "oral", "solutions": "oral",
-    "sachet": "oral",
-    "granule": "oral", "granules": "oral",
-    "lozenge": "oral",
-    "mouthwash": "oral",
-    "drops": "oral", "oral drops": "oral",
-    "drop": "ophthalmic", "eye drop": "ophthalmic", "ear drop": "otic",
-    "eye drops": "ophthalmic", "ear drops": "otic", "nasal drops": "nasal",
-    "cream": "topical", "ointment": "topical", "gel": "topical", "lotion": "topical",
-    "soap": "topical", "shampoo": "topical", "wash": "topical",
-    "patch": "transdermal",
-    "inhaler": "inhalation", "nebule": "inhalation", "neb": "inhalation",
-    "inhal.aerosol": "inhalation", "inhal.powder": "inhalation", "inhal.solution": "inhalation", "oral aerosol": "inhalation",
-    "ampoule": "intravenous", "amp": "intravenous", "ampul": "intravenous", "ampule": "intravenous",
-    "vial": "intravenous", "vl": "intravenous", "inj": "intravenous", "injection": "intravenous",
-    "suppository": "rectal", "ovule": "vaginal", "ovules": "vaginal",
-    "mdi": "inhalation",
-    "dpi": "inhalation",
-    "metered dose inhaler": "inhalation",
-    "dry powder inhaler": "inhalation",
-    "spray": "nasal",
-    "nasal spray": "nasal",
-    "susp": "oral",
-    "soln": "oral",
-    "syr": "oral",
-    "td": "transdermal",
-    "supp": "rectal",
-    "instill.solution": "ophthalmic", "lamella": "ophthalmic",
-    "implant": "subcutaneous", "s.c. implant": "subcutaneous"
-}
+# Convert unified constants to lowercase for text matching
+FORM_TO_ROUTE = {k.lower(): v.lower() for k, v in _UNIFIED_FORM_TO_ROUTE.items()}
+ROUTE_ALIASES = {k.lower(): v.lower() for k, v in _UNIFIED_ROUTE_CANON.items()}
 FORM_WORDS = sorted(set(FORM_TO_ROUTE.keys()), key=len, reverse=True)
 
-ROUTE_ALIASES = {
-    "po": "oral", "per orem": "oral", "by mouth": "oral",
-    "iv": "intravenous", "intravenous": "intravenous",
-    "im": "intramuscular", "intramuscular": "intramuscular",
-    "sc": "subcutaneous", "subcut": "subcutaneous", "subcutaneous": "subcutaneous",
-    "sl": "sublingual", "sublingual": "sublingual", "bucc": "buccal", "buccal": "buccal",
-    "topical": "topical", "cutaneous": "topical", "dermal": "transdermal",
-    "oph": "ophthalmic", "eye": "ophthalmic", "ophthalmic": "ophthalmic",
-    "otic": "otic", "ear": "otic",
-    "inh": "inhalation", "neb": "inhalation", "inhalation": "inhalation",
-    "rectal": "rectal", "vaginal": "vaginal",
-    "intrathecal": "intrathecal", "nasal": "nasal",
-    "per os": "oral",
-    "td": "transdermal",
-    "transdermal": "transdermal",
-    "intradermal": "intradermal",
-    "id": "intradermal",
-    "subdermal": "subcutaneous",
-    "per rectum": "rectal",
-    "pr": "rectal",
-    "per vaginam": "vaginal",
-    "pv": "vaginal",
-    "per nasal": "nasal",
-    "intranasal": "nasal",
-    "inhaler": "inhalation"
-}
 
 def map_route_token(r) -> List[str]:
     """Translate PNF route descriptors into canonical route token lists."""

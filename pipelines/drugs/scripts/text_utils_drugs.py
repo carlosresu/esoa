@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """Shared text normalization helpers used across preparation and matching."""
@@ -12,86 +11,14 @@ from .tagging.unified_constants import (
     SALT_TOKENS_LOWER,
     STOPWORDS_LOWER,
     UNIT_TOKENS_LOWER,
+    SALT_CATIONS,
+    SALT_TAIL_BREAK_TOKENS,
 )
 
-# Legacy set - now using STOPWORDS_LOWER from unified_constants
-BASE_GENERIC_IGNORE = {
-    "and",
-    "with",
-    "plus",
-    "per",
-    "unit",
-    "units",
-    "approx",
-    "approximately",
-    "pre",
-    "filled",
-    "pre-filled",
-    "syringe",
-    "bag",
-    "bottle",
-    "vial",
-    "ampule",
-    "ampoule",
-    "sachet",
-    "sachets",
-    "can",
-    "cans",
-    "drops",
-    "drop",
-    "spray",
-    "solution",
-    "patch",
-    "capsule",
-    "tablet",
-    "cream",
-    "ointment",
-    "gel",
-    "lotion",
-    "agent",
-    "agents",
-    "forming",
-    "gas",
-    "suspension",
-    "powder",
-    "syrup",
-    "nebule",
-    "oral",
-    "intravenous",
-    "intramuscular",
-    "subcutaneous",
-    "ophthalmic",
-    "nasal",
-    "topical",
-    "percent",
-    "elemental",
-    "equiv",
-    "equivalent",
-}
-
-MEASUREMENT_TOKENS = {
-    "ml",
-    "l",
-    "cc",
-    "mg",
-    "mcg",
-    "ug",
-    "g",
-    "kg",
-    "iu",
-    "lsu",
-    "mu",
-    "meq",
-    "meqs",
-    "mol",
-    "mmol",
-    "pct",
-}
-
-SPECIAL_SALT_TOKENS = {"calcium", "sodium"}
-
-BASE_GENERIC_IGNORE |= MEASUREMENT_TOKENS
-BASE_GENERIC_IGNORE |= {"%", "ratio", "per"}
+# Use unified constants - lowercase versions for text matching
+BASE_GENERIC_IGNORE = STOPWORDS_LOWER | UNIT_TOKENS_LOWER
+MEASUREMENT_TOKENS = UNIT_TOKENS_LOWER
+SPECIAL_SALT_TOKENS = {s.lower() for s in SALT_CATIONS}
 
 _GM_TOKEN_RX = re.compile(r"(?<![a-z])gms?(?![a-z])")
 
@@ -137,14 +64,15 @@ def normalize_text(s: str) -> str:
     s = re.sub(r"\s+", " ", s).strip()
     return s
 
-_SALT_TAIL_BREAK_TOKENS = {"+", "/", "&", "and", "with"}
+# Use lowercase version of unified constant
+_SALT_TAIL_BREAK_TOKENS = {t.lower() for t in SALT_TAIL_BREAK_TOKENS}
 
 
 def _looks_like_salt_tail(tokens: List[str], start_idx: int) -> bool:
     """Heuristic to ensure 'as' only signals salts, not new molecules."""
     seen_salt = False
     for tok in tokens[start_idx:]:
-        if tok in _SALT_TAIL_BREAK_TOKENS:
+        if tok.lower() in _SALT_TAIL_BREAK_TOKENS:
             break
         if not tok:
             continue
