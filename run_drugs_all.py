@@ -25,7 +25,7 @@ import pandas as pd
 
 from pipelines.drugs.constants import PIPELINE_INPUTS_DIR, PROJECT_ROOT
 from pipelines.drugs.pipeline import DrugsAndMedicinePipeline
-from pipelines.drugs.scripts.prepare_drugs import prepare
+from pipelines.drugs.scripts.prepare import prepare
 
 PROJECT_DIR = PROJECT_ROOT
 DRUGS_INPUTS_DIR = PIPELINE_INPUTS_DIR
