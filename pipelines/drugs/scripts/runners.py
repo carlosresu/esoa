@@ -327,42 +327,31 @@ def run_esoa_to_drug_code(
             return ""
         return str(s).upper().strip()
     
-    # Build synonym mappings from generics_lookup (bidirectional)
-    from .tagging.lookup import load_generics_lookup, load_synonyms
-    try:
-        generics_df = load_generics_lookup(PIPELINE_OUTPUTS_DIR)
-        base_synonyms = load_synonyms(generics_df)
-    except Exception:
-        base_synonyms = {}
+    # Build synonym mappings from generics_master (the ONE source of truth)
+    generics_master_path = PIPELINE_OUTPUTS_DIR / "generics_master.parquet"
+    all_synonyms = {}
     
-    # Regional synonyms: US name ↔ PH/WHO name (bidirectional for flexibility)
-    REGIONAL_SYNONYMS = {
-        # US → PH/WHO
-        "ACETAMINOPHEN": "PARACETAMOL",
-        "ALBUTEROL": "SALBUTAMOL",
-        "EPINEPHRINE": "ADRENALINE",
-        "NOREPINEPHRINE": "NORADRENALINE",
-        "MEPERIDINE": "PETHIDINE",
-        # PH/WHO → US (reverse)
-        "PARACETAMOL": "ACETAMINOPHEN",
-        "SALBUTAMOL": "ALBUTEROL",
-        "ADRENALINE": "EPINEPHRINE",
-        "NORADRENALINE": "NOREPINEPHRINE",
-        "FRUSEMIDE": "FUROSEMIDE",
-        "LIGNOCAINE": "LIDOCAINE",
-        "PETHIDINE": "MEPERIDINE",
-    }
-    
-    # Merge all synonyms
-    all_synonyms = {**base_synonyms, **REGIONAL_SYNONYMS}
+    if generics_master_path.exists():
+        gm = pd.read_parquet(generics_master_path)
+        for _, row in gm.iterrows():
+            generic = str(row['generic_name']).upper().strip()
+            synonyms_str = row.get('synonyms', '')
+            if synonyms_str:
+                for syn in str(synonyms_str).split('|'):
+                    syn = syn.upper().strip()
+                    if syn and syn != generic:
+                        # Bidirectional mapping
+                        all_synonyms[syn] = generic
+                        all_synonyms[generic] = syn
+        if verbose:
+            print(f"  Loaded synonyms from generics_master: {len(all_synonyms):,} mappings")
     
     def get_all_name_variants(name):
         """Get all possible name variants for matching."""
         variants = {name}
-        # Add direct synonym
         if name in all_synonyms:
             variants.add(all_synonyms[name])
-        # Add reverse lookups
+        # Also check if name appears as a value (reverse lookup)
         for syn, canonical in all_synonyms.items():
             if canonical == name:
                 variants.add(syn)
