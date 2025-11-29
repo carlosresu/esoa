@@ -14,8 +14,7 @@ import pandas as pd
 from .constants import PURE_SALT_COMPOUNDS, UNIT_TOKENS
 from .lookup import (
     apply_synonym, batch_lookup_generics, build_combination_keys,
-    build_brand_to_generic_map, load_brands_lookup, load_generics_lookup,
-    load_synonyms, swap_brand_to_generic,
+    swap_brand_to_generic,
 )
 from .scoring import select_best_candidate, sort_atc_codes
 from .tokenizer import (
@@ -64,41 +63,76 @@ class UnifiedTagger:
             print(f"[UnifiedTagger] {msg}")
     
     def load(self) -> None:
-        """Load reference data into DuckDB."""
+        """Load THE unified reference dataset into DuckDB."""
         if self._loaded:
             return
         
-        self._log("Loading reference data...")
+        self._log("Loading unified_drug_reference.parquet...")
         
         # Create in-memory DuckDB
         self.con = duckdb.connect(":memory:")
         
-        # Load generics
-        generics_path = self.outputs_dir / "generics_lookup.parquet"
-        if generics_path.exists():
-            self.con.execute(f"CREATE TABLE generics AS SELECT * FROM read_parquet('{generics_path}')")
-            count = self.con.execute("SELECT COUNT(*) FROM generics").fetchone()[0]
-            self._log(f"  - generics: {count:,} rows")
+        # Load THE unified reference (the ONE source of truth)
+        unified_path = self.outputs_dir / "unified_drug_reference.parquet"
+        if not unified_path.exists():
+            raise FileNotFoundError(f"Unified reference not found: {unified_path}")
         
-        # Load synonyms
-        generics_df = load_generics_lookup(self.outputs_dir)
-        self.synonyms = load_synonyms(generics_df)
+        self.con.execute(f"CREATE TABLE unified AS SELECT * FROM read_parquet('{unified_path}')")
+        count = self.con.execute("SELECT COUNT(*) FROM unified").fetchone()[0]
+        self._log(f"  - unified: {count:,} rows")
+        
+        # Get unique generics count
+        unique_generics = self.con.execute("SELECT COUNT(DISTINCT generic_name) FROM unified").fetchone()[0]
+        self._log(f"  - unique generics: {unique_generics:,}")
+        
+        # Build synonyms dict from synonyms column
+        from .unified_constants import SPELLING_SYNONYMS
+        self.synonyms = dict(SPELLING_SYNONYMS)  # Start with spelling corrections
+        
+        synonym_rows = self.con.execute("""
+            SELECT DISTINCT generic_name, synonyms 
+            FROM unified 
+            WHERE synonyms IS NOT NULL AND synonyms != ''
+        """).fetchall()
+        
+        for generic_name, synonyms_str in synonym_rows:
+            for syn in synonyms_str.split('|'):
+                syn = syn.strip().upper()
+                if syn and syn != generic_name.upper():
+                    self.synonyms[syn] = generic_name.upper()
         self._log(f"  - synonyms: {len(self.synonyms):,} entries")
         
-        # Cache generics list for fuzzy matching performance
-        self.cached_generics_list = generics_df["generic_name"].dropna().tolist()
+        # Build brand → generic map from source data (drugbank_brands_master.csv)
+        self.brand_map = {}
+        brands_path = self.inputs_dir / "drugbank_brands_master.csv"
         
-        # Load brands for brand → generic swapping
-        # Pass generics_df to exclude known generic names from brand map
-        brands_df = load_brands_lookup(self.outputs_dir)
-        self.brand_map = build_brand_to_generic_map(brands_df, generics_df)
+        # Get all generic names to exclude from brand map
+        all_generics = set(row[0].upper() for row in self.con.execute(
+            "SELECT DISTINCT generic_name FROM unified"
+        ).fetchall())
+        
+        if brands_path.exists():
+            import csv
+            with open(brands_path, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    brand = (row.get('brand_name') or '').strip().upper()
+                    generic = (row.get('canonical_generic_name') or '').strip().upper()
+                    if brand and generic and brand not in all_generics:
+                        if brand not in self.brand_map:
+                            self.brand_map[brand] = generic
         self._log(f"  - brands: {len(self.brand_map):,} entries")
+        
+        # Cache generics list for fuzzy matching
+        self.cached_generics_list = [row[0] for row in self.con.execute(
+            "SELECT DISTINCT generic_name FROM unified WHERE generic_name IS NOT NULL"
+        ).fetchall()]
         
         # Build multiword generics set from data + constants
         from .unified_constants import MULTIWORD_GENERICS
         
         self.multiword_generics = set()
-        for name in generics_df["generic_name"]:
+        for name in self.cached_generics_list:
             if " " in str(name):
                 self.multiword_generics.add(str(name).upper())
         
@@ -110,7 +144,6 @@ class UnifiedTagger:
         for mw in self.multiword_generics:
             words = mw.split()
             if words and not words[0].endswith("S"):
-                # Add plural form (e.g., VITAMIN -> VITAMINS)
                 plural_first = words[0] + "S"
                 plural_forms.add(" ".join([plural_first] + words[1:]))
         self.multiword_generics.update(plural_forms)

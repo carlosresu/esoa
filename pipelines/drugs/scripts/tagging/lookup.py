@@ -186,10 +186,11 @@ def lookup_generic_exact(
     token: str,
     con: duckdb.DuckDBPyConnection,
 ) -> List[Dict[str, Any]]:
-    """Exact match lookup for a generic token."""
+    """Exact match lookup for a generic token in unified table."""
     query = """
-        SELECT DISTINCT generic_name, drugbank_id, atc_code, source, reference_text
-        FROM generics
+        SELECT DISTINCT generic_name, drugbank_id, atc_code, sources as source,
+               generic_name as reference_text
+        FROM unified
         WHERE UPPER(generic_name) = ?
     """
     try:
@@ -204,10 +205,11 @@ def lookup_generic_prefix(
     con: duckdb.DuckDBPyConnection,
     limit: int = 5,
 ) -> List[Dict[str, Any]]:
-    """Prefix match lookup for a generic token."""
+    """Prefix match lookup for a generic token in unified table."""
     query = """
-        SELECT DISTINCT generic_name, drugbank_id, atc_code, source, reference_text
-        FROM generics
+        SELECT DISTINCT generic_name, drugbank_id, atc_code, sources as source,
+               generic_name as reference_text
+        FROM unified
         WHERE UPPER(generic_name) LIKE ?
         ORDER BY LENGTH(generic_name) ASC
         LIMIT ?
@@ -224,10 +226,11 @@ def lookup_generic_contains(
     con: duckdb.DuckDBPyConnection,
     limit: int = 3,
 ) -> List[Dict[str, Any]]:
-    """Contains match lookup for a generic token."""
+    """Contains match lookup for a generic token in unified table."""
     query = """
-        SELECT DISTINCT generic_name, drugbank_id, atc_code, source, reference_text
-        FROM generics
+        SELECT DISTINCT generic_name, drugbank_id, atc_code, sources as source,
+               generic_name as reference_text
+        FROM unified
         WHERE UPPER(generic_name) LIKE ?
         ORDER BY LENGTH(generic_name) ASC
         LIMIT ?
@@ -273,7 +276,7 @@ def lookup_generic_fuzzy(
     else:
         try:
             all_generics = con.execute(
-                "SELECT DISTINCT generic_name FROM generics WHERE generic_name IS NOT NULL"
+                "SELECT DISTINCT generic_name FROM unified WHERE generic_name IS NOT NULL"
             ).fetchdf()["generic_name"].tolist()
         except Exception:
             return []
