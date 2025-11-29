@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional, Set
 import duckdb
 import pandas as pd
 
-from .constants import PURE_SALT_COMPOUNDS, UNIT_TOKENS
+from .unified_constants import PURE_SALT_COMPOUNDS, UNIT_TOKENS
 from .lookup import (
     apply_synonym, batch_lookup_generics, build_combination_keys,
     swap_brand_to_generic,
@@ -546,7 +546,7 @@ class UnifiedTagger:
             )
             
             # Extract categorized tokens for output
-            from .constants import CATEGORY_DOSE, CATEGORY_FORM, CATEGORY_ROUTE
+            from .unified_constants import CATEGORY_DOSE, CATEGORY_FORM, CATEGORY_ROUTE
             input_doses = list(categories.get(CATEGORY_DOSE, {}).keys())
             input_forms = list(categories.get(CATEGORY_FORM, {}).keys())
             input_routes = list(categories.get(CATEGORY_ROUTE, {}).keys())

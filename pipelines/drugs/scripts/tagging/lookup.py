@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional, Set
 import duckdb
 import pandas as pd
 
-from .constants import PURE_SALT_COMPOUNDS
+from .unified_constants import PURE_SALT_COMPOUNDS
 from .tokenizer import strip_salt_suffix
 
 

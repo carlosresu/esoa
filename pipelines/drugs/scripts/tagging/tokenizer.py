@@ -7,12 +7,16 @@ from __future__ import annotations
 import re
 from typing import Dict, List, Optional, Set, Tuple
 
-from .constants import (
+from .unified_constants import (
     CATEGORY_DOSE, CATEGORY_FORM, CATEGORY_GENERIC, CATEGORY_OTHER,
-    CATEGORY_ROUTE, CATEGORY_SALT, ELEMENT_DRUGS, FORM_CANON, GENERIC_JUNK_TOKENS,
-    NATURAL_STOPWORDS, PURE_SALT_COMPOUNDS, ROUTE_CANON, SALT_TOKENS,
+    CATEGORY_ROUTE, CATEGORY_SALT, ELEMENT_DRUGS, FORM_CANON,
+    PURE_SALT_COMPOUNDS, ROUTE_CANON, SALT_TOKENS, STOPWORDS,
     UNIT_TOKENS,
 )
+
+# Legacy aliases for backward compatibility
+NATURAL_STOPWORDS = STOPWORDS
+GENERIC_JUNK_TOKENS = STOPWORDS
 
 
 # Regex patterns
