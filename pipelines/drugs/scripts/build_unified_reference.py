@@ -205,13 +205,31 @@ def build_unified_reference(
         print(f"  - Added synonyms for {len(synonyms_df):,} generics")
     
     # =========================================================================
-    # Note: Brands are NOT stored in exploded dataset to avoid bloat
-    # They should be looked up separately by drugbank_id or generic_name
+    # Add brands from DrugBank + FDA (aggregated per drugbank_id)
     # =========================================================================
     if verbose:
-        print("\n[Step 4] Skipping brands in exploded dataset (lookup separately)...")
+        print("\n[Step 4] Adding brands...")
     
-    unified_df['brands'] = ''  # Empty - brands looked up via separate query
+    try:
+        # DrugBank brands - aggregate per drugbank_id
+        db_brands_agg = con.execute("""
+            SELECT 
+                drugbank_id,
+                STRING_AGG(DISTINCT UPPER(TRIM(brand_name)), '|') as brands
+            FROM drugbank_brands
+            WHERE drugbank_id IS NOT NULL AND brand_name IS NOT NULL AND brand_name != ''
+            GROUP BY drugbank_id
+        """).fetchdf()
+        
+        unified_df = unified_df.merge(db_brands_agg, on='drugbank_id', how='left')
+        unified_df['brands'] = unified_df['brands'].fillna('')
+        
+        if verbose:
+            print(f"  - Brands for {len(db_brands_agg):,} generics")
+    except Exception as e:
+        if verbose:
+            print(f"  - Warning: Could not add brands: {e}")
+        unified_df['brands'] = ''
     
     # =========================================================================
     # Add salt forms from drugbank_salts
@@ -242,12 +260,30 @@ def build_unified_reference(
         unified_df['salt_forms'] = ''
     
     # =========================================================================
-    # Note: Mixture components NOT stored in exploded dataset to avoid bloat
+    # Add mixture components from drugbank_mixtures
     # =========================================================================
     if verbose:
-        print("\n[Step 6] Skipping mixture_components in exploded dataset...")
+        print("\n[Step 6] Adding mixture components...")
     
-    unified_df['mixture_components'] = ''  # Empty - lookup separately if needed
+    try:
+        mixtures_df = con.execute("""
+            SELECT 
+                mixture_drugbank_id as drugbank_id,
+                STRING_AGG(DISTINCT component_drugbank_ids, '|') as mixture_components
+            FROM drugbank_mixtures
+            WHERE mixture_drugbank_id IS NOT NULL
+            GROUP BY mixture_drugbank_id
+        """).fetchdf()
+        
+        unified_df = unified_df.merge(mixtures_df, on='drugbank_id', how='left')
+        unified_df['mixture_components'] = unified_df['mixture_components'].fillna('')
+        
+        if verbose:
+            print(f"  - Mixture info for {len(mixtures_df):,} generics")
+    except Exception as e:
+        if verbose:
+            print(f"  - Warning: Could not add mixtures: {e}")
+        unified_df['mixture_components'] = ''
     
     # =========================================================================
     # Add WHO ATC entries not in DrugBank

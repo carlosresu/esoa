@@ -102,25 +102,30 @@ class UnifiedTagger:
                     self.synonyms[syn] = generic_name.upper()
         self._log(f"  - synonyms: {len(self.synonyms):,} entries")
         
-        # Build brand → generic map from source data (drugbank_brands_master.csv)
+        # Build brand → generic map from unified dataset's brands column
         self.brand_map = {}
-        brands_path = self.inputs_dir / "drugbank_brands_master.csv"
         
         # Get all generic names to exclude from brand map
         all_generics = set(row[0].upper() for row in self.con.execute(
             "SELECT DISTINCT generic_name FROM unified"
         ).fetchall())
         
-        if brands_path.exists():
-            import csv
-            with open(brands_path, 'r', encoding='utf-8') as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    brand = (row.get('brand_name') or '').strip().upper()
-                    generic = (row.get('canonical_generic_name') or '').strip().upper()
-                    if brand and generic and brand not in all_generics:
-                        if brand not in self.brand_map:
-                            self.brand_map[brand] = generic
+        # Get brands with row count per generic (prefer generic with more rows)
+        brand_rows = self.con.execute("""
+            SELECT generic_name, brands, COUNT(*) as row_count
+            FROM unified 
+            WHERE brands IS NOT NULL AND brands != ''
+            GROUP BY generic_name, brands
+            ORDER BY row_count DESC
+        """).fetchall()
+        
+        for generic_name, brands_str, row_count in brand_rows:
+            for brand in brands_str.split('|'):
+                brand = brand.strip().upper()
+                # Don't add if brand is actually a generic name
+                if brand and brand not in all_generics:
+                    if brand not in self.brand_map:
+                        self.brand_map[brand] = generic_name.upper()
         self._log(f"  - brands: {len(self.brand_map):,} entries")
         
         # Cache generics list for fuzzy matching
