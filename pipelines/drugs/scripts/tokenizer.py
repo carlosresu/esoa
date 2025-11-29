@@ -18,6 +18,9 @@ from .unified_constants import (
 NATURAL_STOPWORDS = STOPWORDS
 GENERIC_JUNK_TOKENS = STOPWORDS
 
+# Pre-sorted salt tokens for faster lookup (sorted by length descending)
+_SALT_TOKENS_SORTED: List[str] = sorted(SALT_TOKENS, key=len, reverse=True)
+
 
 # Regex patterns
 _DOSE_PATTERN = re.compile(
@@ -625,17 +628,22 @@ def strip_salt_suffix(
     
     Returns (base_name, salt_suffix or None).
     """
-    if salt_suffixes is None:
-        salt_suffixes = SALT_TOKENS
-    
     generic_upper = generic.upper()
     
     # Don't strip from pure salt compounds
     if generic_upper in PURE_SALT_COMPOUNDS:
         return generic_upper, None
     
-    # Check each salt suffix
-    for suffix in sorted(salt_suffixes, key=len, reverse=True):
+    # Use pre-sorted list for default case (fast path)
+    if salt_suffixes is None:
+        suffixes_to_check = _SALT_TOKENS_SORTED
+        salt_lookup = SALT_TOKENS
+    else:
+        suffixes_to_check = sorted(salt_suffixes, key=len, reverse=True)
+        salt_lookup = salt_suffixes
+    
+    # Check each salt suffix (longest first)
+    for suffix in suffixes_to_check:
         if generic_upper.endswith(" " + suffix):
             base = generic_upper[:-len(suffix) - 1].strip()
             # Also strip trailing "AS" (e.g., "AMLODIPINE AS BESILATE" -> "AMLODIPINE")
@@ -648,7 +656,7 @@ def strip_salt_suffix(
         parts = generic_upper.split(" AS ", 1)
         if len(parts) == 2:
             potential_salt = parts[1].strip()
-            if potential_salt in salt_suffixes:
+            if potential_salt in salt_lookup:
                 return parts[0].strip(), potential_salt
     
     return generic_upper, None

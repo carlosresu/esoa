@@ -105,8 +105,10 @@ def lookup_generic_exact(
         WHERE UPPER(generic_name) = ?
     """
     try:
-        df = con.execute(query, [token.upper()]).fetchdf()
-        return df.to_dict("records")
+        # Use fetchall() instead of fetchdf().to_dict() for speed
+        rows = con.execute(query, [token.upper()]).fetchall()
+        cols = ["generic_name", "drugbank_id", "atc_code", "source", "reference_text"]
+        return [dict(zip(cols, row)) for row in rows]
     except Exception:
         return []
 
@@ -126,8 +128,9 @@ def lookup_generic_prefix(
         LIMIT ?
     """
     try:
-        df = con.execute(query, [f"{token.upper()} %", limit]).fetchdf()
-        return df.to_dict("records")
+        rows = con.execute(query, [f"{token.upper()} %", limit]).fetchall()
+        cols = ["generic_name", "drugbank_id", "atc_code", "source", "reference_text"]
+        return [dict(zip(cols, row)) for row in rows]
     except Exception:
         return []
 
@@ -147,8 +150,9 @@ def lookup_generic_contains(
         LIMIT ?
     """
     try:
-        df = con.execute(query, [f"%{token.upper()}%", limit]).fetchdf()
-        return df.to_dict("records")
+        rows = con.execute(query, [f"%{token.upper()}%", limit]).fetchall()
+        cols = ["generic_name", "drugbank_id", "atc_code", "source", "reference_text"]
+        return [dict(zip(cols, row)) for row in rows]
     except Exception:
         return []
 
@@ -198,11 +202,14 @@ def lookup_generic_fuzzy(
         WHERE generic_name IN ({placeholders})
     """
     try:
-        df = con.execute(query, match_names).fetchdf()
-        results = df.to_dict("records")
-        for rec in results:
+        rows = con.execute(query, match_names).fetchall()
+        cols = ["generic_name", "drugbank_id", "atc_code", "source", "reference_text"]
+        results = []
+        for row in rows:
+            rec = dict(zip(cols, row))
             rec["fuzzy_score"] = match_scores.get(rec.get("generic_name"), 0)
             rec["fuzzy_match"] = True
+            results.append(rec)
         return results
     except Exception:
         return []
@@ -249,14 +256,16 @@ def batch_lookup_generics(
             WHERE UPPER(generic_name) IN ({placeholders})
         """
         try:
-            df = con.execute(query, list(all_lookups)).fetchdf()
+            rows = con.execute(query, list(all_lookups)).fetchall()
+            cols = ["generic_name", "drugbank_id", "atc_code", "source", "reference_text"]
             # Group by generic_name
-            for _, row in df.iterrows():
-                gn = row["generic_name"]
+            for row in rows:
+                rec = dict(zip(cols, row))
+                gn = rec.get("generic_name", "")
                 gn_upper = gn.upper() if gn else ""
                 if gn_upper not in cache:
                     cache[gn_upper] = []
-                cache[gn_upper].append(row.to_dict())
+                cache[gn_upper].append(rec)
         except Exception:
             pass
     
