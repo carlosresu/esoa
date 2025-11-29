@@ -6,7 +6,7 @@ import re
 import unicodedata
 from typing import Iterable, Optional, List, Tuple
 
-from .tagging.unified_constants import (
+from .unified_constants import (
     SALT_TOKENS,
     SALT_TOKENS_LOWER,
     STOPWORDS_LOWER,
@@ -164,7 +164,7 @@ def extract_parenthetical_phrases(raw_text: str) -> List[str]:
         uniq.append(c)
     return uniq
 
-from .tagging.unified_constants import SALT_TOKENS
+from .unified_constants import SALT_TOKENS
 from .routes_forms_drugs import FORM_TO_ROUTE, ROUTE_ALIASES
 
 STOPWORD_TOKENS = (

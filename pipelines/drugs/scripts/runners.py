@@ -14,7 +14,7 @@ import pandas as pd
 
 from .io_utils import reorder_columns_after, write_csv_and_parquet
 from .spinner import run_with_spinner
-from .tagging import UnifiedTagger
+from .tagger import UnifiedTagger
 
 
 # Default paths

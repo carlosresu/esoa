@@ -3,7 +3,7 @@
 """Exports convenience aliases for DrugsAndMedicine pipeline modules."""
 
 from .prepare_drugs import prepare
-from .tagging import UnifiedTagger, tag_descriptions, tag_single
+from .tagger import UnifiedTagger, tag_descriptions, tag_single
 from .runners import run_annex_f_tagging, run_esoa_tagging
 
 __all__ = [

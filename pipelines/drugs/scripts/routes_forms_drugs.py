@@ -9,7 +9,7 @@ This file provides parsing functions that use those constants.
 import re
 from typing import List, Optional, Tuple
 
-from .tagging.unified_constants import (
+from .unified_constants import (
     FORM_TO_ROUTE as _UNIFIED_FORM_TO_ROUTE,
     ROUTE_CANON as _UNIFIED_ROUTE_CANON,
 )
