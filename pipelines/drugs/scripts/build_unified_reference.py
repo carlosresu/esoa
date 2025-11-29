@@ -109,6 +109,14 @@ def build_unified_reference(
         if verbose:
             print(f"  - drugbank_mixtures: {count:,} rows")
     
+    # DrugBank salts
+    db_salts_path = inputs_dir / "drugbank_salts_master.csv"
+    if db_salts_path.exists():
+        con.execute(f"CREATE TABLE drugbank_salts AS SELECT * FROM read_csv_auto('{db_salts_path}')")
+        count = con.execute("SELECT COUNT(*) FROM drugbank_salts").fetchone()[0]
+        if verbose:
+            print(f"  - drugbank_salts: {count:,} rows")
+    
     # WHO ATC (latest)
     who_files = sorted(glob.glob(str(inputs_dir / "who_atc_*.parquet")))
     if who_files:
@@ -206,7 +214,7 @@ def build_unified_reference(
     unified_df['brands'] = ''  # Empty - brands looked up via separate query
     
     # =========================================================================
-    # Add salt forms
+    # Add salt forms from drugbank_salts
     # =========================================================================
     if verbose:
         print("\n[Step 5] Adding salt forms...")
@@ -214,11 +222,13 @@ def build_unified_reference(
     try:
         salts_df = con.execute("""
             SELECT 
-                drugbank_id,
-                STRING_AGG(DISTINCT UPPER(TRIM(salt_names)), '|') as salt_forms
-            FROM drugbank_generics
-            WHERE drugbank_id IS NOT NULL AND salt_names IS NOT NULL AND salt_names != ''
-            GROUP BY drugbank_id
+                parent_drugbank_id as drugbank_id,
+                STRING_AGG(DISTINCT UPPER(TRIM(salt_name_normalized)), '|') as salt_forms
+            FROM drugbank_salts
+            WHERE parent_drugbank_id IS NOT NULL 
+              AND salt_name_normalized IS NOT NULL 
+              AND salt_name_normalized != ''
+            GROUP BY parent_drugbank_id
         """).fetchdf()
         
         unified_df = unified_df.merge(salts_df, on='drugbank_id', how='left')
@@ -226,7 +236,9 @@ def build_unified_reference(
         
         if verbose:
             print(f"  - Salt forms for {len(salts_df):,} generics")
-    except:
+    except Exception as e:
+        if verbose:
+            print(f"  - Warning: Could not add salt forms: {e}")
         unified_df['salt_forms'] = ''
     
     # =========================================================================
