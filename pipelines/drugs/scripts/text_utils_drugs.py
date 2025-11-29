@@ -236,7 +236,7 @@ def extract_parenthetical_phrases(raw_text: str) -> List[str]:
         uniq.append(c)
     return uniq
 
-from .combos_drugs import SALT_TOKENS
+from .tagging.unified_constants import SALT_TOKENS
 from .routes_forms_drugs import FORM_TO_ROUTE, ROUTE_ALIASES
 
 STOPWORD_TOKENS = (
