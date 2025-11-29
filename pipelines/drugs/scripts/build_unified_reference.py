@@ -1,36 +1,23 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Build THE unified drug reference dataset.
+Build unified drug reference tables (Option B: Multiple Normalized Tables).
 
-This produces ONE parquet file that is THE source of truth for all drug matching:
-    outputs/drugs/unified_drug_reference.parquet
+This produces MULTIPLE parquet files in outputs/drugs/:
+    unified_generics.parquet  - Main reference: generic × atc × form × route × dose
+    unified_brands.parquet    - Brand → generic mapping
+    unified_synonyms.parquet  - Synonym → canonical generic mapping
+    unified_salts.parquet     - Salt forms per generic
+    unified_mixtures.parquet  - Mixture component mappings
 
-Schema (EXPLODED by generic × drugbank_id × atc_code × form × route):
-- generic_name: str - canonical name for matching
-- drugbank_id: str - DrugBank identifier  
-- atc_code: str - ATC code (single, not pipe-delimited)
-- form: str - dosage form (TABLET, CAPSULE, etc.)
-- route: str - administration route (ORAL, IV, etc.)
-- synonyms: str - pipe-delimited alternate names
-- brands: str - pipe-delimited brand names
-- salt_forms: str - pipe-delimited salt suffixes
-- doses: str - pipe-delimited known doses
-- mixture_components: str - pipe-delimited component DrugBank IDs (for combos)
-- sources: str - pipe-delimited data sources
+Pipeline code should ONLY reference unified_* tables, never raw source files.
 
-Sources loaded:
-- DrugBank generics (drugbank_generics_master.csv)
-- DrugBank products (drugbank_products_export.csv)
-- DrugBank mixtures (drugbank_mixtures_master.csv)
-- DrugBank salts (drugbank_salts_master.csv)
-- DrugBank brands (drugbank_brands_master.csv)
-- WHO ATC (who_atc_*.parquet)
-- FDA brands (fda_drug_*.parquet)
-- PNF lexicon (pnf_lexicon.parquet)
+Sources loaded (internal only, not referenced by pipeline):
+- DrugBank generics, products, mixtures, salts, brands
+- WHO ATC, FDA brands, PNF lexicon
 
 Usage:
-    python -m pipelines.drugs.scripts.build_unified_reference_v2
+    python -m pipelines.drugs.scripts.build_unified_reference
 """
 
 from __future__ import annotations
@@ -49,15 +36,26 @@ INPUTS_DIR = PROJECT_DIR / "inputs" / "drugs"
 OUTPUTS_DIR = PROJECT_DIR / "outputs" / "drugs"
 
 
+def _save_table(df: pd.DataFrame, outputs_dir: Path, name: str, verbose: bool = True):
+    """Save dataframe as parquet + csv."""
+    parquet_path = outputs_dir / f"{name}.parquet"
+    csv_path = outputs_dir / f"{name}.csv"
+    df.to_parquet(parquet_path, index=False)
+    df.to_csv(csv_path, index=False)
+    if verbose:
+        print(f"  ✓ {name}: {len(df):,} rows")
+    return parquet_path
+
+
 def build_unified_reference(
     inputs_dir: Optional[Path] = None,
     outputs_dir: Optional[Path] = None,
     verbose: bool = True,
-) -> Path:
+) -> dict:
     """
-    Build THE unified drug reference dataset.
+    Build multiple normalized unified_* reference tables.
     
-    Returns path to unified_drug_reference.parquet
+    Returns dict of table names to paths.
     """
     inputs_dir = Path(inputs_dir or INPUTS_DIR)
     outputs_dir = Path(outputs_dir or OUTPUTS_DIR)
@@ -65,7 +63,7 @@ def build_unified_reference(
     
     if verbose:
         print("=" * 60)
-        print("Building unified_drug_reference.parquet")
+        print("Building unified_* reference tables")
         print("=" * 60)
     
     # Create in-memory DuckDB
@@ -144,240 +142,201 @@ def build_unified_reference(
             print(f"  - pnf: {count:,} rows")
     
     # =========================================================================
-    # Build unified reference - EXPLODED by generic × drugbank_id × atc × form × route
+    # TABLE 1: unified_generics - Main reference (generic × atc × form × route × dose)
     # =========================================================================
     if verbose:
-        print("\n[Step 2] Building exploded reference...")
+        print("\n[Step 2] Building unified_generics...")
     
-    # Base: DrugBank generics × products (form/route)
-    unified_df = con.execute("""
-        WITH base AS (
-            SELECT DISTINCT
-                g.drugbank_id,
-                COALESCE(g.atc_code, '') as atc_code,
-                UPPER(TRIM(g.canonical_generic_name)) as generic_name,
-                UPPER(TRIM(p.dosage_form)) as form,
-                UPPER(TRIM(p.route)) as route,
-                p.strength as dose
-            FROM drugbank_generics g
-            LEFT JOIN drugbank_products p ON g.drugbank_id = p.drugbank_id
-            WHERE g.drugbank_id IS NOT NULL
-              AND g.canonical_generic_name IS NOT NULL
-              AND g.canonical_generic_name != ''
-        ),
-        -- Aggregate doses per form/route combo
-        with_doses AS (
-            SELECT 
-                drugbank_id,
-                atc_code,
-                generic_name,
-                COALESCE(form, '') as form,
-                COALESCE(route, '') as route,
-                STRING_AGG(DISTINCT dose, '|') FILTER (WHERE dose IS NOT NULL AND dose != '') as doses
-            FROM base
-            GROUP BY drugbank_id, atc_code, generic_name, form, route
-        )
-        SELECT * FROM with_doses
-    """).fetchdf()
-    
-    if verbose:
-        print(f"  - Base rows (DrugBank): {len(unified_df):,}")
-    
-    # =========================================================================
-    # Add synonyms from DrugBank lexemes
-    # =========================================================================
-    if verbose:
-        print("\n[Step 3] Adding synonyms...")
-    
-    synonyms_df = con.execute("""
-        SELECT 
+    # Step 2a: Get unique generics first (no explosion)
+    base_generics = con.execute("""
+        SELECT DISTINCT
             drugbank_id,
-            STRING_AGG(DISTINCT UPPER(TRIM(lexeme)), '|') as synonyms
+            COALESCE(atc_code, '') as atc_code,
+            UPPER(TRIM(canonical_generic_name)) as generic_name
         FROM drugbank_generics
-        WHERE drugbank_id IS NOT NULL AND lexeme IS NOT NULL AND lexeme != ''
-        GROUP BY drugbank_id
+        WHERE drugbank_id IS NOT NULL
+          AND canonical_generic_name IS NOT NULL
+          AND canonical_generic_name != ''
     """).fetchdf()
     
-    unified_df = unified_df.merge(synonyms_df, on='drugbank_id', how='left')
-    unified_df['synonyms'] = unified_df['synonyms'].fillna('')
+    if verbose:
+        print(f"    - Base generics: {len(base_generics):,}")
+    
+    # Step 2b: Get product variants separately (form/route/dose)
+    product_variants = con.execute("""
+        SELECT DISTINCT
+            drugbank_id,
+            UPPER(TRIM(dosage_form)) as form,
+            UPPER(TRIM(route)) as route,
+            UPPER(TRIM(strength)) as dose
+        FROM drugbank_products
+        WHERE drugbank_id IS NOT NULL
+    """).fetchdf()
     
     if verbose:
-        print(f"  - Added synonyms for {len(synonyms_df):,} generics")
+        print(f"    - Product variants: {len(product_variants):,}")
     
-    # =========================================================================
-    # Add brands from DrugBank + FDA (aggregated per drugbank_id)
-    # =========================================================================
-    if verbose:
-        print("\n[Step 4] Adding brands...")
+    # Step 2c: Merge (memory efficient)
+    generics_df = base_generics.merge(product_variants, on='drugbank_id', how='left')
+    generics_df['source'] = 'drugbank'
+    generics_df = generics_df.fillna('')
+    generics_df = generics_df[['generic_name', 'drugbank_id', 'atc_code', 'form', 'route', 'dose', 'source']]
+    generics_df = generics_df.drop_duplicates()
     
+    # Add WHO-only entries
     try:
-        # DrugBank brands - aggregate per drugbank_id
-        db_brands_agg = con.execute("""
-            SELECT 
-                drugbank_id,
-                STRING_AGG(DISTINCT UPPER(TRIM(brand_name)), '|') as brands
-            FROM drugbank_brands
-            WHERE drugbank_id IS NOT NULL AND brand_name IS NOT NULL AND brand_name != ''
-            GROUP BY drugbank_id
-        """).fetchdf()
-        
-        unified_df = unified_df.merge(db_brands_agg, on='drugbank_id', how='left')
-        unified_df['brands'] = unified_df['brands'].fillna('')
-        
-        if verbose:
-            print(f"  - Brands for {len(db_brands_agg):,} generics")
-    except Exception as e:
-        if verbose:
-            print(f"  - Warning: Could not add brands: {e}")
-        unified_df['brands'] = ''
-    
-    # =========================================================================
-    # Add salt forms from drugbank_salts
-    # =========================================================================
-    if verbose:
-        print("\n[Step 5] Adding salt forms...")
-    
-    try:
-        salts_df = con.execute("""
-            SELECT 
-                parent_drugbank_id as drugbank_id,
-                STRING_AGG(DISTINCT UPPER(TRIM(salt_name_normalized)), '|') as salt_forms
-            FROM drugbank_salts
-            WHERE parent_drugbank_id IS NOT NULL 
-              AND salt_name_normalized IS NOT NULL 
-              AND salt_name_normalized != ''
-            GROUP BY parent_drugbank_id
-        """).fetchdf()
-        
-        unified_df = unified_df.merge(salts_df, on='drugbank_id', how='left')
-        unified_df['salt_forms'] = unified_df['salt_forms'].fillna('')
-        
-        if verbose:
-            print(f"  - Salt forms for {len(salts_df):,} generics")
-    except Exception as e:
-        if verbose:
-            print(f"  - Warning: Could not add salt forms: {e}")
-        unified_df['salt_forms'] = ''
-    
-    # =========================================================================
-    # Add mixture components from drugbank_mixtures
-    # =========================================================================
-    if verbose:
-        print("\n[Step 6] Adding mixture components...")
-    
-    try:
-        mixtures_df = con.execute("""
-            SELECT 
-                mixture_drugbank_id as drugbank_id,
-                STRING_AGG(DISTINCT component_drugbank_ids, '|') as mixture_components
-            FROM drugbank_mixtures
-            WHERE mixture_drugbank_id IS NOT NULL
-            GROUP BY mixture_drugbank_id
-        """).fetchdf()
-        
-        unified_df = unified_df.merge(mixtures_df, on='drugbank_id', how='left')
-        unified_df['mixture_components'] = unified_df['mixture_components'].fillna('')
-        
-        if verbose:
-            print(f"  - Mixture info for {len(mixtures_df):,} generics")
-    except Exception as e:
-        if verbose:
-            print(f"  - Warning: Could not add mixtures: {e}")
-        unified_df['mixture_components'] = ''
-    
-    # =========================================================================
-    # Add WHO ATC entries not in DrugBank
-    # =========================================================================
-    if verbose:
-        print("\n[Step 7] Adding WHO-only entries...")
-    
-    try:
-        existing_generics = set(unified_df['generic_name'].str.upper().unique())
-        
+        existing_generics = set(generics_df['generic_name'].str.upper().unique())
         who_df = con.execute("""
             SELECT DISTINCT
+                UPPER(TRIM(atc_name)) as generic_name,
                 NULL as drugbank_id,
                 atc_code,
-                UPPER(TRIM(atc_name)) as generic_name,
                 '' as form,
                 '' as route,
-                '' as doses,
-                '' as synonyms,
-                '' as brands,
-                '' as salt_forms,
-                '' as mixture_components
+                '' as dose,
+                'who' as source
             FROM who_atc
             WHERE atc_name IS NOT NULL AND atc_name != ''
         """).fetchdf()
-        
         who_new = who_df[~who_df['generic_name'].isin(existing_generics)]
-        
-        if len(who_new) > 0:
-            unified_df = pd.concat([unified_df, who_new], ignore_index=True)
-        
+        generics_df = pd.concat([generics_df, who_new], ignore_index=True)
+    except Exception:
+        pass
+    
+    generics_df = generics_df.fillna('').drop_duplicates()
+    
+    # =========================================================================
+    # TABLE 2: unified_brands - Brand → generic mapping (normalized, one row per brand)
+    # =========================================================================
+    if verbose:
+        print("\n[Step 3] Building unified_brands...")
+    
+    # FDA brands FIRST (Philippines context - FDA PH brands more relevant)
+    brands_list = []
+    
+    try:
+        fda_brands_df = con.execute("""
+            SELECT DISTINCT
+                UPPER(TRIM(brand_name)) as brand_name,
+                UPPER(TRIM(generic_name)) as generic_name,
+                NULL as drugbank_id,
+                'fda' as source
+            FROM fda_brands
+            WHERE brand_name IS NOT NULL AND brand_name != ''
+              AND generic_name IS NOT NULL AND generic_name != ''
+        """).fetchdf()
+        brands_list.append(fda_brands_df)
         if verbose:
-            print(f"  - Added {len(who_new):,} WHO-only entries")
-    except Exception as e:
-        if verbose:
-            print(f"  - Warning: Could not add WHO entries: {e}")
+            print(f"    - FDA brands: {len(fda_brands_df):,}")
+    except Exception:
+        pass
+    
+    # DrugBank brands second (simpler query to avoid swap)
+    drugbank_brands_df = con.execute("""
+        SELECT DISTINCT
+            UPPER(TRIM(brand_name)) as brand_name,
+            UPPER(TRIM(canonical_generic_name)) as generic_name,
+            drugbank_id,
+            'drugbank' as source
+        FROM drugbank_brands
+        WHERE brand_name IS NOT NULL AND brand_name != ''
+          AND canonical_generic_name IS NOT NULL AND canonical_generic_name != ''
+    """).fetchdf()
+    brands_list.append(drugbank_brands_df)
+    if verbose:
+        print(f"    - DrugBank brands: {len(drugbank_brands_df):,}")
+    
+    brands_df = pd.concat(brands_list, ignore_index=True)
+    
+    # Keep first occurrence (FDA wins due to order)
+    brands_df = brands_df.fillna('').drop_duplicates(subset=['brand_name'], keep='first')
     
     # =========================================================================
-    # Final cleanup
+    # TABLE 3: unified_synonyms - Synonym → canonical generic mapping
     # =========================================================================
     if verbose:
-        print("\n[Step 8] Final cleanup...")
+        print("\n[Step 4] Building unified_synonyms...")
     
-    # Add sources column
-    def get_sources(row):
-        sources = []
-        if row.get('drugbank_id'):
-            sources.append('drugbank')
-        if not row.get('drugbank_id') and row.get('atc_code'):
-            sources.append('who')
-        return '|'.join(sources) if sources else 'drugbank'
+    synonyms_df = con.execute("""
+        SELECT DISTINCT
+            UPPER(TRIM(lexeme)) as synonym,
+            UPPER(TRIM(canonical_generic_name)) as generic_name,
+            drugbank_id
+        FROM drugbank_generics
+        WHERE lexeme IS NOT NULL AND lexeme != ''
+          AND canonical_generic_name IS NOT NULL AND canonical_generic_name != ''
+          AND UPPER(TRIM(lexeme)) != UPPER(TRIM(canonical_generic_name))
+    """).fetchdf()
     
-    unified_df['sources'] = unified_df.apply(get_sources, axis=1)
-    
-    # Ensure all columns exist and are in order
-    final_columns = [
-        'generic_name', 'drugbank_id', 'atc_code', 'form', 'route',
-        'synonyms', 'brands', 'salt_forms', 'doses', 'mixture_components', 'sources'
-    ]
-    
-    for col in final_columns:
-        if col not in unified_df.columns:
-            unified_df[col] = ''
-    
-    unified_df = unified_df[final_columns]
-    
-    # Fill NaN with empty strings
-    unified_df = unified_df.fillna('')
-    
-    # Remove completely empty rows
-    unified_df = unified_df[unified_df['generic_name'] != '']
-    
-    # Deduplicate
-    unified_df = unified_df.drop_duplicates()
-    
-    if verbose:
-        print(f"  - Final rows: {len(unified_df):,}")
+    synonyms_df = synonyms_df.fillna('').drop_duplicates(subset=['synonym'], keep='first')
     
     # =========================================================================
-    # Save
+    # TABLE 4: unified_salts - Salt forms per generic
     # =========================================================================
-    output_path = outputs_dir / "unified_drug_reference.parquet"
-    unified_df.to_parquet(output_path, index=False)
-    unified_df.to_csv(outputs_dir / "unified_drug_reference.csv", index=False)
+    if verbose:
+        print("\n[Step 5] Building unified_salts...")
+    
+    salts_df = con.execute("""
+        SELECT DISTINCT
+            UPPER(TRIM(s.salt_name_normalized)) as salt_form,
+            s.parent_drugbank_id as drugbank_id,
+            UPPER(TRIM(g.canonical_generic_name)) as generic_name
+        FROM drugbank_salts s
+        LEFT JOIN drugbank_generics g ON s.parent_drugbank_id = g.drugbank_id
+        WHERE s.salt_name_normalized IS NOT NULL AND s.salt_name_normalized != ''
+          AND s.parent_drugbank_id IS NOT NULL
+    """).fetchdf()
+    
+    salts_df = salts_df.fillna('').drop_duplicates()
+    
+    # =========================================================================
+    # TABLE 5: unified_mixtures - Mixture component mappings
+    # =========================================================================
+    if verbose:
+        print("\n[Step 6] Building unified_mixtures...")
+    
+    mixtures_df = con.execute("""
+        SELECT DISTINCT
+            mixture_drugbank_id as drugbank_id,
+            UPPER(TRIM(mixture_name)) as mixture_name,
+            component_drugbank_ids,
+            UPPER(TRIM(ingredient_components)) as component_generics
+        FROM drugbank_mixtures
+        WHERE mixture_drugbank_id IS NOT NULL
+    """).fetchdf()
+    
+    mixtures_df = mixtures_df.fillna('').drop_duplicates()
+    
+    # =========================================================================
+    # Save all tables
+    # =========================================================================
+    if verbose:
+        print("\n[Step 7] Saving tables...")
+    
+    output_paths = {}
+    output_paths['unified_generics'] = _save_table(generics_df, outputs_dir, 'unified_generics', verbose)
+    output_paths['unified_brands'] = _save_table(brands_df, outputs_dir, 'unified_brands', verbose)
+    output_paths['unified_synonyms'] = _save_table(synonyms_df, outputs_dir, 'unified_synonyms', verbose)
+    output_paths['unified_salts'] = _save_table(salts_df, outputs_dir, 'unified_salts', verbose)
+    output_paths['unified_mixtures'] = _save_table(mixtures_df, outputs_dir, 'unified_mixtures', verbose)
+    
+    # Also save legacy unified_drug_reference.parquet for backward compatibility
+    # (this will be removed once tagger is updated)
+    legacy_df = generics_df.copy()
+    legacy_df.to_parquet(outputs_dir / "unified_drug_reference.parquet", index=False)
     
     if verbose:
-        print(f"\n✓ Saved: {output_path}")
-        print(f"  Columns: {unified_df.columns.tolist()}")
-        print(f"  Unique generics: {unified_df['generic_name'].nunique():,}")
-        print(f"  With DrugBank ID: {(unified_df['drugbank_id'] != '').sum():,}")
-        print(f"  With ATC code: {(unified_df['atc_code'] != '').sum():,}")
+        print("\n" + "=" * 60)
+        print("Summary:")
+        print(f"  unified_generics: {len(generics_df):,} rows ({generics_df['generic_name'].nunique():,} unique generics)")
+        print(f"  unified_brands: {len(brands_df):,} brand→generic mappings")
+        print(f"  unified_synonyms: {len(synonyms_df):,} synonym→generic mappings")
+        print(f"  unified_salts: {len(salts_df):,} salt entries")
+        print(f"  unified_mixtures: {len(mixtures_df):,} mixture entries")
+        print("=" * 60)
     
     con.close()
-    return output_path
+    return output_paths
 
 
 if __name__ == "__main__":

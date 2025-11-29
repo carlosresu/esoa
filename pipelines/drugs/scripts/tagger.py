@@ -63,70 +63,79 @@ class UnifiedTagger:
             print(f"[UnifiedTagger] {msg}")
     
     def load(self) -> None:
-        """Load THE unified reference dataset into DuckDB."""
+        """Load unified_* reference tables into DuckDB."""
         if self._loaded:
             return
         
-        self._log("Loading unified_drug_reference.parquet...")
+        self._log("Loading unified_* tables...")
         
         # Create in-memory DuckDB
         self.con = duckdb.connect(":memory:")
         
-        # Load THE unified reference (the ONE source of truth)
-        unified_path = self.outputs_dir / "unified_drug_reference.parquet"
-        if not unified_path.exists():
-            raise FileNotFoundError(f"Unified reference not found: {unified_path}")
-        
-        self.con.execute(f"CREATE TABLE unified AS SELECT * FROM read_parquet('{unified_path}')")
+        # Load unified_generics (main reference)
+        generics_path = self.outputs_dir / "unified_generics.parquet"
+        if not generics_path.exists():
+            raise FileNotFoundError(f"unified_generics.parquet not found: {generics_path}")
+        self.con.execute(f"CREATE TABLE unified AS SELECT * FROM read_parquet('{generics_path}')")
         count = self.con.execute("SELECT COUNT(*) FROM unified").fetchone()[0]
-        self._log(f"  - unified: {count:,} rows")
-        
-        # Get unique generics count
         unique_generics = self.con.execute("SELECT COUNT(DISTINCT generic_name) FROM unified").fetchone()[0]
-        self._log(f"  - unique generics: {unique_generics:,}")
+        self._log(f"  - unified_generics: {count:,} rows ({unique_generics:,} unique)")
         
-        # Build synonyms dict from synonyms column
-        from .unified_constants import SPELLING_SYNONYMS
-        self.synonyms = dict(SPELLING_SYNONYMS)  # Start with spelling corrections
+        # Load unified_brands
+        brands_path = self.outputs_dir / "unified_brands.parquet"
+        if brands_path.exists():
+            self.con.execute(f"CREATE TABLE brands AS SELECT * FROM read_parquet('{brands_path}')")
+            brand_count = self.con.execute("SELECT COUNT(*) FROM brands").fetchone()[0]
+            self._log(f"  - unified_brands: {brand_count:,} rows")
         
-        synonym_rows = self.con.execute("""
-            SELECT DISTINCT generic_name, synonyms 
-            FROM unified 
-            WHERE synonyms IS NOT NULL AND synonyms != ''
-        """).fetchall()
+        # Load unified_synonyms
+        synonyms_path = self.outputs_dir / "unified_synonyms.parquet"
+        if synonyms_path.exists():
+            self.con.execute(f"CREATE TABLE synonyms AS SELECT * FROM read_parquet('{synonyms_path}')")
+            syn_count = self.con.execute("SELECT COUNT(*) FROM synonyms").fetchone()[0]
+            self._log(f"  - unified_synonyms: {syn_count:,} rows")
         
-        for generic_name, synonyms_str in synonym_rows:
-            for syn in synonyms_str.split('|'):
-                syn = syn.strip().upper()
-                if syn and syn != generic_name.upper():
-                    self.synonyms[syn] = generic_name.upper()
-        self._log(f"  - synonyms: {len(self.synonyms):,} entries")
+        # Build synonyms dict from unified_synonyms table + spelling corrections + regional
+        from .unified_constants import SPELLING_SYNONYMS, REGIONAL_TO_US
+        self.synonyms = dict(SPELLING_SYNONYMS)
         
-        # Build brand → generic map from unified dataset's brands column
+        # Add regional→US mappings (PARACETAMOL → ACETAMINOPHEN for lookups)
+        for regional, us in REGIONAL_TO_US.items():
+            self.synonyms[regional] = us
+        
+        try:
+            synonym_rows = self.con.execute("""
+                SELECT synonym, generic_name FROM synonyms
+            """).fetchall()
+            for syn, generic_name in synonym_rows:
+                if syn and generic_name:
+                    self.synonyms[syn.upper()] = generic_name.upper()
+        except Exception:
+            pass
+        self._log(f"  - synonym mappings: {len(self.synonyms):,}")
+        
+        # Build brand → generic map from unified_brands table
         self.brand_map = {}
-        
-        # Get all generic names to exclude from brand map
         all_generics = set(row[0].upper() for row in self.con.execute(
             "SELECT DISTINCT generic_name FROM unified"
         ).fetchall())
         
-        # Get brands with row count per generic (prefer generic with more rows)
-        brand_rows = self.con.execute("""
-            SELECT generic_name, brands, COUNT(*) as row_count
-            FROM unified 
-            WHERE brands IS NOT NULL AND brands != ''
-            GROUP BY generic_name, brands
-            ORDER BY row_count DESC
-        """).fetchall()
-        
-        for generic_name, brands_str, row_count in brand_rows:
-            for brand in brands_str.split('|'):
-                brand = brand.strip().upper()
-                # Don't add if brand is actually a generic name
-                if brand and brand not in all_generics:
-                    if brand not in self.brand_map:
-                        self.brand_map[brand] = generic_name.upper()
-        self._log(f"  - brands: {len(self.brand_map):,} entries")
+        try:
+            # Count rows per generic to prefer more common associations
+            brand_rows = self.con.execute("""
+                SELECT brand_name, generic_name, COUNT(*) as cnt
+                FROM brands
+                GROUP BY brand_name, generic_name
+                ORDER BY cnt DESC
+            """).fetchall()
+            for brand, generic, _ in brand_rows:
+                if brand and generic:
+                    brand_upper = brand.upper()
+                    if brand_upper not in all_generics and brand_upper not in self.brand_map:
+                        self.brand_map[brand_upper] = generic.upper()
+        except Exception:
+            pass
+        self._log(f"  - brand mappings: {len(self.brand_map):,}")
         
         # Cache generics list for fuzzy matching
         self.cached_generics_list = [row[0] for row in self.con.execute(

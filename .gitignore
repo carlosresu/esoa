@@ -225,3 +225,6 @@ prompt.txt
 .Rhistory
 parallel_config.txt
 *.7z
+# Temporary files
+.tmp/
+*.tmp

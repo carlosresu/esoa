@@ -737,13 +737,18 @@ REGIONAL_CANONICAL: Dict[str, str] = {
     "EPINEPHRINE": "ADRENALINE",
     "NOREPINEPHRINE": "NORADRENALINE",
     "MEPERIDINE": "PETHIDINE",
-    "ACETAZOLAMIDE": "ACETAZOLAMIDE",  # Same in both
-    "FUROSEMIDE": "FUROSEMIDE",  # Also FRUSEMIDE in some countries
 }
+
+# Reverse mapping: PH/WHO name → US name (for lookups)
+REGIONAL_TO_US: Dict[str, str] = {v: k for k, v in REGIONAL_CANONICAL.items()}
 
 def get_regional_canonical(name: str) -> str:
     """Get the regional (PH/WHO) canonical name for a drug."""
     return REGIONAL_CANONICAL.get(name.upper(), name.upper())
+
+def get_us_canonical(name: str) -> str:
+    """Get the US canonical name for a drug (for database lookups)."""
+    return REGIONAL_TO_US.get(name.upper(), name.upper())
 
 
 # ============================================================================
@@ -813,7 +818,8 @@ __all__ = [
     
     # Synonyms, multiword generics, regional names
     "SPELLING_SYNONYMS", "MULTIWORD_GENERICS",
-    "REGIONAL_CANONICAL", "get_regional_canonical",
+    "REGIONAL_CANONICAL", "REGIONAL_TO_US",
+    "get_regional_canonical", "get_us_canonical",
     
     # Helper functions
     "get_canonical_form", "get_canonical_route",

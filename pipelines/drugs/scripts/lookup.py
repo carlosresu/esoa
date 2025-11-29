@@ -90,7 +90,7 @@ def lookup_generic_exact(
 ) -> List[Dict[str, Any]]:
     """Exact match lookup for a generic token in unified table."""
     query = """
-        SELECT DISTINCT generic_name, drugbank_id, atc_code, sources as source,
+        SELECT DISTINCT generic_name, drugbank_id, atc_code, source,
                generic_name as reference_text
         FROM unified
         WHERE UPPER(generic_name) = ?
@@ -109,7 +109,7 @@ def lookup_generic_prefix(
 ) -> List[Dict[str, Any]]:
     """Prefix match lookup for a generic token in unified table."""
     query = """
-        SELECT DISTINCT generic_name, drugbank_id, atc_code, sources as source,
+        SELECT DISTINCT generic_name, drugbank_id, atc_code, source,
                generic_name as reference_text
         FROM unified
         WHERE UPPER(generic_name) LIKE ?
@@ -130,7 +130,7 @@ def lookup_generic_contains(
 ) -> List[Dict[str, Any]]:
     """Contains match lookup for a generic token in unified table."""
     query = """
-        SELECT DISTINCT generic_name, drugbank_id, atc_code, sources as source,
+        SELECT DISTINCT generic_name, drugbank_id, atc_code, source,
                generic_name as reference_text
         FROM unified
         WHERE UPPER(generic_name) LIKE ?
