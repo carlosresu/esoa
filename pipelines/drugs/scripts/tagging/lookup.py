@@ -21,74 +21,6 @@ INPUTS_DIR = PROJECT_DIR / "inputs" / "drugs"
 OUTPUTS_DIR = PROJECT_DIR / "outputs" / "drugs"
 
 
-def load_generics_lookup(
-    outputs_dir: Optional[Path] = None,
-    con: Optional[duckdb.DuckDBPyConnection] = None,
-) -> pd.DataFrame:
-    """Load generics lookup table."""
-    if outputs_dir is None:
-        outputs_dir = Path(os.environ.get("PIPELINE_OUTPUTS_DIR", OUTPUTS_DIR))
-    
-    path = outputs_dir / "generics_lookup.parquet"
-    if not path.exists():
-        path = outputs_dir / "generics_lookup.csv"
-    
-    if path.suffix == ".parquet":
-        return pd.read_parquet(path)
-    return pd.read_csv(path)
-
-
-def load_brands_lookup(
-    outputs_dir: Optional[Path] = None,
-) -> pd.DataFrame:
-    """Load brands lookup table."""
-    if outputs_dir is None:
-        outputs_dir = Path(os.environ.get("PIPELINE_OUTPUTS_DIR", OUTPUTS_DIR))
-    
-    path = outputs_dir / "brands_lookup.parquet"
-    if not path.exists():
-        path = outputs_dir / "brands_lookup.csv"
-    
-    if not path.exists():
-        return pd.DataFrame(columns=["brand_name", "generic_name", "drugbank_id", "source"])
-    
-    if path.suffix == ".parquet":
-        return pd.read_parquet(path)
-    return pd.read_csv(path)
-
-
-def build_brand_to_generic_map(
-    brands_df: pd.DataFrame,
-    generics_df: Optional[pd.DataFrame] = None,
-) -> Dict[str, str]:
-    """
-    Build a dictionary mapping brand names to generic names.
-    
-    Used to swap brand names to generics before matching.
-    Excludes entries where the brand_name is actually a known generic.
-    """
-    # Build set of known generic names to exclude
-    known_generics: Set[str] = set()
-    if generics_df is not None and "generic_name" in generics_df.columns:
-        known_generics = set(generics_df["generic_name"].str.upper().dropna())
-    
-    brand_map: Dict[str, str] = {}
-    
-    for _, row in brands_df.iterrows():
-        brand = str(row.get("brand_name", "")).upper().strip()
-        generic = str(row.get("generic_name", "")).upper().strip()
-        
-        if brand and generic and brand != generic:
-            # Skip if brand_name is actually a known generic (data error)
-            if brand in known_generics:
-                continue
-            # Don't overwrite existing entries (first wins)
-            if brand not in brand_map:
-                brand_map[brand] = generic
-    
-    return brand_map
-
-
 def swap_brand_to_generic(
     token: str,
     brand_map: Dict[str, str],
@@ -105,36 +37,6 @@ def swap_brand_to_generic(
         return brand_map[token_upper], True
     
     return token_upper, False
-
-
-def load_synonyms(
-    generics_df: pd.DataFrame,
-) -> Dict[str, str]:
-    """
-    Load synonyms from generics lookup.
-    
-    Synonyms are rows where generic_name != canonical_name.
-    """
-    from .unified_constants import SPELLING_SYNONYMS
-    
-    synonyms: Dict[str, str] = {}
-    
-    # Load spelling synonyms from unified_constants.py
-    # NOTE: Regional name variants (ADRENALINE->EPINEPHRINE, PARACETAMOL->ACETAMINOPHEN, etc.)
-    # should be in the unified reference dataset (generics_master.parquet), not here.
-    synonyms.update(SPELLING_SYNONYMS)
-    
-    # Load from generics lookup
-    if "canonical_name" in generics_df.columns:
-        synonym_rows = generics_df[
-            generics_df["generic_name"].str.upper() != generics_df["canonical_name"].str.upper()
-        ]
-        synonyms.update(dict(zip(
-            synonym_rows["generic_name"].str.upper(),
-            synonym_rows["canonical_name"].str.upper()
-        )))
-    
-    return synonyms
 
 
 def _singularize(word: str) -> str:
