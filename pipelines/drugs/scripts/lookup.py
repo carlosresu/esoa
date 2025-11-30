@@ -97,15 +97,15 @@ def lookup_generic_exact(
     token: str,
     con: duckdb.DuckDBPyConnection,
 ) -> List[Dict[str, Any]]:
-    """Exact match lookup for a generic token in unified table."""
+    """Exact match lookup for a generic token using unified + atc tables."""
     query = """
-        SELECT DISTINCT generic_name, drugbank_id, atc_code, source,
-               generic_name as reference_text
-        FROM unified
-        WHERE UPPER(generic_name) = ?
+        SELECT DISTINCT u.generic_name, u.drugbank_id, a.atc_code, u.source,
+               u.generic_name as reference_text
+        FROM unified u
+        LEFT JOIN atc a ON u.generic_name = a.generic_name
+        WHERE UPPER(u.generic_name) = ?
     """
     try:
-        # Use fetchall() instead of fetchdf().to_dict() for speed
         rows = con.execute(query, [token.upper()]).fetchall()
         cols = ["generic_name", "drugbank_id", "atc_code", "source", "reference_text"]
         return [dict(zip(cols, row)) for row in rows]
@@ -118,13 +118,14 @@ def lookup_generic_prefix(
     con: duckdb.DuckDBPyConnection,
     limit: int = 5,
 ) -> List[Dict[str, Any]]:
-    """Prefix match lookup for a generic token in unified table."""
+    """Prefix match lookup for a generic token using unified + atc tables."""
     query = """
-        SELECT DISTINCT generic_name, drugbank_id, atc_code, source,
-               generic_name as reference_text
-        FROM unified
-        WHERE UPPER(generic_name) LIKE ?
-        ORDER BY LENGTH(generic_name) ASC
+        SELECT DISTINCT u.generic_name, u.drugbank_id, a.atc_code, u.source,
+               u.generic_name as reference_text
+        FROM unified u
+        LEFT JOIN atc a ON u.generic_name = a.generic_name
+        WHERE UPPER(u.generic_name) LIKE ?
+        ORDER BY LENGTH(u.generic_name) ASC
         LIMIT ?
     """
     try:
@@ -140,13 +141,15 @@ def lookup_generic_contains(
     con: duckdb.DuckDBPyConnection,
     limit: int = 3,
 ) -> List[Dict[str, Any]]:
-    """Contains match lookup for a generic token in unified table."""
+    """Contains match lookup for a generic token using unified + atc tables."""
+    # Join unified_generics with unified_atc to get ATC codes
     query = """
-        SELECT DISTINCT generic_name, drugbank_id, atc_code, source,
-               generic_name as reference_text
-        FROM unified
-        WHERE UPPER(generic_name) LIKE ?
-        ORDER BY LENGTH(generic_name) ASC
+        SELECT DISTINCT u.generic_name, u.drugbank_id, a.atc_code, u.source,
+               u.generic_name as reference_text
+        FROM unified u
+        LEFT JOIN atc a ON u.generic_name = a.generic_name
+        WHERE UPPER(u.generic_name) LIKE ?
+        ORDER BY LENGTH(u.generic_name) ASC
         LIMIT ?
     """
     try:
@@ -196,10 +199,11 @@ def lookup_generic_fuzzy(
     
     placeholders = ",".join(["?" for _ in match_names])
     query = f"""
-        SELECT DISTINCT generic_name, drugbank_id, atc_code, source,
-               generic_name as reference_text
-        FROM unified
-        WHERE generic_name IN ({placeholders})
+        SELECT DISTINCT u.generic_name, u.drugbank_id, a.atc_code, u.source,
+               u.generic_name as reference_text
+        FROM unified u
+        LEFT JOIN atc a ON u.generic_name = a.generic_name
+        WHERE u.generic_name IN ({placeholders})
     """
     try:
         rows = con.execute(query, match_names).fetchall()

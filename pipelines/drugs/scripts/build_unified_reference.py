@@ -142,58 +142,30 @@ def build_unified_reference(
             print(f"  - pnf: {count:,} rows")
     
     # =========================================================================
-    # TABLE 1: unified_generics - Main reference (generic × atc × form × route × dose)
+    # TABLE 1: unified_generics - Lean table for generic detection
     # =========================================================================
     if verbose:
-        print("\n[Step 2] Building unified_generics...")
+        print("\n[Step 2] Building unified_generics (lean, for detection)...")
     
-    # Step 2a: Get unique generics first (no explosion)
-    base_generics = con.execute("""
+    # Get unique generics (one row per generic_name)
+    generics_df = con.execute("""
         SELECT DISTINCT
+            UPPER(TRIM(canonical_generic_name)) as generic_name,
             drugbank_id,
-            COALESCE(atc_code, '') as atc_code,
-            UPPER(TRIM(canonical_generic_name)) as generic_name
+            'drugbank' as source
         FROM drugbank_generics
         WHERE drugbank_id IS NOT NULL
           AND canonical_generic_name IS NOT NULL
           AND canonical_generic_name != ''
     """).fetchdf()
     
-    if verbose:
-        print(f"    - Base generics: {len(base_generics):,}")
-    
-    # Step 2b: Get product variants separately (form/route/dose)
-    product_variants = con.execute("""
-        SELECT DISTINCT
-            drugbank_id,
-            UPPER(TRIM(dosage_form)) as form,
-            UPPER(TRIM(route)) as route,
-            UPPER(TRIM(strength)) as dose
-        FROM drugbank_products
-        WHERE drugbank_id IS NOT NULL
-    """).fetchdf()
-    
-    if verbose:
-        print(f"    - Product variants: {len(product_variants):,}")
-    
-    # Step 2c: Merge (memory efficient)
-    generics_df = base_generics.merge(product_variants, on='drugbank_id', how='left')
-    generics_df['source'] = 'drugbank'
-    generics_df = generics_df.fillna('')
-    generics_df = generics_df[['generic_name', 'drugbank_id', 'atc_code', 'form', 'route', 'dose', 'source']]
-    generics_df = generics_df.drop_duplicates()
-    
-    # Add WHO-only entries
+    # Add WHO-only entries (generics not in DrugBank)
     try:
         existing_generics = set(generics_df['generic_name'].str.upper().unique())
         who_df = con.execute("""
             SELECT DISTINCT
                 UPPER(TRIM(atc_name)) as generic_name,
                 NULL as drugbank_id,
-                atc_code,
-                '' as form,
-                '' as route,
-                '' as dose,
                 'who' as source
             FROM who_atc
             WHERE atc_name IS NOT NULL AND atc_name != ''
@@ -205,8 +177,54 @@ def build_unified_reference(
     
     generics_df = generics_df.fillna('').drop_duplicates()
     
-    # Note: Mixture combinations are NOT added to unified_generics to keep it fast.
-    # Instead, the tagger queries unified_mixtures on-demand when multiple generics detected.
+    if verbose:
+        print(f"    - {len(generics_df):,} unique generics")
+    
+    # =========================================================================
+    # TABLE 1b: unified_atc - ATC selection with form/route/dose for drug code matching
+    # =========================================================================
+    if verbose:
+        print("\n[Step 2b] Building unified_atc (for ATC selection)...")
+    
+    # Get all ATC codes with their form/route/dose variants, aggregated
+    atc_variants = con.execute("""
+        SELECT 
+            g.drugbank_id,
+            UPPER(TRIM(g.canonical_generic_name)) as generic_name,
+            COALESCE(g.atc_code, '') as atc_code,
+            STRING_AGG(DISTINCT UPPER(TRIM(p.dosage_form)), '|') as forms,
+            STRING_AGG(DISTINCT UPPER(TRIM(p.route)), '|') as routes,
+            STRING_AGG(DISTINCT UPPER(TRIM(p.strength)), '|') as doses
+        FROM drugbank_generics g
+        LEFT JOIN drugbank_products p ON g.drugbank_id = p.drugbank_id
+        WHERE g.drugbank_id IS NOT NULL
+          AND g.canonical_generic_name IS NOT NULL
+          AND g.canonical_generic_name != ''
+        GROUP BY g.drugbank_id, g.canonical_generic_name, g.atc_code
+    """).fetchdf()
+    
+    # Add WHO ATC codes (for generics without DrugBank)
+    try:
+        who_atc_df = con.execute("""
+            SELECT DISTINCT
+                NULL as drugbank_id,
+                UPPER(TRIM(atc_name)) as generic_name,
+                atc_code,
+                '' as forms,
+                '' as routes,
+                '' as doses
+            FROM who_atc
+            WHERE atc_name IS NOT NULL AND atc_name != ''
+              AND atc_code IS NOT NULL AND atc_code != ''
+        """).fetchdf()
+        atc_variants = pd.concat([atc_variants, who_atc_df], ignore_index=True)
+    except Exception:
+        pass
+    
+    atc_df = atc_variants.fillna('').drop_duplicates()
+    
+    if verbose:
+        print(f"    - {len(atc_df):,} ATC variants")
     
     # =========================================================================
     # TABLE 2: unified_brands - Brand → generic mapping (normalized, one row per brand)
@@ -306,9 +324,26 @@ def build_unified_reference(
             UPPER(TRIM(ingredient_components)) as component_generics
         FROM drugbank_mixtures
         WHERE mixture_drugbank_id IS NOT NULL
+          AND ingredient_components IS NOT NULL
+          AND ingredient_components != ''
     """).fetchdf()
     
     mixtures_df = mixtures_df.fillna('').drop_duplicates()
+    
+    # Add normalized component_key for fast lookup (sorted, pipe-separated)
+    def make_component_key(components_str):
+        if not components_str:
+            return ""
+        parts = [p.strip().upper() for p in components_str.split(';') if p.strip()]
+        return '|'.join(sorted(parts))
+    
+    mixtures_df['component_key'] = mixtures_df['component_generics'].apply(make_component_key)
+    mixtures_df['component_count'] = mixtures_df['component_generics'].apply(
+        lambda x: len([p for p in x.split(';') if p.strip()]) if x else 0
+    )
+    
+    # Deduplicate by component_key (keep first occurrence)
+    mixtures_df = mixtures_df.drop_duplicates(subset=['component_key'], keep='first')
     
     # =========================================================================
     # Save all tables
@@ -318,20 +353,17 @@ def build_unified_reference(
     
     output_paths = {}
     output_paths['unified_generics'] = _save_table(generics_df, outputs_dir, 'unified_generics', verbose)
+    output_paths['unified_atc'] = _save_table(atc_df, outputs_dir, 'unified_atc', verbose)
     output_paths['unified_brands'] = _save_table(brands_df, outputs_dir, 'unified_brands', verbose)
     output_paths['unified_synonyms'] = _save_table(synonyms_df, outputs_dir, 'unified_synonyms', verbose)
     output_paths['unified_salts'] = _save_table(salts_df, outputs_dir, 'unified_salts', verbose)
     output_paths['unified_mixtures'] = _save_table(mixtures_df, outputs_dir, 'unified_mixtures', verbose)
     
-    # Also save legacy unified_drug_reference.parquet for backward compatibility
-    # (this will be removed once tagger is updated)
-    legacy_df = generics_df.copy()
-    legacy_df.to_parquet(outputs_dir / "unified_drug_reference.parquet", index=False)
-    
     if verbose:
         print("\n" + "=" * 60)
         print("Summary:")
-        print(f"  unified_generics: {len(generics_df):,} rows ({generics_df['generic_name'].nunique():,} unique generics)")
+        print(f"  unified_generics: {len(generics_df):,} (lean, for detection)")
+        print(f"  unified_atc: {len(atc_df):,} (for ATC selection with form/route/dose)")
         print(f"  unified_brands: {len(brands_df):,} brand→generic mappings")
         print(f"  unified_synonyms: {len(synonyms_df):,} synonym→generic mappings")
         print(f"  unified_salts: {len(salts_df):,} salt entries")
