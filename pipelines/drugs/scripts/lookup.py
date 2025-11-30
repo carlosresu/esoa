@@ -327,9 +327,13 @@ def build_combination_keys(
         g_clean = g_upper.rstrip("+").strip()
         if not g_clean:
             continue
-        # Split brand-swapped values that contain + (e.g., "SALBUTAMOL SULFATE + IPRATROPIUM BROMIDE")
-        if " + " in g_clean:
-            for part in g_clean.split(" + "):
+        # Split values that contain + (with or without spaces)
+        # e.g., "SALBUTAMOL SULFATE + IPRATROPIUM BROMIDE" or "IBUPROFEN+PARACETAMOL"
+        if "+" in g_clean:
+            # Split on + with optional surrounding spaces
+            import re
+            parts = re.split(r'\s*\+\s*', g_clean)
+            for part in parts:
                 part = part.strip()
                 if part and part not in junk:
                     clean.append(part)
