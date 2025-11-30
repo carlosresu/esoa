@@ -270,8 +270,6 @@ class UnifiedTagger:
         if deduplicate:
             unique_texts = df[[text_column]].drop_duplicates()
             total_rows = len(unique_texts)
-            if show_progress and total_rows < original_rows:
-                self._log(f"Deduplicated: {original_rows:,} → {total_rows:,} unique texts")
             texts = unique_texts[text_column].fillna("").astype(str).tolist()
             ids = list(range(total_rows))
         else:
@@ -305,7 +303,7 @@ class UnifiedTagger:
                 rate = rows_done / elapsed if elapsed > 0 else 0
                 eta = (total_rows - rows_done) / rate if rate > 0 else 0
                 
-                self._log(
+                print(
                     f"  Chunk {chunk_num}/{num_chunks}: "
                     f"{rows_done:,}/{total_rows:,} rows "
                     f"({chunk_time:.1f}s, {rate:.0f} rows/s, ETA {eta:.0f}s)"
@@ -313,7 +311,7 @@ class UnifiedTagger:
         
         total_time = time.time() - start_time
         if show_progress:
-            self._log(
+            print(
                 f"  Total: {total_rows:,} rows in {total_time:.1f}s "
                 f"({total_rows/total_time:.0f} rows/s)"
             )

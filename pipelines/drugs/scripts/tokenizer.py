@@ -512,14 +512,21 @@ def extract_generic_tokens(
     if multiword_generics is None:
         multiword_generics = set()
     
-    # Check for multiword generics with commas BEFORE tokenizing
+    # Check for multiword generics BEFORE tokenizing
+    # Sort by length descending to prefer longer matches and avoid substrings
     text_upper = text.upper()
     matched_multiword = []
-    for mw in multiword_generics:
+    for mw in sorted(multiword_generics, key=len, reverse=True):
         if mw in text_upper:
-            # Store with position for ordering
-            pos = text_upper.find(mw)
-            matched_multiword.append((pos, mw))
+            # Check if this is a substring of an already-matched multiword
+            is_substring = False
+            for _, existing_mw in matched_multiword:
+                if mw in existing_mw:
+                    is_substring = True
+                    break
+            if not is_substring:
+                pos = text_upper.find(mw)
+                matched_multiword.append((pos, mw))
     # Sort by position in text
     matched_multiword.sort(key=lambda x: x[0])
     

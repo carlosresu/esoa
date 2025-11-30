@@ -667,10 +667,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         print("\n" + "=" * 60)
         print("PART 2: Match Annex F with ATC/DrugBank IDs")
         print("=" * 60)
-        results = run_annex_f_tagging(verbose=False)
-        print(f"\nPart 2 results:")
-        print(f"  - Matched with ATC: {results['matched_atc']} ({results['matched_atc_pct']:.1f}%)")
-        print(f"  - Has DrugBank ID: {results['matched_drugbank']} ({results['matched_drugbank_pct']:.1f}%)")
+        results = run_annex_f_tagging(verbose=True)
 
     if 3 in parts_to_run:
         print("\n" + "=" * 60)
@@ -679,18 +676,12 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         from pathlib import Path
         esoa_path = Path(args.esoa) if args.esoa else None
         results = run_esoa_tagging(esoa_path=esoa_path, verbose=True)
-        print(f"\nPart 3 results:")
-        print(f"  - Total rows: {results['total']}")
-        print(f"  - Matched with ATC: {results['matched_atc']} ({results['matched_atc_pct']:.1f}%)")
-        print(f"  - Output: {results['output_path']}")
 
     if 4 in parts_to_run:
         print("\n" + "=" * 60)
         print("PART 4: Bridge ESOA to Annex F Drug Codes")
         print("=" * 60)
         results = run_esoa_to_drug_code(verbose=True)
-        print(f"\nPart 4 results:")
-        print(f"  - Matched to Drug Code: {results['matched']} ({results['matched_pct']:.1f}%)")
 
     print("\n" + "=" * 60)
     print("PIPELINE COMPLETE")

@@ -43,34 +43,23 @@ def run_annex_f_tagging(
     if output_path is None:
         output_path = PIPELINE_OUTPUTS_DIR / "annex_f_with_atc.csv"
     
-    if verbose:
-        print("=" * 60)
-        print("Part 2: Match Annex F with ATC/DrugBank IDs")
-        print("=" * 60)
-    
     # Load Annex F
     if not annex_path.exists():
         raise FileNotFoundError(f"Annex F not found: {annex_path}")
     
-    annex_df = run_with_spinner("Load Annex F", lambda: pd.read_csv(annex_path))
+    annex_df = pd.read_csv(annex_path)
     
     # Initialize and load tagger
-    tagger = run_with_spinner(
-        "Initialize tagger",
-        lambda: UnifiedTagger(
-            outputs_dir=PIPELINE_OUTPUTS_DIR,
-            inputs_dir=PIPELINE_INPUTS_DIR,
-            verbose=False,
-        )
+    tagger = UnifiedTagger(
+        outputs_dir=PIPELINE_OUTPUTS_DIR,
+        inputs_dir=PIPELINE_INPUTS_DIR,
+        verbose=False,
     )
-    run_with_spinner("Load reference data", lambda: tagger.load())
+    tagger.load()
     
     # Tag descriptions
-    if verbose:
-        print(f"\nTagging {len(annex_df):,} Annex F entries...")
-    
     results_df = run_with_spinner(
-        "Tag descriptions",
+        f"Tag {len(annex_df):,} Annex F entries",
         lambda: tagger.tag_descriptions(
             annex_df,
             text_column="Drug Description",
@@ -116,16 +105,6 @@ def run_annex_f_tagging(
         "output_path": output_path,
     }
     
-    if verbose:
-        print(f"\nAnnex F tagging complete: {output_path}")
-        print(f"  Total: {total:,}")
-        print(f"  Has ATC: {matched_atc:,} ({results['matched_atc_pct']:.1f}%)")
-        print(f"  Has DrugBank ID: {matched_drugbank:,} ({results['matched_drugbank_pct']:.1f}%)")
-        
-        print("\nMatch reasons:")
-        for reason, count in merged["match_reason"].value_counts().items():
-            print(f"  {reason}: {count:,} ({100*count/total:.1f}%)")
-    
     # Log metrics
     log_metrics("annex_f", {
         "total": total,
@@ -155,16 +134,11 @@ def run_esoa_tagging(
     if output_path is None:
         output_path = PIPELINE_OUTPUTS_DIR / "esoa_with_atc.csv"
     
-    if verbose:
-        print("=" * 60)
-        print("Part 3: Match ESOA with ATC/DrugBank IDs")
-        print("=" * 60)
-    
     # Load ESOA
     if not esoa_path.exists():
         raise FileNotFoundError(f"ESOA not found: {esoa_path}")
     
-    esoa_df = run_with_spinner("Load ESOA", lambda: pd.read_csv(esoa_path))
+    esoa_df = pd.read_csv(esoa_path)
     
     # Determine text column
     text_column = None
@@ -176,26 +150,16 @@ def run_esoa_tagging(
     if not text_column:
         raise ValueError(f"No text column found. Columns: {list(esoa_df.columns)}")
     
-    if verbose:
-        print(f"  Using text column: {text_column}")
-    
     # Initialize and load tagger
-    tagger = run_with_spinner(
-        "Initialize tagger",
-        lambda: UnifiedTagger(
-            outputs_dir=PIPELINE_OUTPUTS_DIR,
-            inputs_dir=PIPELINE_INPUTS_DIR,
-            verbose=verbose,  # Enable for progress output
-        )
+    tagger = UnifiedTagger(
+        outputs_dir=PIPELINE_OUTPUTS_DIR,
+        inputs_dir=PIPELINE_INPUTS_DIR,
+        verbose=False,
     )
-    run_with_spinner("Load reference data", lambda: tagger.load())
-    
-    # Tag with deduplication (146K unique vs 258K total)
-    total = len(esoa_df)
-    if verbose:
-        print(f"\nTagging {total:,} ESOA entries (with deduplication)...")
+    tagger.load()
     
     # Use tag_batch with deduplication for performance
+    total = len(esoa_df)
     results_df = tagger.tag_batch(
         esoa_df,
         text_column=text_column,
