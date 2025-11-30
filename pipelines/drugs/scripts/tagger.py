@@ -100,6 +100,15 @@ class UnifiedTagger:
             syn_count = self.con.execute("SELECT COUNT(*) FROM synonyms").fetchone()[0]
             self._log(f"  - unified_synonyms: {syn_count:,} rows")
         
+        # Load unified_mixtures (queried on-demand for multi-generic inputs)
+        mixtures_path = self.outputs_dir / "unified_mixtures.parquet"
+        self._mixtures_loaded = False
+        if mixtures_path.exists():
+            self.con.execute(f"CREATE TABLE mixtures AS SELECT * FROM read_parquet('{mixtures_path}')")
+            mix_count = self.con.execute("SELECT COUNT(*) FROM mixtures").fetchone()[0]
+            self._log(f"  - unified_mixtures: {mix_count:,} rows")
+            self._mixtures_loaded = True
+        
         # Build synonyms dict from unified_synonyms table + spelling corrections + regional
         from .unified_constants import SPELLING_SYNONYMS, REGIONAL_TO_US
         self.synonyms = dict(SPELLING_SYNONYMS)
@@ -191,6 +200,52 @@ class UnifiedTagger:
     
     def _strip_salt(self, generic: str) -> tuple:
         return strip_salt_suffix(generic)
+    
+    def _lookup_mixture(self, generics: List[str]) -> Optional[Dict[str, Any]]:
+        """Look up a mixture by its component generics."""
+        if not self._mixtures_loaded:
+            return None
+        
+        # Filter out junk tokens like "+"
+        junk = {"+", "MG", "ML", "MCG", "G", "L", ""}
+        generics = [g for g in generics if g.upper() not in junk]
+        
+        if len(generics) < 2:
+            return None
+        
+        # Normalize generics (apply synonyms)
+        normalized = [self._apply_synonyms(g.upper()) for g in generics]
+        normalized_set = set(normalized)
+        
+        # Query mixtures table for matching component_generics
+        # component_generics is semicolon-separated like "Acetaminophen; Ibuprofen"
+        try:
+            rows = self.con.execute("""
+                SELECT drugbank_id, mixture_name, component_generics, component_drugbank_ids
+                FROM mixtures
+                WHERE component_generics IS NOT NULL AND component_generics != ''
+            """).fetchall()
+            
+            for drugbank_id, mixture_name, component_generics, component_ids in rows:
+                # Parse components
+                parts = [p.strip().upper() for p in component_generics.split(';') if p.strip()]
+                parts_normalized = [self._apply_synonyms(p) for p in parts]
+                parts_set = set(parts_normalized)
+                
+                # Check if input generics match mixture components
+                if normalized_set == parts_set:
+                    return {
+                        'drugbank_id': drugbank_id,
+                        'generic_name': ' AND '.join(sorted(parts_normalized)),
+                        'mixture_name': mixture_name,
+                        'atc_code': None,  # Mixtures typically don't have single ATC
+                        'source': 'drugbank_mixture',
+                        'reference_text': component_generics,
+                    }
+        except Exception:
+            pass
+        
+        return None
     
     def tag_single(self, text: str) -> Dict[str, Any]:
         """Tag a single drug description."""
@@ -486,6 +541,24 @@ class UnifiedTagger:
                     unique_matches.append(m)
             
             if not unique_matches:
+                # Try mixture lookup for multi-generic inputs
+                if len(stripped_generics) >= 2:
+                    mixture_match = self._lookup_mixture(stripped_generics)
+                    if mixture_match:
+                        results.append({
+                            "id": ids[i],
+                            "input_text": text,
+                            "row_idx": i,
+                            "atc_code": mixture_match.get("atc_code"),
+                            "drugbank_id": mixture_match.get("drugbank_id"),
+                            "generic_name": mixture_match.get("generic_name"),
+                            "reference_text": mixture_match.get("reference_text"),
+                            "match_score": 100,
+                            "match_reason": "matched",
+                            "sources": mixture_match.get("source", ""),
+                        })
+                        continue
+                
                 results.append({
                     "id": ids[i],
                     "input_text": text,
@@ -644,6 +717,30 @@ class UnifiedTagger:
                     "sources": best.get("source", ""),
                 })
             else:
+                # Try mixture lookup for multi-generic inputs when scoring fails
+                if is_combination and len(stripped_generics) >= 2:
+                    mixture_match = self._lookup_mixture(stripped_generics)
+                    if mixture_match:
+                        results.append({
+                            "id": ids[i],
+                            "input_text": text,
+                            "row_idx": i,
+                            "atc_code": mixture_match.get("atc_code"),
+                            "drugbank_id": mixture_match.get("drugbank_id"),
+                            "generic_name": mixture_match.get("generic_name"),
+                            "reference_text": mixture_match.get("reference_text"),
+                            "dose": "|".join(input_doses) if input_doses else None,
+                            "form": base_form,
+                            "route": "|".join(input_routes) if input_routes else None,
+                            "type_detail": type_detail,
+                            "release_detail": release_detail,
+                            "form_detail": form_detail,
+                            "match_score": 100,
+                            "match_reason": "matched",
+                            "sources": mixture_match.get("source", ""),
+                        })
+                        continue
+                
                 results.append({
                     "id": ids[i],
                     "input_text": text,
