@@ -127,13 +127,19 @@ class UnifiedTagger:
         for regional, us in REGIONAL_TO_US.items():
             self.synonyms[regional] = us
         
+        # Parse unified_synonyms (format: drugbank_id, generic_name, synonyms pipe-separated)
         try:
             synonym_rows = self.con.execute("""
-                SELECT synonym, generic_name FROM synonyms
+                SELECT generic_name, synonyms FROM synonyms
+                WHERE synonyms IS NOT NULL AND synonyms != ''
             """).fetchall()
-            for syn, generic_name in synonym_rows:
-                if syn and generic_name:
-                    self.synonyms[syn.upper()] = generic_name.upper()
+            for generic_name, synonyms_str in synonym_rows:
+                if generic_name and synonyms_str:
+                    generic_upper = generic_name.upper()
+                    for syn in synonyms_str.split('|'):
+                        syn = syn.strip().upper()
+                        if syn and syn != generic_upper:
+                            self.synonyms[syn] = generic_upper
         except Exception:
             pass
         self._log(f"  - synonym mappings: {len(self.synonyms):,}")
