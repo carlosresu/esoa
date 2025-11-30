@@ -562,6 +562,7 @@ def extract_generic_tokens(
     # Handle combination drugs with "+" separator
     if "+" in text_upper:
         parts = text_upper.split("+")
+        added_parts = []
         for part in parts:
             part = part.strip()
             words = []
@@ -574,6 +575,12 @@ def extract_generic_tokens(
                 combo_part = " ".join(words)
                 if combo_part and combo_part not in generic_tokens:
                     generic_tokens.append(combo_part)
+                    added_parts.append(combo_part)
+        
+        # Remove combined tokens that contain + if we've added individual parts
+        # e.g., remove "IBUPROFEN+PARACETAMOL" if we added "IBUPROFEN" and "PARACETAMOL"
+        if len(added_parts) >= 2:
+            generic_tokens = [g for g in generic_tokens if "+" not in g]
     
     # Handle " IN " separator for IV solutions
     # Reorder generics so active ingredient (before IN) comes first

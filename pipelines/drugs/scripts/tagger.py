@@ -463,11 +463,18 @@ class UnifiedTagger:
                 if syn in generic_cache and syn != sg:
                     generic_matches.extend(generic_cache[syn])
             
-            # Add combination matches
+            # Add combination matches (both original and normalized)
             combo_keys = build_combination_keys(stripped_generics)
             for ck in combo_keys:
                 if ck in generic_cache:
                     generic_matches.extend(generic_cache[ck])
+            
+            # Also check normalized combo keys (e.g., PARACETAMOL -> ACETAMINOPHEN)
+            normalized_components = [self._apply_synonyms(sg) for sg in stripped_generics]
+            normalized_combo_keys = build_combination_keys(normalized_components)
+            for nck in normalized_combo_keys:
+                if nck in generic_cache and nck not in combo_keys:
+                    generic_matches.extend(generic_cache[nck])
             
             # Deduplicate
             seen = set()
@@ -499,11 +506,27 @@ class UnifiedTagger:
             for gm in unique_matches:
                 atc_codes = str(gm.get("atc_code", "")).split("|")
                 atc_codes = sort_atc_codes(atc_codes)
+                atc_codes = [a for a in atc_codes if a]  # Filter empty
                 
-                for atc in atc_codes:
-                    if atc:
+                # For entries with ATC codes, add one candidate per ATC
+                if atc_codes:
+                    for atc in atc_codes:
                         candidates.append({
                             "atc_code": atc,
+                            "drugbank_id": gm.get("drugbank_id"),
+                            "generic_name": gm.get("generic_name"),
+                            "reference_text": gm.get("reference_text", ""),
+                            "source": gm.get("source"),
+                            "form": "",
+                            "route": "",
+                            "doses": "",
+                        })
+                else:
+                    # For mixtures without ATC codes, add candidate with drugbank_id only
+                    # This allows matching combination drugs that don't have specific ATC codes
+                    if gm.get("drugbank_id"):
+                        candidates.append({
+                            "atc_code": None,
                             "drugbank_id": gm.get("drugbank_id"),
                             "generic_name": gm.get("generic_name"),
                             "reference_text": gm.get("reference_text", ""),

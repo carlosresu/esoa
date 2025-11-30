@@ -205,6 +205,75 @@ def build_unified_reference(
     
     generics_df = generics_df.fillna('').drop_duplicates()
     
+    # Step 2d: Add DrugBank mixture combinations as indexable generics
+    # This allows matching "IBUPROFEN + PARACETAMOL" type combinations
+    if verbose:
+        print("    - Adding DrugBank mixture combinations...")
+    
+    try:
+        mixtures_raw = con.execute("""
+            SELECT DISTINCT
+                mixture_drugbank_id as drugbank_id,
+                UPPER(TRIM(ingredient_components)) as components
+            FROM drugbank_mixtures
+            WHERE ingredient_components IS NOT NULL 
+              AND ingredient_components != ''
+              AND mixture_drugbank_id IS NOT NULL
+        """).fetchdf()
+        
+        # Build combo entries from component strings like "Acetaminophen; Ibuprofen"
+        mixture_entries = []
+        for _, row in mixtures_raw.iterrows():
+            components = row['components']
+            drugbank_id = row['drugbank_id']
+            
+            # Parse components (semicolon separated)
+            parts = [p.strip().upper() for p in components.split(';') if p.strip()]
+            if len(parts) < 2:
+                continue
+            
+            # Sort for order-independent matching
+            parts_sorted = sorted(parts)
+            
+            # Create combo keys in multiple formats
+            combo_and = ' AND '.join(parts_sorted)
+            combo_plus = ' + '.join(parts_sorted)
+            
+            # Add both formats
+            for combo_name in [combo_and, combo_plus]:
+                mixture_entries.append({
+                    'generic_name': combo_name,
+                    'drugbank_id': drugbank_id,
+                    'atc_code': '',  # Mixtures typically don't have single ATC
+                    'form': '',
+                    'route': '',
+                    'dose': '',
+                    'source': 'drugbank_mixture',
+                })
+            
+            # Also add the original component string as-is
+            mixture_entries.append({
+                'generic_name': components,
+                'drugbank_id': drugbank_id,
+                'atc_code': '',
+                'form': '',
+                'route': '',
+                'dose': '',
+                'source': 'drugbank_mixture',
+            })
+        
+        if mixture_entries:
+            mixtures_combo_df = pd.DataFrame(mixture_entries)
+            mixtures_combo_df = mixtures_combo_df.drop_duplicates()
+            generics_df = pd.concat([generics_df, mixtures_combo_df], ignore_index=True)
+            if verbose:
+                print(f"    - Added {len(mixtures_combo_df):,} mixture combo entries")
+    except Exception as e:
+        if verbose:
+            print(f"    - Warning: Could not add mixtures: {e}")
+    
+    generics_df = generics_df.fillna('').drop_duplicates()
+    
     # =========================================================================
     # TABLE 2: unified_brands - Brand → generic mapping (normalized, one row per brand)
     # =========================================================================
