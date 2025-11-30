@@ -125,6 +125,10 @@ class UnifiedTagger:
             "SELECT DISTINCT generic_name FROM unified"
         ).fetchall())
         
+        # Also check synonyms that map to generics (e.g., ASPIRIN -> ACETYLSALICYLIC ACID)
+        from .unified_constants import SPELLING_SYNONYMS
+        synonym_generics = set(k.upper() for k in SPELLING_SYNONYMS.keys())
+        
         try:
             # Count rows per generic to prefer more common associations
             brand_rows = self.con.execute("""
@@ -136,8 +140,16 @@ class UnifiedTagger:
             for brand, generic, _ in brand_rows:
                 if brand and generic:
                     brand_upper = brand.upper()
-                    if brand_upper not in all_generics and brand_upper not in self.brand_map:
-                        self.brand_map[brand_upper] = generic.upper()
+                    generic_upper = generic.upper()
+                    
+                    # FDA often swaps brand/generic - if brand_name is a known generic,
+                    # treat it as the generic and use generic_name as the brand
+                    if brand_upper in all_generics or brand_upper in synonym_generics:
+                        # Swap: the "brand" is actually a generic, "generic" is the brand
+                        if generic_upper not in all_generics and generic_upper not in self.brand_map:
+                            self.brand_map[generic_upper] = brand_upper
+                    elif brand_upper not in self.brand_map:
+                        self.brand_map[brand_upper] = generic_upper
         except Exception:
             pass
         self._log(f"  - brand mappings: {len(self.brand_map):,}")

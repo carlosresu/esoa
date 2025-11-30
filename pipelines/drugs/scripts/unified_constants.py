@@ -705,6 +705,9 @@ SPELLING_SYNONYMS: Dict[str, str] = {
     # Spelling variants (different spellings of same drug)
     "POLYMYXIN": "POLYMIXIN",  # X vs I spelling
     "POLYMYXIN B": "POLYMIXIN B",
+    # Common/trade names that are really generics
+    "ASPIRIN": "ACETYLSALICYLIC ACID",
+    "ASA": "ACETYLSALICYLIC ACID",
     # Combination drug trade names -> generic components
     "CO-AMOXICLAV": "AMOXICILLIN + CLAVULANIC ACID",
     "COTRIMOXAZOLE": "SULFAMETHOXAZOLE + TRIMETHOPRIM",
