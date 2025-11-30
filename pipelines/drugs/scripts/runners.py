@@ -321,7 +321,8 @@ def run_esoa_to_drug_code(
                 variants.add(syn)
         return variants
     
-    annex_lookup = {}
+    annex_lookup = {}  # generic_name -> list of candidates
+    drugbank_lookup = {}  # drugbank_id -> list of candidates
     for _, row in annex_df.iterrows():
         drug_code = row.get("Drug Code")
         if pd.isna(drug_code):
@@ -332,24 +333,49 @@ def run_esoa_to_drug_code(
             continue
         
         atc = normalize_for_match(row.get("atc_code"))
+        drugbank_id = row.get("drugbank_id")
+        if pd.notna(drugbank_id):
+            drugbank_id = str(drugbank_id).strip()
+        else:
+            drugbank_id = None
         
-        if generic not in annex_lookup:
-            annex_lookup[generic] = []
-        annex_lookup[generic].append({
+        candidate = {
             "drug_code": drug_code,
             "atc_code": atc,
+            "drugbank_id": drugbank_id,
             "generic_name": generic,
-        })
+        }
+        
+        # Index by generic name
+        if generic not in annex_lookup:
+            annex_lookup[generic] = []
+        annex_lookup[generic].append(candidate)
+        
+        # Index by drugbank_id
+        if drugbank_id:
+            if drugbank_id not in drugbank_lookup:
+                drugbank_lookup[drugbank_id] = []
+            drugbank_lookup[drugbank_id].append(candidate)
     
     if verbose:
         print(f"  Annex F lookup: {len(annex_lookup):,} unique generics")
+        print(f"  DrugBank lookup: {len(drugbank_lookup):,} unique drugbank_ids")
     
     # Match ESOA to Annex F
     def match_to_drug_code(row):
         generic = normalize_for_match(row.get("generic_final") or row.get("generic_name"))
         atc = normalize_for_match(row.get("atc_code_final") or row.get("atc_code"))
+        esoa_drugbank_id = row.get("drugbank_id_final") or row.get("drugbank_id")
+        if pd.notna(esoa_drugbank_id):
+            esoa_drugbank_id = str(esoa_drugbank_id).strip()
+        else:
+            esoa_drugbank_id = None
         
         if not generic:
+            # Try DrugBank ID match even without generic
+            if esoa_drugbank_id and esoa_drugbank_id in drugbank_lookup:
+                candidates = drugbank_lookup[esoa_drugbank_id]
+                return candidates[0]["drug_code"], "matched_drugbank_id"
             return None, "no_generic"
         
         # Try all name variants (original + synonyms)
@@ -358,13 +384,23 @@ def run_esoa_to_drug_code(
             candidates.extend(annex_lookup.get(variant, []))
         
         if not candidates:
+            # Try DrugBank ID fallback
+            if esoa_drugbank_id and esoa_drugbank_id in drugbank_lookup:
+                candidates = drugbank_lookup[esoa_drugbank_id]
+                return candidates[0]["drug_code"], "matched_drugbank_id"
             return None, "generic_not_in_annex"
         
-        # Filter by ATC if available
+        # Priority 1: Match by ATC code
         if atc:
             atc_matches = [c for c in candidates if c["atc_code"] == atc]
             if atc_matches:
                 return atc_matches[0]["drug_code"], "matched_generic_atc"
+        
+        # Priority 2: Match by DrugBank ID
+        if esoa_drugbank_id:
+            dbid_matches = [c for c in candidates if c["drugbank_id"] == esoa_drugbank_id]
+            if dbid_matches:
+                return dbid_matches[0]["drug_code"], "matched_drugbank_id"
         
         # Fall back to generic-only match
         return candidates[0]["drug_code"], "matched_generic_only"
