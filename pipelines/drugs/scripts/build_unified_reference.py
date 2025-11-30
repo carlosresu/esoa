@@ -207,68 +207,45 @@ def build_unified_reference(
     atc_map_df = atc_map_df.drop_duplicates()
     
     # =========================================================================
-    # TABLE 4a: unified_atc_products - ATC × form × route × dose (valid combos)
-    # Collected from drugbank_generics which has ATC linked to form/route/dose
+    # TABLE 4: unified_dosages - drugbank_id × form × route × dose (VALID combos)
+    # NOTE: ATC codes have NO direct link to form/route/dose in raw DrugBank!
+    # The dosages table has valid combos per drugbank_id only.
     # =========================================================================
     if verbose:
-        print("\n[Step 5a] Building unified_atc_products (ATC-indexed)...")
+        print("\n[Step 5] Building unified_dosages (valid combos only)...")
     
-    atc_products_df = con.execute("""
-        SELECT DISTINCT
-            TRIM(atc_code) as atc_code,
-            UPPER(TRIM(canonical_generic_name)) as generic_name,
-            UPPER(TRIM(form_norm)) as form,
-            UPPER(TRIM(route_norm)) as route,
-            UPPER(TRIM(dose_norm)) as dose
-        FROM drugbank_generics
-        WHERE atc_code IS NOT NULL AND atc_code != ''
-    """).fetchdf()
+    # Try to load lean dosages if available, otherwise use existing exports
+    lean_dosages_path = inputs_dir.parent.parent / "dependencies" / "drugbank_generics" / "output" / "drugbank_dosages_lean.csv"
     
-    atc_products_df = atc_products_df.fillna('').drop_duplicates()
+    if lean_dosages_path.exists():
+        # Use lean export from raw dbdataset
+        con.execute(f"CREATE TABLE drugbank_dosages AS SELECT * FROM read_csv_auto('{lean_dosages_path}')")
+        dosages_df = con.execute("""
+            SELECT DISTINCT
+                drugbank_id,
+                UPPER(TRIM(form)) as form,
+                UPPER(TRIM(route)) as route,
+                UPPER(TRIM(strength)) as dose
+            FROM drugbank_dosages
+            WHERE drugbank_id IS NOT NULL
+        """).fetchdf()
+        if verbose:
+            print(f"    - Loaded from lean export: {len(dosages_df):,} valid combos")
+    else:
+        # Fallback to existing products export
+        if verbose:
+            print("    - Using drugbank_products as fallback")
+        dosages_df = con.execute("""
+            SELECT DISTINCT
+                drugbank_id,
+                UPPER(TRIM(dosage_form)) as form,
+                UPPER(TRIM(route)) as route,
+                UPPER(TRIM(strength)) as dose
+            FROM drugbank_products
+            WHERE drugbank_id IS NOT NULL
+        """).fetchdf()
     
-    # =========================================================================
-    # TABLE 4b: unified_drugbank_products - DrugBank ID × form × route × dose
-    # Collected from ALL sources: generics, products, brands
-    # =========================================================================
-    if verbose:
-        print("\n[Step 5b] Building unified_drugbank_products (DrugBank-indexed)...")
-    
-    # From drugbank_generics
-    gen_products = con.execute("""
-        SELECT DISTINCT
-            drugbank_id,
-            UPPER(TRIM(form_norm)) as form,
-            UPPER(TRIM(route_norm)) as route,
-            UPPER(TRIM(dose_norm)) as dose
-        FROM drugbank_generics
-        WHERE drugbank_id IS NOT NULL
-    """).fetchdf()
-    
-    # From drugbank_products
-    prod_products = con.execute("""
-        SELECT DISTINCT
-            drugbank_id,
-            UPPER(TRIM(dosage_form)) as form,
-            UPPER(TRIM(route)) as route,
-            UPPER(TRIM(strength)) as dose
-        FROM drugbank_products
-        WHERE drugbank_id IS NOT NULL
-    """).fetchdf()
-    
-    # From drugbank_brands
-    brand_products = con.execute("""
-        SELECT DISTINCT
-            drugbank_id,
-            UPPER(TRIM(dosage_form)) as form,
-            UPPER(TRIM(route)) as route,
-            UPPER(TRIM(strength)) as dose
-        FROM drugbank_brands
-        WHERE drugbank_id IS NOT NULL
-    """).fetchdf()
-    
-    # Combine all sources
-    drugbank_products_df = pd.concat([gen_products, prod_products, brand_products], ignore_index=True)
-    drugbank_products_df = drugbank_products_df.fillna('').drop_duplicates()
+    dosages_df = dosages_df.fillna('').drop_duplicates()
     
     # =========================================================================
     # TABLE 5: unified_brands - brand → generic mapping
@@ -369,28 +346,23 @@ def build_unified_reference(
     # Core lookup tables
     output_paths['unified_generics'] = _save_table(generics_df, outputs_dir, 'unified_generics', verbose)
     output_paths['unified_synonyms'] = _save_table(synonyms_df, outputs_dir, 'unified_synonyms', verbose)
-    output_paths['unified_atc_map'] = _save_table(atc_map_df, outputs_dir, 'unified_atc_map', verbose)
+    output_paths['unified_atc'] = _save_table(atc_map_df, outputs_dir, 'unified_atc', verbose)
     
-    # Product tables (ATC-indexed and DrugBank-indexed)
-    output_paths['unified_atc_products'] = _save_table(atc_products_df, outputs_dir, 'unified_atc_products', verbose)
-    output_paths['unified_drugbank_products'] = _save_table(drugbank_products_df, outputs_dir, 'unified_drugbank_products', verbose)
+    # Dosages table (VALID form × route × dose combos per drugbank_id)
+    output_paths['unified_dosages'] = _save_table(dosages_df, outputs_dir, 'unified_dosages', verbose)
     
     # Other tables
     output_paths['unified_brands'] = _save_table(brands_df, outputs_dir, 'unified_brands', verbose)
     output_paths['unified_salts'] = _save_table(salts_df, outputs_dir, 'unified_salts', verbose)
     output_paths['unified_mixtures'] = _save_table(mixtures_df, outputs_dir, 'unified_mixtures', verbose)
     
-    # Also save unified_atc as alias for backwards compatibility
-    output_paths['unified_atc'] = _save_table(atc_map_df, outputs_dir, 'unified_atc', verbose)
-    
     if verbose:
         print("\n" + "=" * 60)
         print("Summary (all tables are LEAN - valid combos only):")
         print(f"  unified_generics: {len(generics_df):,} (one per generic)")
         print(f"  unified_synonyms: {len(synonyms_df):,} (aggregated per drugbank_id)")
-        print(f"  unified_atc_map: {len(atc_map_df):,} (drugbank_id ↔ atc)")
-        print(f"  unified_atc_products: {len(atc_products_df):,} (ATC × form × route × dose)")
-        print(f"  unified_drugbank_products: {len(drugbank_products_df):,} (DrugBank × form × route × dose)")
+        print(f"  unified_atc: {len(atc_map_df):,} (drugbank_id ↔ atc, NO form/route/dose)")
+        print(f"  unified_dosages: {len(dosages_df):,} (drugbank_id × form × route × dose)")
         print(f"  unified_brands: {len(brands_df):,} (one per brand)")
         print(f"  unified_salts: {len(salts_df):,}")
         print(f"  unified_mixtures: {len(mixtures_df):,} (deduplicated)")
