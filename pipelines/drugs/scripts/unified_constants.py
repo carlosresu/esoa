@@ -697,6 +697,117 @@ def infer_route_from_form(form: str) -> str | None:
 
 
 # ============================================================================
+# GARBAGE TOKENS - Tokens to filter out when extracting generic names
+# These are not drug names but formulation/packaging/flavor words
+# ============================================================================
+
+GARBAGE_TOKENS: Set[str] = {
+    # Units
+    'MG', 'ML', 'MCG', 'G', 'IU', 'UNIT', 'UNITS',
+    # Dosage forms
+    'TAB', 'TABLET', 'CAP', 'CAPSULE', 'AMP', 'AMPULE', 'VIAL', 'BOTTLE',
+    # Routes
+    'ORAL', 'IV', 'IM', 'SC', 'TOPICAL',
+    # Marketing descriptors
+    'FORTE', 'PLUS', 'EXTRA', 'MAX', 'ULTRA', 'JUNIOR', 'PEDIA', 'ADULT',
+    # Flavors
+    'ORANGE', 'STRAWBERRY', 'CHERRY', 'GRAPE', 'MINT', 'VANILLA', 'LEMON',
+    # Junk tokens
+    'PNF', 'NAN', '-', '+', '/', 'AND', 'WITH',
+    # Formulation words
+    'SOLVENT', 'DILUENT', 'SOLUTION', 'SUSPENSION', 'POWDER',
+}
+
+# ============================================================================
+# GENERIC SYNONYMS - Drug name synonym mappings
+# Bidirectional mappings for matching drugs with different names
+# ============================================================================
+
+GENERIC_SYNONYMS: Dict[str, str] = {
+    # INN/BAN/USAN variations
+    'ACETAMINOPHEN': 'PARACETAMOL',
+    'PARACETAMOL': 'ACETAMINOPHEN',
+    'SALBUTAMOL': 'ALBUTEROL',
+    'ALBUTEROL': 'SALBUTAMOL',
+    'ADRENALINE': 'EPINEPHRINE',
+    'EPINEPHRINE': 'ADRENALINE',
+    'NORADRENALINE': 'NOREPINEPHRINE',
+    'NOREPINEPHRINE': 'NORADRENALINE',
+    'LIGNOCAINE': 'LIDOCAINE',
+    'LIDOCAINE': 'LIGNOCAINE',
+    'FRUSEMIDE': 'FUROSEMIDE',
+    'FUROSEMIDE': 'FRUSEMIDE',
+    'BENZYLPENICILLIN': 'PENICILLIN G',
+    'PENICILLIN G': 'BENZYLPENICILLIN',
+    
+    # DrugBank synonyms found in Annex F
+    'CEFALEXIN': 'CEPHALEXIN',
+    'CEPHALEXIN': 'CEFALEXIN',
+    'CHLORPHENAMINE': 'CHLORPHENIRAMINE',
+    'CHLORPHENIRAMINE': 'CHLORPHENAMINE',
+    'CICLOSPORIN': 'CYCLOSPORINE',
+    'CYCLOSPORINE': 'CICLOSPORIN',
+    'DICYCLOVERINE': 'DICYCLOMINE',
+    'DICYCLOMINE': 'DICYCLOVERINE',
+    'GLIBENCLAMIDE': 'GLYBURIDE',
+    'GLYBURIDE': 'GLIBENCLAMIDE',
+    'MECLOZINE': 'MECLIZINE',
+    'MECLIZINE': 'MECLOZINE',
+    'PROXYMETACAINE': 'PROPARACAINE',
+    'PROPARACAINE': 'PROXYMETACAINE',
+    'THIAMAZOLE': 'METHIMAZOLE',
+    'METHIMAZOLE': 'THIAMAZOLE',
+    
+    # Combination drug synonyms
+    'CO-AMOXICLAV': 'AMOXICILLIN AND BETA-LACTAMASE INHIBITOR',
+    'AMOXICILLIN AND BETA-LACTAMASE INHIBITOR': 'CO-AMOXICLAV',
+    'AMOXICILLIN-CLAVULANIC ACID': 'CO-AMOXICLAV',
+    'AMOXICILLIN + CLAVULANIC ACID': 'CO-AMOXICLAV',
+    
+    # Aluminum/Aluminium spelling
+    'ALUMINUM HYDROXIDE': 'ALUMINIUM HYDROXIDE',
+    'ALUMINIUM HYDROXIDE': 'ALUMINUM HYDROXIDE',
+    'MAGNESIUM HYDROXIDE': 'MAGNESIUM',
+}
+
+# ============================================================================
+# IV FLUID SYNONYMS - Abbreviations for IV fluids
+# ============================================================================
+
+IV_FLUID_SYNONYMS: Dict[str, str] = {
+    'D5W': 'DEXTROSE',
+    'D5': 'DEXTROSE',
+    'NSS': 'SODIUM CHLORIDE',
+    'PNSS': 'SODIUM CHLORIDE',
+    'NORMAL SALINE': 'SODIUM CHLORIDE',
+    'LR': "LACTATED RINGER'S",
+    "LACTATED RINGER'S": 'LR',
+    'D5LR': 'DEXTROSE',
+    'STERILE WATER': 'WATER FOR INJECTION',
+    'WATER FOR INJECTION': 'STERILE WATER',
+}
+
+# ============================================================================
+# DRUGBANK COMPONENT SYNONYMS - Map DrugBank component names to parent drug
+# These are chemical components that should map to the marketed drug mixture
+# ============================================================================
+
+DRUGBANK_COMPONENT_SYNONYMS: Dict[str, str] = {
+    # Gentamicin is a mixture of C1, C1a, C2 components
+    'GENTAMICIN C2': 'GENTAMICIN',
+    'GENTAMICIN C1': 'GENTAMICIN',
+    'GENTAMICIN C1A': 'GENTAMICIN',
+    'GENTAMICIN': 'GENTAMICIN C2',  # Reverse: search GENTAMICIN finds GENTAMICIN C2
+}
+
+# Combined synonym lookup (for convenience)
+ALL_DRUG_SYNONYMS: Dict[str, str] = {
+    **GENERIC_SYNONYMS,
+    **IV_FLUID_SYNONYMS,
+    **DRUGBANK_COMPONENT_SYNONYMS,
+}
+
+# ============================================================================
 # SPELLING SYNONYMS - Not regional variants, just spelling corrections
 # These are ONLY for spelling variants that cannot be in the unified dataset
 # ============================================================================
@@ -876,6 +987,9 @@ __all__ = [
     "ATC_COMBINATION_PATTERNS", "COMBINATION_ATC_SUFFIXES",
     
     # Synonyms, multiword generics, regional names
+    "GARBAGE_TOKENS",
+    "GENERIC_SYNONYMS", "IV_FLUID_SYNONYMS", "DRUGBANK_COMPONENT_SYNONYMS",
+    "ALL_DRUG_SYNONYMS",
     "SPELLING_SYNONYMS", "MULTIWORD_GENERICS",
     "REGIONAL_CANONICAL", "REGIONAL_TO_US",
     "get_regional_canonical", "get_us_canonical",

@@ -15,6 +15,11 @@ import pandas as pd
 from .io_utils import reorder_columns_after, write_csv_and_parquet
 from .spinner import run_with_spinner
 from .tagger import UnifiedTagger
+from .unified_constants import (
+    GARBAGE_TOKENS,
+    ALL_DRUG_SYNONYMS,
+    DRUGBANK_COMPONENT_SYNONYMS,
+)
 
 
 # Default paths
@@ -291,9 +296,9 @@ def run_esoa_to_drug_code(
             return ""
         return str(s).upper().strip()
     
-    # Build synonym mappings from generics_master (the ONE source of truth)
+    # Build synonym mappings from generics_master and merge with static constants
     generics_master_path = PIPELINE_OUTPUTS_DIR / "generics_master.parquet"
-    all_synonyms = {}
+    all_synonyms = dict(ALL_DRUG_SYNONYMS)  # Start with static synonyms from unified_constants
     
     if generics_master_path.exists():
         gm = pd.read_parquet(generics_master_path)
@@ -308,7 +313,7 @@ def run_esoa_to_drug_code(
                         all_synonyms[syn] = generic
                         all_synonyms[generic] = syn
         if verbose:
-            print(f"  Loaded synonyms from generics_master: {len(all_synonyms):,} mappings")
+            print(f"  Loaded synonyms: {len(ALL_DRUG_SYNONYMS)} static + {len(all_synonyms) - len(ALL_DRUG_SYNONYMS)} from generics_master")
     
     def get_all_name_variants(name):
         """Get all possible name variants for matching."""
@@ -321,77 +326,8 @@ def run_esoa_to_drug_code(
                 variants.add(syn)
         return variants
     
-    # Garbage tokens to filter out from generic_final
-    GARBAGE_TOKENS = {
-        'MG', 'ML', 'MCG', 'G', 'IU', 'UNIT', 'UNITS',
-        'TAB', 'TABLET', 'CAP', 'CAPSULE', 'AMP', 'AMPULE', 'VIAL', 'BOTTLE',
-        'ORAL', 'IV', 'IM', 'SC', 'TOPICAL',
-        'FORTE', 'PLUS', 'EXTRA', 'MAX', 'ULTRA', 'JUNIOR', 'PEDIA', 'ADULT',
-        'ORANGE', 'STRAWBERRY', 'CHERRY', 'GRAPE', 'MINT', 'VANILLA', 'LEMON',
-        'PNF', 'NAN', '-', '+', '/', 'AND', 'WITH',
-        'SOLVENT', 'DILUENT', 'SOLUTION', 'SUSPENSION', 'POWDER',
-    }
-    
-    # Common synonym mappings for matching
-    ANNEX_SYNONYMS = {
-        # Drug name synonyms
-        'CO-AMOXICLAV': 'AMOXICILLIN AND BETA-LACTAMASE INHIBITOR',
-        'AMOXICILLIN AND BETA-LACTAMASE INHIBITOR': 'CO-AMOXICLAV',
-        'AMOXICILLIN-CLAVULANIC ACID': 'CO-AMOXICLAV',
-        'AMOXICILLIN + CLAVULANIC ACID': 'CO-AMOXICLAV',
-        'ACETAMINOPHEN': 'PARACETAMOL',
-        'PARACETAMOL': 'ACETAMINOPHEN',
-        'SALBUTAMOL': 'ALBUTEROL',
-        'ALBUTEROL': 'SALBUTAMOL',
-        'ADRENALINE': 'EPINEPHRINE',
-        'EPINEPHRINE': 'ADRENALINE',
-        'NORADRENALINE': 'NOREPINEPHRINE',
-        'NOREPINEPHRINE': 'NORADRENALINE',
-        'LIGNOCAINE': 'LIDOCAINE',
-        'LIDOCAINE': 'LIGNOCAINE',
-        'FRUSEMIDE': 'FUROSEMIDE',
-        'FUROSEMIDE': 'FRUSEMIDE',
-        'BENZYLPENICILLIN': 'PENICILLIN G',
-        'PENICILLIN G': 'BENZYLPENICILLIN',
-        # DrugBank synonyms found in Annex F
-        'CEFALEXIN': 'CEPHALEXIN',
-        'CEPHALEXIN': 'CEFALEXIN',
-        'CHLORPHENAMINE': 'CHLORPHENIRAMINE',
-        'CHLORPHENIRAMINE': 'CHLORPHENAMINE',
-        'CICLOSPORIN': 'CYCLOSPORINE',
-        'CYCLOSPORINE': 'CICLOSPORIN',
-        'DICYCLOVERINE': 'DICYCLOMINE',
-        'DICYCLOMINE': 'DICYCLOVERINE',
-        'GLIBENCLAMIDE': 'GLYBURIDE',
-        'GLYBURIDE': 'GLIBENCLAMIDE',
-        'MECLOZINE': 'MECLIZINE',
-        'MECLIZINE': 'MECLOZINE',
-        'PROXYMETACAINE': 'PROPARACAINE',
-        'PROPARACAINE': 'PROXYMETACAINE',
-        'THIAMAZOLE': 'METHIMAZOLE',
-        'METHIMAZOLE': 'THIAMAZOLE',
-        # IV Fluids
-        'D5W': 'DEXTROSE',
-        'D5': 'DEXTROSE',
-        'NSS': 'SODIUM CHLORIDE',
-        'PNSS': 'SODIUM CHLORIDE',
-        'NORMAL SALINE': 'SODIUM CHLORIDE',
-        'LR': "LACTATED RINGER'S",
-        "LACTATED RINGER'S": 'LR',
-        'D5LR': 'DEXTROSE',  # Map to dextrose, will also try LR
-        # Water
-        'STERILE WATER': 'WATER FOR INJECTION',
-        'WATER FOR INJECTION': 'STERILE WATER',
-        # Wrong DrugBank synonyms (C1, C2, etc. are components, not the drug)
-        'GENTAMICIN C2': 'GENTAMICIN',
-        'GENTAMICIN C1': 'GENTAMICIN',
-        'GENTAMICIN C1A': 'GENTAMICIN',
-        'GENTAMICIN': 'GENTAMICIN C2',  # Reverse: search GENTAMICIN finds GENTAMICIN C2
-        # Aluminum combinations
-        'ALUMINUM HYDROXIDE': 'ALUMINIUM HYDROXIDE',
-        'ALUMINIUM HYDROXIDE': 'ALUMINUM HYDROXIDE',
-        'MAGNESIUM HYDROXIDE': 'MAGNESIUM',
-    }
+    # Use constants from unified_constants.py (imported at module level)
+    # GARBAGE_TOKENS, ALL_DRUG_SYNONYMS, DRUGBANK_COMPONENT_SYNONYMS
     
     import re
     
@@ -470,9 +406,9 @@ def run_esoa_to_drug_code(
                 annex_lookup[generic] = []
             annex_lookup[generic].append(candidate)
             
-            # Also add synonym mappings
-            if generic in ANNEX_SYNONYMS:
-                syn = ANNEX_SYNONYMS[generic]
+            # Also add synonym mappings (from unified_constants)
+            if generic in ALL_DRUG_SYNONYMS:
+                syn = ALL_DRUG_SYNONYMS[generic]
                 if syn not in annex_lookup:
                     annex_lookup[syn] = []
                 annex_lookup[syn].append(candidate)
@@ -534,19 +470,12 @@ def run_esoa_to_drug_code(
         
         return generics
     
-    # Known wrong synonyms to fix
-    WRONG_SYNONYMS = {
-        'GENTAMICIN C2': 'GENTAMICIN',
-        'GENTAMICIN C1': 'GENTAMICIN',
-        'GENTAMICIN C1A': 'GENTAMICIN',
-    }
-    
     # Match ESOA to Annex F
     def match_to_drug_code(row):
         generic_raw = row.get("generic_final") or row.get("generic_name") or ""
         
-        # Fix known wrong synonyms
-        for wrong, correct in WRONG_SYNONYMS.items():
+        # Fix known wrong synonyms (from unified_constants)
+        for wrong, correct in DRUGBANK_COMPONENT_SYNONYMS.items():
             if wrong in str(generic_raw).upper():
                 generic_raw = str(generic_raw).upper().replace(wrong, correct)
         
