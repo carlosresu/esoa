@@ -167,16 +167,8 @@ class DrugsAndMedicinePipeline(BasePipeline):
         *,
         timing_hook: Optional[TimingHook] = None,
     ) -> None:
-        if options.flag("skip_unknowns"):
-            return
-        spinner = self._spinner(options)
-        elapsed = self._run_stage(
-            spinner,
-            "Resolve unknowns",
-            lambda: self._run_resolve_unknowns(context.project_root),
-        )
-        if timing_hook:
-            timing_hook("Resolve unknowns", elapsed)
+        # No-op: resolve_unknowns was deprecated and moved to debug/old_files
+        pass
 
     # ----------------------------
     # Helpers
@@ -323,21 +315,3 @@ class DrugsAndMedicinePipeline(BasePipeline):
             shutil.copy2(parquet_src, dest.with_suffix(".parquet"))
         return dest
 
-    @staticmethod
-    def _run_resolve_unknowns(project_root: Path) -> None:
-        pipeline_path = project_root / "pipelines" / "drugs" / "scripts" / "resolve_unknowns_drugs.py"
-        legacy_path = project_root / "resolve_unknowns.py"
-        if pipeline_path.is_file():
-            mod_name = "pipelines.drugs.scripts.resolve_unknowns_drugs"
-        elif legacy_path.is_file():
-            mod_name = "resolve_unknowns"
-        else:
-            return
-        with open(os.devnull, "w") as devnull:
-            subprocess.run(
-                [sys.executable, "-m", mod_name],
-                check=True,
-                cwd=str(project_root),
-                stdout=devnull,
-                stderr=devnull,
-            )
