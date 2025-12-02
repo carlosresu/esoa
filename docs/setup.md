@@ -7,7 +7,7 @@ Use the platform-specific installer at the repository root to provision everythi
 
 What the installers do:
 - Update git submodules so dependency trees are present.
-- Install pyenv/pyenv-win if missing, then install Python 3.12.10.
+- Install pyenv/pyenv-win if missing, then install Python 3.12.12.
 - Create or reuse `.venv` in the repo root and install `requirements.txt`.
 - Install the FDA PH scraper requirements via its bundled installer.
 - Install R (via winget/choco on Windows; Homebrew or common package managers on macOS/Linux) so the R helpers can run.

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Cross-platform bootstrapper for macOS/Linux: installs pyenv, Python 3.12.10, R, and Python deps in .venv.
+# Cross-platform bootstrapper for macOS/Linux: installs pyenv, Python 3.12.12, R, and Python deps in .venv.
 set -euo pipefail
 
-TARGET_PYTHON="3.12.10"
+TARGET_PYTHON="3.12.12"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="${REPO_ROOT}/.venv"
 

@@ -1,7 +1,7 @@
 $ErrorActionPreference = "Stop"
 
 $RepoRoot = Split-Path -Parent $PSCommandPath
-$TargetPython = "3.12.10"
+$TargetPython = "3.12.12"
 $VenvDir = Join-Path $RepoRoot ".venv"
 
 function Write-Info {
