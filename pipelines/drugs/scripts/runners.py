@@ -365,6 +365,15 @@ def run_esoa_to_drug_code(
         # Water
         'STERILE WATER': 'WATER FOR INJECTION',
         'WATER FOR INJECTION': 'STERILE WATER',
+        # Wrong DrugBank synonyms (C1, C2, etc. are components, not the drug)
+        'GENTAMICIN C2': 'GENTAMICIN',
+        'GENTAMICIN C1': 'GENTAMICIN',
+        'GENTAMICIN C1A': 'GENTAMICIN',
+        'GENTAMICIN': 'GENTAMICIN C2',  # Reverse: search GENTAMICIN finds GENTAMICIN C2
+        # Aluminum combinations
+        'ALUMINUM HYDROXIDE': 'ALUMINIUM HYDROXIDE',
+        'ALUMINIUM HYDROXIDE': 'ALUMINUM HYDROXIDE',
+        'MAGNESIUM HYDROXIDE': 'MAGNESIUM',
     }
     
     import re
@@ -406,9 +415,15 @@ def run_esoa_to_drug_code(
         annex_generics = []
         for part in str(generic_raw).split('|'):
             part = part.strip().upper()
-            if part and part not in GARBAGE_TOKENS and len(part) > 2:
-                if not any(c.isdigit() for c in part):
-                    annex_generics.append(part)
+            if not part or part in GARBAGE_TOKENS or len(part) <= 2:
+                continue
+            # Skip pure dose patterns (e.g., "500MG", "100ML")
+            # But allow drug names with numbers (e.g., "GENTAMICIN C2", "VITAMIN B12")
+            if re.match(r'^\d+(\.\d+)?\s*(MG|ML|MCG|G|IU|%|CC|L)$', part, re.IGNORECASE):
+                continue
+            if part.replace('.', '').isdigit():
+                continue
+            annex_generics.append(part)
         
         if not annex_generics:
             continue
@@ -478,10 +493,53 @@ def run_esoa_to_drug_code(
             clean.append(p)
         return clean
     
+    def extract_generics_from_description(desc):
+        """Fallback: extract generic names from DESCRIPTION when generic_final is empty."""
+        if not desc:
+            return []
+        desc = str(desc).upper()
+        generics = []
+        
+        # Split on common separators
+        # Handle "ALUMINUM+MAGNESIUM", "IBUPROFEN + PARACETAMOL", etc.
+        parts = re.split(r'[+/]|\s+AND\s+|\s+\+\s+', desc)
+        
+        for part in parts:
+            # Extract the first word(s) before dose info
+            # e.g., "ALUMINUM 200MG" -> "ALUMINUM"
+            match = re.match(r'^([A-Z][A-Z\s\-]+?)(?:\s*\d|\s*\(|$)', part.strip())
+            if match:
+                generic = match.group(1).strip()
+                # Clean up
+                generic = re.sub(r'\s+', ' ', generic)
+                if generic and len(generic) > 2 and generic not in GARBAGE_TOKENS:
+                    generics.append(generic)
+        
+        return generics
+    
+    # Known wrong synonyms to fix
+    WRONG_SYNONYMS = {
+        'GENTAMICIN C2': 'GENTAMICIN',
+        'GENTAMICIN C1': 'GENTAMICIN',
+        'GENTAMICIN C1A': 'GENTAMICIN',
+    }
+    
     # Match ESOA to Annex F
     def match_to_drug_code(row):
         generic_raw = row.get("generic_final") or row.get("generic_name") or ""
+        
+        # Fix known wrong synonyms
+        for wrong, correct in WRONG_SYNONYMS.items():
+            if wrong in str(generic_raw).upper():
+                generic_raw = str(generic_raw).upper().replace(wrong, correct)
+        
         generics = extract_clean_generics(generic_raw)
+        
+        # Fallback: if no generics from generic_final, try extracting from DESCRIPTION
+        esoa_desc = row.get("DESCRIPTION") or ""
+        if not generics:
+            generics = extract_generics_from_description(esoa_desc)
+        
         atc = normalize_for_match(row.get("atc_code_final") or row.get("atc_code"))
         esoa_drugbank_id = row.get("drugbank_id_final") or row.get("drugbank_id")
         if pd.notna(esoa_drugbank_id):
@@ -490,7 +548,6 @@ def run_esoa_to_drug_code(
             esoa_drugbank_id = None
         
         # Extract dose from ESOA DESCRIPTION
-        esoa_desc = row.get("DESCRIPTION") or ""
         esoa_dose = extract_dose_mg(esoa_desc)
         
         if not generics:
