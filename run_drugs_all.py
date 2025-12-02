@@ -8,17 +8,27 @@ Part 2: Match Annex F with ATC/DrugBank IDs
 Part 3: Match ESOA with ATC/DrugBank IDs
 Part 4: Bridge ESOA to Annex F Drug Codes via ATC/DrugBank ID
 """
-
 from __future__ import annotations
+
+# === Auto-activate virtual environment ===
+# This allows the script to work with Code Runner or direct execution
+import os
+import sys
+from pathlib import Path
+
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_VENV_PYTHON = _SCRIPT_DIR / ".venv" / "bin" / "python"
+
+# Re-execute with venv Python if not already in venv
+if _VENV_PYTHON.exists() and sys.executable != str(_VENV_PYTHON):
+    os.execv(str(_VENV_PYTHON), [str(_VENV_PYTHON), __file__] + sys.argv[1:])
+# === End auto-activate ===
 
 import argparse
 import csv
-import os
 import re
 import shutil
 import subprocess
-import sys
-from pathlib import Path
 from typing import Callable, List, Optional, Sequence, TypeVar
 
 import pandas as pd
