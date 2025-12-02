@@ -10,6 +10,10 @@ Prerequisites:
 
 import sys
 
+# Sync shared scripts to submodules before running
+from pipelines.drugs.scripts.sync_to_submodules import sync_all
+sync_all()
+
 from pipelines.drugs.scripts.runners import run_esoa_tagging
 
 if __name__ == "__main__":

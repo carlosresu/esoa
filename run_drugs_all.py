@@ -23,6 +23,10 @@ from typing import Callable, List, Optional, Sequence, TypeVar
 
 import pandas as pd
 
+# Sync shared scripts to submodules before running
+from pipelines.drugs.scripts.sync_to_submodules import sync_all
+sync_all()
+
 from pipelines.drugs.constants import PIPELINE_INPUTS_DIR, PROJECT_ROOT
 from pipelines.drugs.pipeline import DrugsAndMedicinePipeline
 from pipelines.drugs.scripts.prepare import prepare

@@ -21,6 +21,10 @@ import sys
 from pathlib import Path
 from typing import Optional, Sequence
 
+# Sync shared scripts to submodules before running
+from pipelines.drugs.scripts.sync_to_submodules import sync_all
+sync_all()
+
 from pipelines.drugs.scripts.spinner import run_with_spinner
 
 
