@@ -35,6 +35,7 @@ UNIVERSAL_FILES = [
 SUBMODULE_SPECIFIC_FILES = {
     "fda_ph_scraper": {
         "scripts": [
+            "unified_constants.py",  # Required by text_utils.py
             "text_utils.py",
             "routes_forms.py",
         ]
