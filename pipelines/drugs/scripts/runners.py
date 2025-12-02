@@ -334,6 +334,7 @@ def run_esoa_to_drug_code(
     
     # Common synonym mappings for matching
     ANNEX_SYNONYMS = {
+        # Drug name synonyms
         'CO-AMOXICLAV': 'AMOXICILLIN AND BETA-LACTAMASE INHIBITOR',
         'AMOXICILLIN AND BETA-LACTAMASE INHIBITOR': 'CO-AMOXICLAV',
         'AMOXICILLIN-CLAVULANIC ACID': 'CO-AMOXICLAV',
@@ -350,7 +351,46 @@ def run_esoa_to_drug_code(
         'LIDOCAINE': 'LIGNOCAINE',
         'FRUSEMIDE': 'FUROSEMIDE',
         'FUROSEMIDE': 'FRUSEMIDE',
+        'BENZYLPENICILLIN': 'PENICILLIN G',
+        'PENICILLIN G': 'BENZYLPENICILLIN',
+        # IV Fluids
+        'D5W': 'DEXTROSE',
+        'D5': 'DEXTROSE',
+        'NSS': 'SODIUM CHLORIDE',
+        'PNSS': 'SODIUM CHLORIDE',
+        'NORMAL SALINE': 'SODIUM CHLORIDE',
+        'LR': "LACTATED RINGER'S",
+        "LACTATED RINGER'S": 'LR',
+        'D5LR': 'DEXTROSE',  # Map to dextrose, will also try LR
+        # Water
+        'STERILE WATER': 'WATER FOR INJECTION',
+        'WATER FOR INJECTION': 'STERILE WATER',
     }
+    
+    import re
+    
+    def extract_dose_mg(text):
+        """Extract dose in mg from text. Returns None if not found."""
+        if not text:
+            return None
+        text = str(text).upper()
+        # Match patterns like "600MG", "600 MG", "100MG/5ML", "200 MG/ML"
+        # For concentrations like 100MG/5ML, extract 100
+        patterns = [
+            r'(\d+(?:\.\d+)?)\s*MG(?:/\d+\s*ML)?(?:\s|$|[^A-Z])',  # 600MG, 100MG/5ML
+            r'(\d+(?:\.\d+)?)\s*MCG',  # 500MCG -> convert to mg
+            r'(\d+(?:\.\d+)?)\s*G(?:\s|$|[^A-Z])',  # 1G -> convert to mg
+        ]
+        for i, pattern in enumerate(patterns):
+            match = re.search(pattern, text)
+            if match:
+                val = float(match.group(1))
+                if i == 1:  # MCG -> MG
+                    val = val / 1000
+                elif i == 2:  # G -> MG
+                    val = val * 1000
+                return val
+        return None
     
     annex_lookup = {}  # generic_name -> list of candidates
     drugbank_lookup = {}  # drugbank_id -> list of candidates
@@ -360,6 +400,7 @@ def run_esoa_to_drug_code(
             continue
         
         generic_raw = row.get("matched_generic_name") or row.get("generic_name") or ""
+        drug_desc = row.get("Drug Description") or ""
         
         # Extract clean generics from pipe-separated string (Annex F also has garbage)
         annex_generics = []
@@ -379,11 +420,16 @@ def run_esoa_to_drug_code(
         else:
             drugbank_id = None
         
+        # Extract dose from Drug Description
+        annex_dose = extract_dose_mg(drug_desc)
+        
         candidate = {
             "drug_code": drug_code,
             "atc_code": atc,
             "drugbank_id": drugbank_id,
             "generic_name": annex_generics[0],  # Primary generic
+            "dose_mg": annex_dose,
+            "description": drug_desc,
         }
         
         # Index by each generic component and its synonyms
@@ -418,12 +464,18 @@ def run_esoa_to_drug_code(
         seen = set()
         clean = []
         for p in parts:
-            if p and p not in GARBAGE_TOKENS and p not in seen and len(p) > 2:
-                # Skip if looks like a dose (contains digits followed by unit)
-                if any(c.isdigit() for c in p):
-                    continue
-                seen.add(p)
-                clean.append(p)
+            if not p or p in GARBAGE_TOKENS or p in seen or len(p) <= 2:
+                continue
+            # Skip if looks like a pure dose (e.g., "500MG", "100ML", "10%")
+            # But allow vitamin names like "B1", "B12", "B6"
+            import re
+            if re.match(r'^\d+(\.\d+)?\s*(MG|ML|MCG|G|IU|%|CC|L)$', p, re.IGNORECASE):
+                continue
+            # Skip pure numbers
+            if p.replace('.', '').isdigit():
+                continue
+            seen.add(p)
+            clean.append(p)
         return clean
     
     # Match ESOA to Annex F
@@ -437,10 +489,19 @@ def run_esoa_to_drug_code(
         else:
             esoa_drugbank_id = None
         
+        # Extract dose from ESOA DESCRIPTION
+        esoa_desc = row.get("DESCRIPTION") or ""
+        esoa_dose = extract_dose_mg(esoa_desc)
+        
         if not generics:
             # Try DrugBank ID match even without generic
             if esoa_drugbank_id and esoa_drugbank_id in drugbank_lookup:
                 candidates = drugbank_lookup[esoa_drugbank_id]
+                # Try to find dose match even with DrugBank ID
+                if esoa_dose:
+                    dose_matches = [c for c in candidates if c.get("dose_mg") == esoa_dose]
+                    if dose_matches:
+                        return dose_matches[0]["drug_code"], "matched_drugbank_id_dose"
                 return candidates[0]["drug_code"], "matched_drugbank_id"
             return None, "no_generic"
         
@@ -455,22 +516,43 @@ def run_esoa_to_drug_code(
             # Try DrugBank ID fallback
             if esoa_drugbank_id and esoa_drugbank_id in drugbank_lookup:
                 candidates = drugbank_lookup[esoa_drugbank_id]
+                if esoa_dose:
+                    dose_matches = [c for c in candidates if c.get("dose_mg") == esoa_dose]
+                    if dose_matches:
+                        return dose_matches[0]["drug_code"], "matched_drugbank_id_dose"
                 return candidates[0]["drug_code"], "matched_drugbank_id"
             return None, "generic_not_in_annex"
         
-        # Priority 1: Match by ATC code
+        # Priority 1: Match by ATC code + dose (EXACT dose match required)
+        if atc and esoa_dose:
+            atc_dose_matches = [c for c in candidates if c["atc_code"] == atc and c.get("dose_mg") == esoa_dose]
+            if atc_dose_matches:
+                return atc_dose_matches[0]["drug_code"], "matched_atc_dose"
+        
+        # Priority 2: Match by dose only (generic + exact dose)
+        if esoa_dose:
+            dose_matches = [c for c in candidates if c.get("dose_mg") == esoa_dose]
+            if dose_matches:
+                # If multiple dose matches, prefer one with ATC match
+                if atc:
+                    atc_in_dose = [c for c in dose_matches if c["atc_code"] == atc]
+                    if atc_in_dose:
+                        return atc_in_dose[0]["drug_code"], "matched_atc_dose"
+                return dose_matches[0]["drug_code"], "matched_generic_dose"
+        
+        # Priority 3: Match by ATC code only (no dose match available)
         if atc:
             atc_matches = [c for c in candidates if c["atc_code"] == atc]
             if atc_matches:
                 return atc_matches[0]["drug_code"], "matched_generic_atc"
         
-        # Priority 2: Match by DrugBank ID
+        # Priority 4: Match by DrugBank ID
         if esoa_drugbank_id:
             dbid_matches = [c for c in candidates if c["drugbank_id"] == esoa_drugbank_id]
             if dbid_matches:
                 return dbid_matches[0]["drug_code"], "matched_drugbank_id"
         
-        # Fall back to generic-only match
+        # Fall back to generic-only match (no dose/ATC match)
         return candidates[0]["drug_code"], "matched_generic_only"
     
     if verbose:
