@@ -13,12 +13,21 @@ This script refreshes:
 
 Run this before the matching steps to ensure all reference data is fresh.
 """
-
 from __future__ import annotations
 
-import argparse
+# === Auto-activate virtual environment ===
+import os
 import sys
 from pathlib import Path
+
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_VENV_PYTHON = _SCRIPT_DIR / ".venv" / "bin" / "python"
+
+if _VENV_PYTHON.exists() and sys.executable != str(_VENV_PYTHON):
+    os.execv(str(_VENV_PYTHON), [str(_VENV_PYTHON), __file__] + sys.argv[1:])
+# === End auto-activate ===
+
+import argparse
 from typing import Optional, Sequence
 
 # Sync shared scripts to submodules before running
