@@ -321,6 +321,37 @@ def run_esoa_to_drug_code(
                 variants.add(syn)
         return variants
     
+    # Garbage tokens to filter out from generic_final
+    GARBAGE_TOKENS = {
+        'MG', 'ML', 'MCG', 'G', 'IU', 'UNIT', 'UNITS',
+        'TAB', 'TABLET', 'CAP', 'CAPSULE', 'AMP', 'AMPULE', 'VIAL', 'BOTTLE',
+        'ORAL', 'IV', 'IM', 'SC', 'TOPICAL',
+        'FORTE', 'PLUS', 'EXTRA', 'MAX', 'ULTRA', 'JUNIOR', 'PEDIA', 'ADULT',
+        'ORANGE', 'STRAWBERRY', 'CHERRY', 'GRAPE', 'MINT', 'VANILLA', 'LEMON',
+        'PNF', 'NAN', '-', '+', '/', 'AND', 'WITH',
+        'SOLVENT', 'DILUENT', 'SOLUTION', 'SUSPENSION', 'POWDER',
+    }
+    
+    # Common synonym mappings for matching
+    ANNEX_SYNONYMS = {
+        'CO-AMOXICLAV': 'AMOXICILLIN AND BETA-LACTAMASE INHIBITOR',
+        'AMOXICILLIN AND BETA-LACTAMASE INHIBITOR': 'CO-AMOXICLAV',
+        'AMOXICILLIN-CLAVULANIC ACID': 'CO-AMOXICLAV',
+        'AMOXICILLIN + CLAVULANIC ACID': 'CO-AMOXICLAV',
+        'ACETAMINOPHEN': 'PARACETAMOL',
+        'PARACETAMOL': 'ACETAMINOPHEN',
+        'SALBUTAMOL': 'ALBUTEROL',
+        'ALBUTEROL': 'SALBUTAMOL',
+        'ADRENALINE': 'EPINEPHRINE',
+        'EPINEPHRINE': 'ADRENALINE',
+        'NORADRENALINE': 'NOREPINEPHRINE',
+        'NOREPINEPHRINE': 'NORADRENALINE',
+        'LIGNOCAINE': 'LIDOCAINE',
+        'LIDOCAINE': 'LIGNOCAINE',
+        'FRUSEMIDE': 'FUROSEMIDE',
+        'FUROSEMIDE': 'FRUSEMIDE',
+    }
+    
     annex_lookup = {}  # generic_name -> list of candidates
     drugbank_lookup = {}  # drugbank_id -> list of candidates
     for _, row in annex_df.iterrows():
@@ -328,8 +359,17 @@ def run_esoa_to_drug_code(
         if pd.isna(drug_code):
             continue
         
-        generic = normalize_for_match(row.get("matched_generic_name") or row.get("generic_name"))
-        if not generic:
+        generic_raw = row.get("matched_generic_name") or row.get("generic_name") or ""
+        
+        # Extract clean generics from pipe-separated string (Annex F also has garbage)
+        annex_generics = []
+        for part in str(generic_raw).split('|'):
+            part = part.strip().upper()
+            if part and part not in GARBAGE_TOKENS and len(part) > 2:
+                if not any(c.isdigit() for c in part):
+                    annex_generics.append(part)
+        
+        if not annex_generics:
             continue
         
         atc = normalize_for_match(row.get("atc_code"))
@@ -343,13 +383,21 @@ def run_esoa_to_drug_code(
             "drug_code": drug_code,
             "atc_code": atc,
             "drugbank_id": drugbank_id,
-            "generic_name": generic,
+            "generic_name": annex_generics[0],  # Primary generic
         }
         
-        # Index by generic name
-        if generic not in annex_lookup:
-            annex_lookup[generic] = []
-        annex_lookup[generic].append(candidate)
+        # Index by each generic component and its synonyms
+        for generic in annex_generics:
+            if generic not in annex_lookup:
+                annex_lookup[generic] = []
+            annex_lookup[generic].append(candidate)
+            
+            # Also add synonym mappings
+            if generic in ANNEX_SYNONYMS:
+                syn = ANNEX_SYNONYMS[generic]
+                if syn not in annex_lookup:
+                    annex_lookup[syn] = []
+                annex_lookup[syn].append(candidate)
         
         # Index by drugbank_id
         if drugbank_id:
@@ -361,9 +409,27 @@ def run_esoa_to_drug_code(
         print(f"  Annex F lookup: {len(annex_lookup):,} unique generics")
         print(f"  DrugBank lookup: {len(drugbank_lookup):,} unique drugbank_ids")
     
+    def extract_clean_generics(generic_str):
+        """Extract clean generic names from pipe-separated string."""
+        if not generic_str:
+            return []
+        parts = [p.strip().upper() for p in str(generic_str).split('|')]
+        # Filter out garbage and deduplicate while preserving order
+        seen = set()
+        clean = []
+        for p in parts:
+            if p and p not in GARBAGE_TOKENS and p not in seen and len(p) > 2:
+                # Skip if looks like a dose (contains digits followed by unit)
+                if any(c.isdigit() for c in p):
+                    continue
+                seen.add(p)
+                clean.append(p)
+        return clean
+    
     # Match ESOA to Annex F
     def match_to_drug_code(row):
-        generic = normalize_for_match(row.get("generic_final") or row.get("generic_name"))
+        generic_raw = row.get("generic_final") or row.get("generic_name") or ""
+        generics = extract_clean_generics(generic_raw)
         atc = normalize_for_match(row.get("atc_code_final") or row.get("atc_code"))
         esoa_drugbank_id = row.get("drugbank_id_final") or row.get("drugbank_id")
         if pd.notna(esoa_drugbank_id):
@@ -371,17 +437,19 @@ def run_esoa_to_drug_code(
         else:
             esoa_drugbank_id = None
         
-        if not generic:
+        if not generics:
             # Try DrugBank ID match even without generic
             if esoa_drugbank_id and esoa_drugbank_id in drugbank_lookup:
                 candidates = drugbank_lookup[esoa_drugbank_id]
                 return candidates[0]["drug_code"], "matched_drugbank_id"
             return None, "no_generic"
         
-        # Try all name variants (original + synonyms)
+        # Try each generic component against the lookup
         candidates = []
-        for variant in get_all_name_variants(generic):
-            candidates.extend(annex_lookup.get(variant, []))
+        for generic in generics:
+            # Try all name variants (original + synonyms)
+            for variant in get_all_name_variants(generic):
+                candidates.extend(annex_lookup.get(variant, []))
         
         if not candidates:
             # Try DrugBank ID fallback
