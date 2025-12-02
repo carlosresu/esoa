@@ -59,50 +59,45 @@ def build_unified_reference(
     con = duckdb.connect(":memory:")
     
     # =========================================================================
-    # Load source data
+    # Load source data (LEAN exports from drugbank_lean_export.R)
     # =========================================================================
     if verbose:
-        print("\n[Step 1] Loading source data...")
+        print("\n[Step 1] Loading lean exports...")
     
-    # DrugBank generics (exploded - we'll extract what we need)
-    db_generics_path = inputs_dir / "drugbank_generics_master.csv"
-    if db_generics_path.exists():
-        con.execute(f"CREATE TABLE drugbank_generics AS SELECT * FROM read_csv_auto('{db_generics_path}')")
-        if verbose:
-            count = con.execute("SELECT COUNT(DISTINCT drugbank_id) FROM drugbank_generics").fetchone()[0]
-            print(f"  - drugbank_generics: {count:,} unique drugs")
+    # Lean DrugBank tables
+    lean_tables = {
+        "generics": "generics_lean.csv",
+        "synonyms": "synonyms_lean.csv",
+        "dosages": "dosages_lean.csv",
+        "atc": "atc_lean.csv",
+        "brands": "brands_lean.csv",
+        "salts": "salts_lean.csv",
+        "mixtures": "mixtures_lean.csv",
+        "products": "products_lean.csv",
+    }
     
-    # DrugBank products (valid form × route × dose combos)
-    db_products_path = inputs_dir / "drugbank_products_export.csv"
-    if db_products_path.exists():
-        con.execute(f"CREATE TABLE drugbank_products AS SELECT * FROM read_csv_auto('{db_products_path}')")
-        if verbose:
-            count = con.execute("SELECT COUNT(*) FROM drugbank_products").fetchone()[0]
-            print(f"  - drugbank_products: {count:,} rows")
+    for table_name, filename in lean_tables.items():
+        path = inputs_dir / filename
+        if path.exists():
+            con.execute(f"CREATE TABLE {table_name} AS SELECT * FROM read_csv_auto('{path}')")
+            if verbose:
+                count = con.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
+                print(f"  - {table_name}: {count:,} rows")
     
-    # DrugBank brands
-    db_brands_path = inputs_dir / "drugbank_brands_master.csv"
-    if db_brands_path.exists():
-        con.execute(f"CREATE TABLE drugbank_brands AS SELECT * FROM read_csv_auto('{db_brands_path}')")
-        if verbose:
-            count = con.execute("SELECT COUNT(*) FROM drugbank_brands").fetchone()[0]
-            print(f"  - drugbank_brands: {count:,} rows")
+    # Lookup tables
+    lookup_tables = {
+        "lookup_salt_suffixes": "lookup_salt_suffixes.csv",
+        "lookup_pure_salts": "lookup_pure_salts.csv",
+        "lookup_form_canonical": "lookup_form_canonical.csv",
+        "lookup_route_canonical": "lookup_route_canonical.csv",
+        "lookup_form_to_route": "lookup_form_to_route.csv",
+        "lookup_per_unit": "lookup_per_unit.csv",
+    }
     
-    # DrugBank mixtures
-    db_mixtures_path = inputs_dir / "drugbank_mixtures_master.csv"
-    if db_mixtures_path.exists():
-        con.execute(f"CREATE TABLE drugbank_mixtures AS SELECT * FROM read_csv_auto('{db_mixtures_path}')")
-        if verbose:
-            count = con.execute("SELECT COUNT(*) FROM drugbank_mixtures").fetchone()[0]
-            print(f"  - drugbank_mixtures: {count:,} rows")
-    
-    # DrugBank salts
-    db_salts_path = inputs_dir / "drugbank_salts_master.csv"
-    if db_salts_path.exists():
-        con.execute(f"CREATE TABLE drugbank_salts AS SELECT * FROM read_csv_auto('{db_salts_path}')")
-        if verbose:
-            count = con.execute("SELECT COUNT(*) FROM drugbank_salts").fetchone()[0]
-            print(f"  - drugbank_salts: {count:,} rows")
+    for table_name, filename in lookup_tables.items():
+        path = inputs_dir / filename
+        if path.exists():
+            con.execute(f"CREATE TABLE {table_name} AS SELECT * FROM read_csv_auto('{path}')")
     
     # WHO ATC
     who_files = sorted(glob.glob(str(inputs_dir / "who_atc_*.parquet")))
@@ -131,12 +126,12 @@ def build_unified_reference(
     generics_df = con.execute("""
         SELECT DISTINCT
             drugbank_id,
-            UPPER(TRIM(canonical_generic_name)) as generic_name,
+            UPPER(TRIM(name)) as generic_name,
+            name_key,
             'drugbank' as source
-        FROM drugbank_generics
+        FROM generics
         WHERE drugbank_id IS NOT NULL
-          AND canonical_generic_name IS NOT NULL
-          AND canonical_generic_name != ''
+          AND name IS NOT NULL AND name != ''
     """).fetchdf()
     
     # Add WHO-only entries
@@ -146,6 +141,7 @@ def build_unified_reference(
             SELECT DISTINCT
                 NULL as drugbank_id,
                 UPPER(TRIM(atc_name)) as generic_name,
+                LOWER(REGEXP_REPLACE(atc_name, '[^a-zA-Z0-9 ]', '', 'g')) as name_key,
                 'who' as source
             FROM who_atc
             WHERE atc_name IS NOT NULL AND atc_name != ''
@@ -165,13 +161,14 @@ def build_unified_reference(
     
     synonyms_df = con.execute("""
         SELECT 
-            drugbank_id,
-            UPPER(TRIM(canonical_generic_name)) as generic_name,
-            STRING_AGG(DISTINCT UPPER(TRIM(lexeme)), '|') as synonyms
-        FROM drugbank_generics
-        WHERE drugbank_id IS NOT NULL
-          AND lexeme IS NOT NULL AND lexeme != ''
-        GROUP BY drugbank_id, canonical_generic_name
+            s.drugbank_id,
+            UPPER(TRIM(g.name)) as generic_name,
+            STRING_AGG(DISTINCT UPPER(TRIM(s.synonym)), '|') as synonyms
+        FROM synonyms s
+        LEFT JOIN generics g ON s.drugbank_id = g.drugbank_id
+        WHERE s.drugbank_id IS NOT NULL
+          AND s.synonym IS NOT NULL AND s.synonym != ''
+        GROUP BY s.drugbank_id, g.name
     """).fetchdf()
     
     # =========================================================================
@@ -182,12 +179,13 @@ def build_unified_reference(
     
     atc_map_df = con.execute("""
         SELECT DISTINCT
-            drugbank_id,
-            UPPER(TRIM(canonical_generic_name)) as generic_name,
-            TRIM(atc_code) as atc_code
-        FROM drugbank_generics
-        WHERE drugbank_id IS NOT NULL
-          AND atc_code IS NOT NULL AND atc_code != ''
+            a.drugbank_id,
+            UPPER(TRIM(g.name)) as generic_name,
+            TRIM(a.atc_code) as atc_code
+        FROM atc a
+        LEFT JOIN generics g ON a.drugbank_id = g.drugbank_id
+        WHERE a.drugbank_id IS NOT NULL
+          AND a.atc_code IS NOT NULL AND a.atc_code != ''
     """).fetchdf()
     
     # Add WHO ATC entries
@@ -208,44 +206,23 @@ def build_unified_reference(
     
     # =========================================================================
     # TABLE 4: unified_dosages - drugbank_id × form × route × dose (VALID combos)
-    # NOTE: ATC codes have NO direct link to form/route/dose in raw DrugBank!
-    # The dosages table has valid combos per drugbank_id only.
     # =========================================================================
     if verbose:
         print("\n[Step 5] Building unified_dosages (valid combos only)...")
     
-    # Try to load lean dosages if available, otherwise use existing exports
-    lean_dosages_path = inputs_dir.parent.parent / "dependencies" / "drugbank_generics" / "output" / "drugbank_dosages_lean.csv"
-    
-    if lean_dosages_path.exists():
-        # Use lean export from raw dbdataset
-        con.execute(f"CREATE TABLE drugbank_dosages AS SELECT * FROM read_csv_auto('{lean_dosages_path}')")
-        dosages_df = con.execute("""
-            SELECT DISTINCT
-                drugbank_id,
-                UPPER(TRIM(form)) as form,
-                UPPER(TRIM(route)) as route,
-                UPPER(TRIM(strength)) as dose
-            FROM drugbank_dosages
-            WHERE drugbank_id IS NOT NULL
-        """).fetchdf()
-        if verbose:
-            print(f"    - Loaded from lean export: {len(dosages_df):,} valid combos")
-    else:
-        # Fallback to existing products export
-        if verbose:
-            print("    - Using drugbank_products as fallback")
-        dosages_df = con.execute("""
-            SELECT DISTINCT
-                drugbank_id,
-                UPPER(TRIM(dosage_form)) as form,
-                UPPER(TRIM(route)) as route,
-                UPPER(TRIM(strength)) as dose
-            FROM drugbank_products
-            WHERE drugbank_id IS NOT NULL
-        """).fetchdf()
+    dosages_df = con.execute("""
+        SELECT DISTINCT
+            drugbank_id,
+            UPPER(TRIM(form)) as form,
+            UPPER(TRIM(route)) as route,
+            UPPER(TRIM(strength)) as dose
+        FROM dosages
+        WHERE drugbank_id IS NOT NULL
+    """).fetchdf()
     
     dosages_df = dosages_df.fillna('').drop_duplicates()
+    if verbose:
+        print(f"    - {len(dosages_df):,} valid combos")
     
     # =========================================================================
     # TABLE 5: unified_brands - brand → generic mapping
@@ -270,16 +247,17 @@ def build_unified_reference(
     except Exception:
         pass
     
-    # DrugBank brands
+    # DrugBank brands (lean export)
     try:
         db_brands_df = con.execute("""
             SELECT DISTINCT
-                UPPER(TRIM(brand_name)) as brand_name,
-                UPPER(TRIM(canonical_generic_name)) as generic_name,
-                drugbank_id,
+                UPPER(TRIM(b.brand)) as brand_name,
+                UPPER(TRIM(g.name)) as generic_name,
+                b.drugbank_id,
                 'drugbank' as source
-            FROM drugbank_brands
-            WHERE brand_name IS NOT NULL AND brand_name != ''
+            FROM brands b
+            LEFT JOIN generics g ON b.drugbank_id = g.drugbank_id
+            WHERE b.brand IS NOT NULL AND b.brand != ''
         """).fetchdf()
         brands_list.append(db_brands_df)
     except Exception:
@@ -296,11 +274,12 @@ def build_unified_reference(
     
     salts_df = con.execute("""
         SELECT DISTINCT
-            parent_drugbank_id as drugbank_id,
-            UPPER(TRIM(salt_name_normalized)) as salt_form
-        FROM drugbank_salts
-        WHERE parent_drugbank_id IS NOT NULL
-          AND salt_name_normalized IS NOT NULL
+            drugbank_id,
+            UPPER(TRIM(name)) as salt_form,
+            name_key as salt_key
+        FROM salts
+        WHERE drugbank_id IS NOT NULL
+          AND name IS NOT NULL AND name != ''
     """).fetchdf()
     
     salts_df = salts_df.fillna('').drop_duplicates()
@@ -311,30 +290,22 @@ def build_unified_reference(
     if verbose:
         print("\n[Step 8] Building unified_mixtures...")
     
+    # Lean export already has component_key_sorted and component_count
     mixtures_df = con.execute("""
         SELECT DISTINCT
-            mixture_drugbank_id as drugbank_id,
+            drugbank_id,
             UPPER(TRIM(mixture_name)) as mixture_name,
-            component_drugbank_ids,
-            UPPER(TRIM(ingredient_components)) as component_generics
-        FROM drugbank_mixtures
-        WHERE mixture_drugbank_id IS NOT NULL
-          AND ingredient_components IS NOT NULL
-          AND ingredient_components != ''
+            component_generics,
+            component_keys,
+            component_key_sorted as component_key,
+            component_count
+        FROM mixtures
+        WHERE drugbank_id IS NOT NULL
+          AND component_generics IS NOT NULL
+          AND component_generics != ''
     """).fetchdf()
     
-    # Add component_key for fast lookup
-    def make_component_key(components_str):
-        if not components_str:
-            return ""
-        parts = [p.strip().upper() for p in components_str.split(';') if p.strip()]
-        return '|'.join(sorted(parts))
-    
-    mixtures_df['component_key'] = mixtures_df['component_generics'].apply(make_component_key)
-    mixtures_df['component_count'] = mixtures_df['component_generics'].apply(
-        lambda x: len([p for p in x.split(';') if p.strip()]) if x else 0
-    )
-    mixtures_df = mixtures_df.drop_duplicates(subset=['component_key'], keep='first')
+    mixtures_df = mixtures_df.fillna('').drop_duplicates(subset=['component_key'], keep='first')
     
     # =========================================================================
     # Save all tables

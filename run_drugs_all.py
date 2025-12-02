@@ -424,11 +424,9 @@ def refresh_drugbank_generics_exports(*, verbose: bool = True) -> tuple[Optional
     import multiprocessing
     worker_count = min(8, multiprocessing.cpu_count())
     
+    # Use lean export script (replaces all old R scripts)
     scripts = [
-        "drugbank_generics.R",
-        "drugbank_mixtures.R",
-        "drugbank_brands.R",
-        "drugbank_salts.R",
+        "drugbank_lean_export.R",
     ]
     
     # Set env vars for R scripts
@@ -481,41 +479,48 @@ def refresh_drugbank_generics_exports(*, verbose: bool = True) -> tuple[Optional
         sys.stdout.flush()
     
     module_output = drugbank_dir / "output"
-    for filename in (
-        "drugbank_generics_master.csv",
-        "drugbank_mixtures_master.csv",
-        "drugbank_brands_master.csv",
-        "drugbank_products_export.csv",
-        "drugbank_salts_master.csv",
-        "drugbank_pure_salts.csv",
-        "drugbank_salt_suffixes.csv",
-    ):
+    
+    # Copy lean exports (new format)
+    lean_files = [
+        "generics_lean.csv",
+        "synonyms_lean.csv", 
+        "dosages_lean.csv",
+        "atc_lean.csv",
+        "brands_lean.csv",
+        "salts_lean.csv",
+        "mixtures_lean.csv",
+        "products_lean.csv",
+        # Lookup tables
+        "lookup_salt_suffixes.csv",
+        "lookup_pure_salts.csv",
+        "lookup_form_canonical.csv",
+        "lookup_route_canonical.csv",
+        "lookup_form_to_route.csv",
+        "lookup_per_unit.csv",
+    ]
+    
+    for filename in lean_files:
         source = module_output / filename
         if source.is_file():
             _copy_to_pipeline_inputs(source, DRUGS_INPUTS_DIR / filename)
-    inputs_generics_master = DRUGS_INPUTS_DIR / "drugbank_generics_master.csv"
-    inputs_brands = DRUGS_INPUTS_DIR / "drugbank_brands.csv"
-    if not inputs_generics_master.exists():
+    
+    inputs_generics = DRUGS_INPUTS_DIR / "generics_lean.csv"
+    if not inputs_generics.exists():
         if verbose:
-            print(f"[drugbank_generics] Warning: {inputs_generics_master} not found after refresh.")
-    if not inputs_brands.exists():
-        if verbose:
-            print(
-                "[drugbank_generics] Note: drugbank_brands.csv was not produced. "
-                "Run with --include-drugbank-brands when the placeholder script is implemented."
-            )
+            print(f"[drugbank] Warning: {inputs_generics} not found after refresh.")
+    
     return (
-        inputs_generics_master if inputs_generics_master.is_file() else None,
-        inputs_brands if inputs_brands.is_file() else None,
+        inputs_generics if inputs_generics.is_file() else None,
+        DRUGS_INPUTS_DIR / "brands_lean.csv" if (DRUGS_INPUTS_DIR / "brands_lean.csv").is_file() else None,
     )
 
 
 def ensure_drugbank_mixtures_output(*, verbose: bool = True) -> Optional[Path]:
-    output_path = DRUGS_INPUTS_DIR / "drugbank_mixtures_master.csv"
+    output_path = DRUGS_INPUTS_DIR / "mixtures_lean.csv"
     if output_path.is_file():
         return output_path
     if verbose:
-        print(f"[drugbank_mixtures] Warning: expected output not found at {output_path}")
+        print(f"[drugbank] Warning: mixtures_lean.csv not found at {output_path}")
     return None
 
 
