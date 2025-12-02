@@ -10,17 +10,21 @@ This module provides:
 
 from __future__ import annotations
 
-from typing import Dict, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from .unified_constants import (
     FORM_CANON as _FORM_CANON,
     FORM_TO_ROUTE as _FORM_TO_ROUTE,
+    FORM_TO_ROUTES as _FORM_TO_ROUTES,
     ROUTE_CANON as _ROUTE_CANON,
+    get_valid_routes_for_form,
+    is_valid_form_route_pair,
 )
 
 # Re-export from unified_constants (uppercase for this module's API)
 FORM_ALIASES: Dict[str, str] = _FORM_CANON
 FORM_TO_ROUTE: Dict[str, str] = _FORM_TO_ROUTE
+FORM_TO_ROUTES: Dict[str, List[str]] = _FORM_TO_ROUTES
 ROUTE_ALIASES: Dict[str, str] = _ROUTE_CANON
 
 

@@ -593,6 +593,177 @@ FORM_TO_ROUTE: Dict[str, str] = {
 }
 
 # ============================================================================
+# FORM TO ROUTES MAPPING (PLURAL) - All valid routes for each form
+# Derived from DrugBank products dataset (routes with >= 1% of products)
+# Routes are ordered by frequency (most common first)
+# Use this for exploring all valid matching options
+# ============================================================================
+
+FORM_TO_ROUTES: Dict[str, List[str]] = {
+    # Basic oral solids - unambiguous
+    "TABLET": ["ORAL"],
+    "TABLET, CHEWABLE": ["ORAL"],
+    "TABLET, COATED": ["ORAL"],
+    "TABLET, DELAYED RELEASE": ["ORAL"],
+    "TABLET, EFFERVESCENT": ["ORAL"],
+    "TABLET, EXTENDED RELEASE": ["ORAL"],
+    "TABLET, FILM COATED": ["ORAL"],
+    "TABLET, FILM COATED, EXTENDED RELEASE": ["ORAL"],
+    "TABLET, FOR SUSPENSION": ["ORAL"],
+    "TABLET, MULTILAYER": ["ORAL"],
+    "TABLET, MULTILAYER, EXTENDED RELEASE": ["ORAL"],
+    "TABLET, SUGAR COATED": ["ORAL"],
+    "CAPSULE": ["ORAL"],
+    "CAPSULE, COATED": ["ORAL"],
+    "CAPSULE, COATED PELLETS": ["ORAL"],
+    "CAPSULE, DELAYED RELEASE": ["ORAL"],
+    "CAPSULE, DELAYED RELEASE PELLETS": ["ORAL"],
+    "CAPSULE, EXTENDED RELEASE": ["ORAL"],
+    "CAPSULE, GELATIN COATED": ["ORAL"],
+    "CAPSULE, LIQUID FILLED": ["ORAL"],
+    "SYRUP": ["ORAL"],
+    
+    # Oral forms with some alternative routes
+    "TABLET, ORALLY DISINTEGRATING": ["ORAL", "SUBLINGUAL"],
+    "TABLET, CHEWABLE, EXTENDED RELEASE": ["ORAL", "SUBLINGUAL"],
+    "TABLET, SOLUBLE": ["ORAL", "TOPICAL"],
+    "LOZENGE": ["ORAL", "TRANSMUCOSAL"],
+    "TROCHE": ["SUBLINGUAL", "ORAL"],
+    "GUM, CHEWING": ["ORAL", "BUCCAL"],
+    "MOUTHWASH": ["ORAL", "DENTAL", "BUCCAL", "TOPICAL"],
+    "RINSE": ["ORAL", "DENTAL", "TOPICAL", "BUCCAL", "CUTANEOUS"],
+    "PASTILLE": ["ORAL"],
+    "ELIXIR": ["ORAL", "TOPICAL"],
+    
+    # Solutions - highly ambiguous
+    "SOLUTION": ["ORAL", "TOPICAL", "INTRAVENOUS", "SUBCUTANEOUS", "HEMODIALYSIS", "OPHTHALMIC", "PERCUTANEOUS", "INTRADERMAL", "INTRAMUSCULAR", "INHALATION"],
+    "SOLUTION / DROPS": ["OPHTHALMIC", "ORAL", "OTIC", "TOPICAL"],
+    "SOLUTION, CONCENTRATE": ["ORAL", "INTRAVENOUS", "HEMODIALYSIS", "INHALATION", "TOPICAL", "IRRIGATION", "OPHTHALMIC"],
+    "SOLUTION, GEL FORMING / DROPS": ["OPHTHALMIC", "TOPICAL", "CUTANEOUS"],
+    "SOLUTION, GEL FORMING, EXTENDED RELEASE": ["OPHTHALMIC", "SUBCUTANEOUS", "TOPICAL", "INFILTRATION"],
+    
+    # Suspensions
+    "SUSPENSION": ["ORAL", "INTRAMUSCULAR", "TOPICAL", "OPHTHALMIC", "OTIC", "INHALATION", "RECTAL", "SUBCUTANEOUS"],
+    "SUSPENSION / DROPS": ["OPHTHALMIC", "ORAL", "OTIC"],
+    "SUSPENSION, EXTENDED RELEASE": ["ORAL", "INTRAMUSCULAR", "SUBCUTANEOUS"],
+    
+    # Powders - ambiguous
+    "POWDER": ["TOPICAL", "ORAL", "INHALATION"],
+    "POWDER, FOR SOLUTION": ["ORAL", "INTRAVENOUS", "INTRAMUSCULAR", "SUBCUTANEOUS", "TOPICAL", "NASOGASTRIC"],
+    "POWDER, FOR SUSPENSION": ["ORAL", "RECTAL", "SUBCUTANEOUS"],
+    "POWDER, METERED": ["INHALATION", "ORAL", "SUBCUTANEOUS"],
+    "POWDER, DENTIFRICE": ["ORAL", "DENTAL"],
+    
+    # Granules
+    "GRANULE": ["ORAL", "TOPICAL"],
+    "GRANULE, DELAYED RELEASE": ["ORAL", "EXTRACORPOREAL"],
+    "GRANULE, EFFERVESCENT": ["ORAL", "TOPICAL"],
+    "GRANULE, FOR SOLUTION": ["ORAL", "TOPICAL", "NASAL"],
+    "GRANULE, FOR SUSPENSION": ["ORAL"],
+    
+    # Aerosols - AMBIGUOUS (can be topical, inhalation, nasal, etc.)
+    "AEROSOL": ["TOPICAL", "INHALATION", "DENTAL", "ORAL"],
+    "AEROSOL, FOAM": ["TOPICAL", "DENTAL", "RECTAL"],
+    "AEROSOL, METERED": ["INHALATION", "NASAL", "ORAL", "SUBLINGUAL", "TOPICAL"],
+    "AEROSOL, POWDER": ["TOPICAL", "INHALATION", "ORAL"],
+    
+    # Sprays - AMBIGUOUS
+    "SPRAY": ["TOPICAL", "NASAL", "ORAL"],
+    "SPRAY, METERED": ["NASAL", "TOPICAL", "INHALATION"],
+    "SPRAY, SUSPENSION": ["TOPICAL", "NASAL", "INTRASINAL"],
+    
+    # Inhalation forms - mostly unambiguous
+    "INHALANT": ["INHALATION", "ORAL", "NASAL", "TOPICAL"],
+    "INHALER": ["INHALATION"],
+    "GAS": ["INHALATION"],
+    "NEBULE": ["INHALATION"],
+    
+    # Topical forms
+    "CREAM": ["TOPICAL", "CUTANEOUS"],
+    "OINTMENT": ["TOPICAL", "OPHTHALMIC", "RECTAL"],
+    "GEL": ["TOPICAL", "DENTAL", "EXTRACORPOREAL", "ORAL"],
+    "GEL, METERED": ["TOPICAL", "TRANSDERMAL", "NASAL", "VAGINAL"],
+    "GEL, DENTIFRICE": ["DENTAL", "ORAL", "TOPICAL"],
+    "LOTION": ["TOPICAL"],
+    "LOTION, AUGMENTED": ["TOPICAL"],
+    "PASTE": ["TOPICAL", "DENTAL", "ORAL", "CUTANEOUS"],
+    "PASTE, DENTIFRICE": ["DENTAL", "ORAL", "TOPICAL"],
+    "FOAM": ["TOPICAL", "RECTAL", "VAGINAL"],
+    "EMULSION": ["TOPICAL", "INTRAVENOUS", "ORAL", "OPHTHALMIC"],
+    "SHAMPOO": ["TOPICAL", "CUTANEOUS"],
+    "SOAP": ["TOPICAL", "CUTANEOUS"],
+    "OIL": ["TOPICAL", "CUTANEOUS", "ORAL", "OTIC", "TRANSDERMAL"],
+    "LINIMENT": ["TOPICAL", "PERCUTANEOUS", "TRANSDERMAL"],
+    "TINCTURE": ["TOPICAL", "ORAL", "INHALATION"],
+    "LIQUID": ["TOPICAL", "ORAL", "HEMODIALYSIS", "INTRAVENOUS", "OPHTHALMIC", "INTRAMUSCULAR", "SUBCUTANEOUS"],
+    "SWAB": ["TOPICAL", "ORAL"],
+    "CLOTH": ["TOPICAL", "EXTRACORPOREAL"],
+    "SPONGE": ["TOPICAL", "ORAL", "VAGINAL"],
+    "DRESSING": ["TOPICAL", "CUTANEOUS", "ORAL"],
+    "STICK": ["TOPICAL"],
+    "SALVE": ["TOPICAL"],
+    "JELLY": ["TOPICAL", "VAGINAL", "NASAL"],
+    
+    # Transdermal/Patches
+    "PATCH": ["TOPICAL", "TRANSDERMAL", "CUTANEOUS", "PERCUTANEOUS"],
+    "PATCH, EXTENDED RELEASE": ["TRANSDERMAL", "TOPICAL"],
+    "PLASTER": ["TOPICAL", "TRANSDERMAL", "CUTANEOUS"],
+    "POULTICE": ["TOPICAL", "TRANSDERMAL", "CUTANEOUS", "PERCUTANEOUS"],
+    "FILM": ["BUCCAL", "SUBLINGUAL", "TOPICAL", "ORAL", "DENTAL"],
+    "FILM, SOLUBLE": ["BUCCAL", "SUBLINGUAL", "ORAL", "VAGINAL", "TOPICAL"],
+    "FILM, EXTENDED RELEASE": ["TRANSDERMAL", "TOPICAL"],
+    
+    # Drops
+    "DROP": ["OPHTHALMIC", "ORAL", "OTIC", "TOPICAL"],
+    "DROPS": ["OPHTHALMIC", "ORAL", "OTIC", "TOPICAL"],
+    
+    # Injections
+    "INJECTION": ["INTRAVENOUS", "INTRAMUSCULAR", "SUBCUTANEOUS", "INTRADERMAL", "CUTANEOUS", "INTRATHECAL", "PARENTERAL"],
+    "INJECTION, EMULSION": ["INTRAVENOUS", "SUBCUTANEOUS", "INTRAMUSCULAR", "PARENTERAL", "TOPICAL"],
+    "INJECTION, LIPID COMPLEX": ["INTRAVENOUS", "EPIDURAL", "INTRATHECAL"],
+    "INJECTION, POWDER, FOR SOLUTION": ["INTRAVENOUS", "INTRAMUSCULAR", "SUBCUTANEOUS", "ORAL"],
+    "INJECTION, POWDER, FOR SUSPENSION": ["INTRAMUSCULAR", "SUBCUTANEOUS", "INTRAVENOUS"],
+    "INJECTION, POWDER, LYOPHILIZED, FOR SOLUTION": ["INTRAVENOUS", "INTRAMUSCULAR", "SUBCUTANEOUS"],
+    "INJECTION, POWDER, LYOPHILIZED, FOR SUSPENSION": ["INTRAVENOUS", "SUBCUTANEOUS", "INTRAMUSCULAR"],
+    "INJECTION, SOLUTION": ["SUBCUTANEOUS", "INTRADERMAL", "INTRAVENOUS", "INTRAMUSCULAR", "PERCUTANEOUS", "INFILTRATION", "PERINEURAL"],
+    "INJECTION, SOLUTION, CONCENTRATE": ["INTRAVENOUS", "INTRAMUSCULAR", "INTRAOCULAR"],
+    "INJECTION, SUSPENSION": ["INTRAMUSCULAR", "SUBCUTANEOUS", "INTRA-ARTICULAR", "INTRALESIONAL"],
+    "INJECTION, SUSPENSION, EXTENDED RELEASE": ["INTRAMUSCULAR", "SUBCUTANEOUS"],
+    "INJECTABLE, LIPOSOMAL": ["INTRAVENOUS"],
+    
+    # Ampules/Vials - generic parenteral
+    "AMPULE": ["PARENTERAL", "INTRAVENOUS", "INTRAMUSCULAR", "SUBCUTANEOUS"],
+    "VIAL": ["PARENTERAL", "INTRAVENOUS", "INTRAMUSCULAR", "SUBCUTANEOUS"],
+    
+    # Containers
+    "BOTTLE": ["INTRAVENOUS", "ORAL"],
+    "BAG": ["INTRAVENOUS"],
+    
+    # Rectal forms
+    "SUPPOSITORY": ["RECTAL", "VAGINAL", "URETHRAL"],
+    "ENEMA": ["RECTAL"],
+    
+    # Vaginal forms
+    "INSERT": ["VAGINAL", "OPHTHALMIC", "CONJUNCTIVAL"],
+    "INSERT, EXTENDED RELEASE": ["VAGINAL", "INTRAUTERINE", "PERIODONTAL", "TOPICAL"],
+    "RING": ["VAGINAL"],
+    "OVULE": ["VAGINAL"],
+    
+    # Implants
+    "IMPLANT": ["SUBCUTANEOUS", "INTRAVITREAL", "INTRA-ARTICULAR", "INTRAOCULAR", "PARENTERAL", "INTRADERMAL"],
+    "PELLET, IMPLANTABLE": ["SUBCUTANEOUS", "PARENTERAL"],
+    
+    # Other
+    "KIT": ["ORAL", "TOPICAL", "OPHTHALMIC", "INHALATION", "INTRAVENOUS", "INTRAMUSCULAR", "INFILTRATION", "SUBCUTANEOUS", "EPIDURAL", "INTRA-ARTICULAR"],
+    "STRIP": ["ORAL", "OPHTHALMIC", "TOPICAL", "DENTAL"],
+    "WAFER": ["ORAL", "INTRACAVITARY", "INTRALESIONAL"],
+    "PELLET": ["ORAL", "SUBCUTANEOUS", "OPHTHALMIC", "TOPICAL"],
+    "CONCENTRATE": ["ORAL", "INTRADERMAL", "PERCUTANEOUS", "SUBCUTANEOUS", "TOPICAL"],
+    "IRRIGANT": ["IRRIGATION", "URETHRAL", "TOPICAL", "INTRAVESICAL", "OPHTHALMIC"],
+    "BEAD": ["CUTANEOUS", "TOPICAL", "ORAL"],
+}
+
+# ============================================================================
 # FORM EQUIVALENCE GROUPS
 # Forms within the same group are considered interchangeable for matching
 # ============================================================================
@@ -777,9 +948,36 @@ def forms_are_equivalent(form1: str, form2: str) -> bool:
 
 
 def infer_route_from_form(form: str) -> str | None:
-    """Infer route from form if possible."""
+    """Infer the most common route from form. Returns first (most common) route."""
     canonical = get_canonical_form(form)
-    return FORM_TO_ROUTE.get(canonical) or FORM_TO_ROUTE.get(form.lower())
+    # Try FORM_TO_ROUTES first (more complete)
+    if canonical in FORM_TO_ROUTES:
+        return FORM_TO_ROUTES[canonical][0]
+    # Fall back to FORM_TO_ROUTE
+    return FORM_TO_ROUTE.get(canonical) or FORM_TO_ROUTE.get(form.upper())
+
+
+def get_valid_routes_for_form(form: str) -> List[str]:
+    """Get ALL valid routes for a form (for exploring matching options).
+    
+    Returns list of routes ordered by frequency (most common first).
+    If form not found, returns empty list.
+    """
+    canonical = get_canonical_form(form)
+    if canonical in FORM_TO_ROUTES:
+        return FORM_TO_ROUTES[canonical]
+    # Fall back to single-route mapping
+    single = FORM_TO_ROUTE.get(canonical) or FORM_TO_ROUTE.get(form.upper())
+    return [single] if single else []
+
+
+def is_valid_form_route_pair(form: str, route: str) -> bool:
+    """Check if a form-route combination is valid according to DrugBank data."""
+    valid_routes = get_valid_routes_for_form(form)
+    if not valid_routes:
+        return True  # Unknown form, allow any route
+    route_upper = route.upper()
+    return route_upper in valid_routes
 
 
 # ============================================================================
@@ -1065,7 +1263,7 @@ __all__ = [
     "CONNECTIVE_WORDS", "SALT_TAIL_BREAK_TOKENS",
     
     # Mappings
-    "FORM_CANON", "ROUTE_CANON", "FORM_TO_ROUTE",
+    "FORM_CANON", "ROUTE_CANON", "FORM_TO_ROUTE", "FORM_TO_ROUTES",
     "FORM_EQUIVALENCE_GROUPS", "FORM_EQUIVALENTS",
     "WEIGHT_UNIT_FACTORS",
     
@@ -1085,6 +1283,7 @@ __all__ = [
     "is_stopword", "is_salt_token", "is_pure_salt_compound",
     "is_element_drug", "is_unit_token", "is_combination_atc",
     "forms_are_equivalent", "infer_route_from_form",
+    "get_valid_routes_for_form", "is_valid_form_route_pair",
     "parse_compound_salt", "get_related_salts",
     
     # Text utilities (for submodules)
