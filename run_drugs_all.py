@@ -480,31 +480,32 @@ def refresh_drugbank_generics_exports(*, verbose: bool = True) -> tuple[Optional
     
     module_output = drugbank_dir / "output"
     
-    # Copy lean exports (new format)
-    lean_files = [
-        "generics_lean.csv",
-        "synonyms_lean.csv", 
-        "dosages_lean.csv",
-        "atc_lean.csv",
-        "brands_lean.csv",
-        "salts_lean.csv",
-        "mixtures_lean.csv",
-        "products_lean.csv",
+    # Copy lean exports (both CSV and parquet per AGENTS.md policy)
+    lean_basenames = [
+        "generics_lean",
+        "synonyms_lean", 
+        "dosages_lean",
+        "atc_lean",
+        "brands_lean",
+        "salts_lean",
+        "mixtures_lean",
+        "products_lean",
         # Lookup tables
-        "lookup_salt_suffixes.csv",
-        "lookup_pure_salts.csv",
-        "lookup_form_canonical.csv",
-        "lookup_route_canonical.csv",
-        "lookup_form_to_route.csv",
-        "lookup_per_unit.csv",
+        "lookup_salt_suffixes",
+        "lookup_pure_salts",
+        "lookup_form_canonical",
+        "lookup_route_canonical",
+        "lookup_form_to_route",
+        "lookup_per_unit",
     ]
     
-    for filename in lean_files:
-        source = module_output / filename
-        if source.is_file():
-            _copy_to_pipeline_inputs(source, DRUGS_INPUTS_DIR / filename)
+    for basename in lean_basenames:
+        for ext in (".parquet", ".csv"):
+            source = module_output / f"{basename}{ext}"
+            if source.is_file():
+                _copy_to_pipeline_inputs(source, DRUGS_INPUTS_DIR / f"{basename}{ext}")
     
-    inputs_generics = DRUGS_INPUTS_DIR / "generics_lean.csv"
+    inputs_generics = DRUGS_INPUTS_DIR / "generics_lean.parquet"
     if not inputs_generics.exists():
         if verbose:
             print(f"[drugbank] Warning: {inputs_generics} not found after refresh.")

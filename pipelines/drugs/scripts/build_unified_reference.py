@@ -64,40 +64,48 @@ def build_unified_reference(
     if verbose:
         print("\n[Step 1] Loading lean exports...")
     
-    # Lean DrugBank tables
-    lean_tables = {
-        "generics": "generics_lean.csv",
-        "synonyms": "synonyms_lean.csv",
-        "dosages": "dosages_lean.csv",
-        "atc": "atc_lean.csv",
-        "brands": "brands_lean.csv",
-        "salts": "salts_lean.csv",
-        "mixtures": "mixtures_lean.csv",
-        "products": "products_lean.csv",
-    }
+    # Helper: prefer parquet over csv
+    def load_table(table_name: str, basename: str):
+        parquet_path = inputs_dir / f"{basename}.parquet"
+        csv_path = inputs_dir / f"{basename}.csv"
+        if parquet_path.exists():
+            con.execute(f"CREATE TABLE {table_name} AS SELECT * FROM read_parquet('{parquet_path}')")
+            return parquet_path
+        elif csv_path.exists():
+            con.execute(f"CREATE TABLE {table_name} AS SELECT * FROM read_csv_auto('{csv_path}')")
+            return csv_path
+        return None
     
-    for table_name, filename in lean_tables.items():
-        path = inputs_dir / filename
-        if path.exists():
-            con.execute(f"CREATE TABLE {table_name} AS SELECT * FROM read_csv_auto('{path}')")
-            if verbose:
-                count = con.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
-                print(f"  - {table_name}: {count:,} rows")
+    # Lean DrugBank tables (prefer parquet)
+    lean_tables = [
+        ("generics", "generics_lean"),
+        ("synonyms", "synonyms_lean"),
+        ("dosages", "dosages_lean"),
+        ("atc", "atc_lean"),
+        ("brands", "brands_lean"),
+        ("salts", "salts_lean"),
+        ("mixtures", "mixtures_lean"),
+        ("products", "products_lean"),
+    ]
     
-    # Lookup tables
-    lookup_tables = {
-        "lookup_salt_suffixes": "lookup_salt_suffixes.csv",
-        "lookup_pure_salts": "lookup_pure_salts.csv",
-        "lookup_form_canonical": "lookup_form_canonical.csv",
-        "lookup_route_canonical": "lookup_route_canonical.csv",
-        "lookup_form_to_route": "lookup_form_to_route.csv",
-        "lookup_per_unit": "lookup_per_unit.csv",
-    }
+    for table_name, basename in lean_tables:
+        path = load_table(table_name, basename)
+        if path and verbose:
+            count = con.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
+            print(f"  - {table_name}: {count:,} rows")
     
-    for table_name, filename in lookup_tables.items():
-        path = inputs_dir / filename
-        if path.exists():
-            con.execute(f"CREATE TABLE {table_name} AS SELECT * FROM read_csv_auto('{path}')")
+    # Lookup tables (prefer parquet)
+    lookup_tables = [
+        ("lookup_salt_suffixes", "lookup_salt_suffixes"),
+        ("lookup_pure_salts", "lookup_pure_salts"),
+        ("lookup_form_canonical", "lookup_form_canonical"),
+        ("lookup_route_canonical", "lookup_route_canonical"),
+        ("lookup_form_to_route", "lookup_form_to_route"),
+        ("lookup_per_unit", "lookup_per_unit"),
+    ]
+    
+    for table_name, basename in lookup_tables:
+        load_table(table_name, basename)
     
     # WHO ATC
     who_files = sorted(glob.glob(str(inputs_dir / "who_atc_*.parquet")))
