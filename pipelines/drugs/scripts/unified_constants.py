@@ -303,81 +303,141 @@ ELEMENT_DRUGS: Set[str] = {
 # ============================================================================
 
 FORM_CANON: Dict[str, str] = {
-    # Tablets
+    # Tablets - basic
     "TAB": "TABLET", "TABS": "TABLET", "TABLET": "TABLET", "TABLETS": "TABLET",
+    # Tablet variations (normalize to base or keep release info)
+    "TABLET, FILM COATED": "TABLET", "TABLET, COATED": "TABLET",
+    "TABLET, SUGAR COATED": "TABLET", "TABLET, CHEWABLE": "TABLET",
+    "TABLET, ORALLY DISINTEGRATING": "TABLET", "TABLET, EFFERVESCENT": "TABLET",
+    "TABLET, SOLUBLE": "TABLET", "TABLET, MULTILAYER": "TABLET",
+    "TABLET, FOR SUSPENSION": "TABLET",
+    # Extended/modified release tablets (keep release info)
+    "TABLET, EXTENDED RELEASE": "TABLET, EXTENDED RELEASE",
+    "TABLET, FILM COATED, EXTENDED RELEASE": "TABLET, EXTENDED RELEASE",
+    "TABLET, DELAYED RELEASE": "TABLET, DELAYED RELEASE",
+    "TABLET, MULTILAYER, EXTENDED RELEASE": "TABLET, EXTENDED RELEASE",
+    "TABLET, CHEWABLE, EXTENDED RELEASE": "TABLET, EXTENDED RELEASE",
     
-    # Capsules
+    # Capsules - basic
     "CAP": "CAPSULE", "CAPS": "CAPSULE", "CAPSULE": "CAPSULE", "CAPSULES": "CAPSULE",
     "CAPLET": "CAPSULE",
+    # Capsule variations
+    "CAPSULE, LIQUID FILLED": "CAPSULE", "CAPSULE, GELATIN COATED": "CAPSULE",
+    "CAPSULE, COATED": "CAPSULE", "CAPSULE, COATED PELLETS": "CAPSULE",
+    # Extended/modified release capsules
+    "CAPSULE, EXTENDED RELEASE": "CAPSULE, EXTENDED RELEASE",
+    "CAPSULE, DELAYED RELEASE": "CAPSULE, DELAYED RELEASE",
+    "CAPSULE, COATED, EXTENDED RELEASE": "CAPSULE, EXTENDED RELEASE",
+    "CAPSULE, DELAYED RELEASE PELLETS": "CAPSULE, DELAYED RELEASE",
     
-    # Bottles (container, not form - but often used as form)
-    "BOT": "BOTTLE", "BOTT": "BOTTLE", "BOTTLE": "BOTTLE", "BOTTLES": "BOTTLE",
+    # Solutions
+    "SOLUTION": "SOLUTION", "SOLN": "SOLUTION", "SOL": "SOLUTION",
+    "SOLUTIONS": "SOLUTION", "SOLUTION, CONCENTRATE": "SOLUTION",
+    "ORAL SOLUTION": "SOLUTION",
     
-    # Vials
-    "VIAL": "VIAL", "VIALS": "VIAL", "VL": "VIAL",
-    
-    # Injections
-    "INJ": "INJECTION", "INJECTABLE": "INJECTION", "INJECTION": "INJECTION",
+    # Suspensions
+    "SUSPENSION": "SUSPENSION", "SUSP": "SUSPENSION", "SUSPENSIONS": "SUSPENSION",
+    "ORAL SUSPENSION": "SUSPENSION",
+    "SUSPENSION, EXTENDED RELEASE": "SUSPENSION, EXTENDED RELEASE",
     
     # Syrups
     "SYR": "SYRUP", "SYRUP": "SYRUP", "SYRUPS": "SYRUP",
     
+    # Injections
+    "INJ": "INJECTION", "INJECTABLE": "INJECTION", "INJECTION": "INJECTION",
+    "INJECTION, SOLUTION": "INJECTION", "INJECTION, EMULSION": "INJECTION",
+    "INJECTION, SUSPENSION": "INJECTION",
+    "INJECTION, POWDER, FOR SOLUTION": "INJECTION",
+    "INJECTION, POWDER, FOR SUSPENSION": "INJECTION",
+    "INJECTION, POWDER, LYOPHILIZED, FOR SOLUTION": "INJECTION",
+    "INJECTION, POWDER, LYOPHILIZED, FOR SUSPENSION": "INJECTION",
+    "INJECTION, SOLUTION, CONCENTRATE": "INJECTION",
+    "INJECTABLE, LIPOSOMAL": "INJECTION",
+    "INJECTION, SUSPENSION, EXTENDED RELEASE": "INJECTION, EXTENDED RELEASE",
+    "INJECTION, POWDER, FOR SUSPENSION, EXTENDED RELEASE": "INJECTION, EXTENDED RELEASE",
+    
+    # Ampules/Vials
+    "AMPULE": "AMPULE", "AMPUL": "AMPULE", "AMP": "AMPULE",
+    "AMPOULE": "AMPULE", "AMPS": "AMPULE", "AMPULES": "AMPULE", "AMPULS": "AMPULE",
+    "VIAL": "VIAL", "VIALS": "VIAL", "VL": "VIAL",
+    
+    # Bottles/Containers
+    "BOT": "BOTTLE", "BOTT": "BOTTLE", "BOTTLE": "BOTTLE", "BOTTLES": "BOTTLE",
+    "BAG": "BAG", "BAGS": "BAG",
+    "KIT": "KIT", "KITS": "KIT",
+    
     # Topical forms
-    "LOTION": "LOTION", "CREAM": "CREAM", "GEL": "GEL", "OINTMENT": "OINTMENT",
-    "PASTE": "PASTE", "FOAM": "FOAM", "EMULSION": "EMULSION", "SHAMPOO": "SHAMPOO",
-    "SOAP": "SOAP", "WASH": "WASH",
+    "CREAM": "CREAM", "CREAMS": "CREAM", "CREAM, AUGMENTED": "CREAM",
+    "LOTION": "LOTION", "LOTIONS": "LOTION", "LOTION, AUGMENTED": "LOTION",
+    "GEL": "GEL", "GELS": "GEL", "GEL, METERED": "GEL",
+    "OINTMENT": "OINTMENT", "OINTMENTS": "OINTMENT",
+    "PASTE": "PASTE", "PASTES": "PASTE",
+    "FOAM": "FOAM", "FOAMS": "FOAM",
+    "EMULSION": "EMULSION", "EMULSIONS": "EMULSION",
+    "SHAMPOO": "SHAMPOO", "SHAMPOOS": "SHAMPOO",
+    "SOAP": "SOAP", "SOAPS": "SOAP",
+    "WASH": "WASH",
     
-    # Solutions
-    "SOLUTION": "SOLUTION", "SOLN": "SOLUTION", "SOL": "SOLUTION",
-    "SOLUTIONS": "SOLUTION",
+    # Powders
+    "POWDER": "POWDER", "PWDR": "POWDER", "POWDERS": "POWDER",
+    "POWDER, FOR SOLUTION": "POWDER", "POWDER, FOR SUSPENSION": "POWDER",
+    "POWDER, METERED": "POWDER, METERED",  # Keep for inhalation
     
-    # Suspensions
-    "SUSPENSION": "SUSPENSION", "SUSP": "SUSPENSION", "SUSPENSIONS": "SUSPENSION",
+    # Granules
+    "GRANULE": "GRANULE", "GRANULES": "GRANULE", "GRAN": "GRANULE",
+    "GRANULE, FOR SOLUTION": "GRANULE", "GRANULE, FOR SUSPENSION": "GRANULE",
+    "GRANULE, EFFERVESCENT": "GRANULE",
+    "GRANULE, DELAYED RELEASE": "GRANULE, DELAYED RELEASE",
     
     # Drops
     "DROPS": "DROPS", "DROP": "DROPS", "GTTS": "DROPS",
     "EYE DROPS": "DROPS", "EAR DROPS": "DROPS", "NASAL DROPS": "DROPS",
-    
-    # Powders
-    "POWDER": "POWDER", "PWDR": "POWDER", "POWDERS": "POWDER",
-    
-    # Granules
-    "GRANULES": "GRANULES", "GRANULE": "GRANULES", "GRAN": "GRANULES",
+    "ORAL DROPS": "DROPS",
+    "SOLUTION / DROPS": "DROPS", "SUSPENSION / DROPS": "DROPS",
+    "SOLUTION, GEL FORMING / DROPS": "DROPS",
+    "INSTILL.SOLUTION": "DROPS",
     
     # Sachets
     "SACHET": "SACHET", "SACHETS": "SACHET",
     
-    # Inhalers
-    "INHALER": "INHALER", "INH": "INHALER", "INHALERS": "INHALER",
-    "NEBULE": "NEBULE", "NEBULES": "NEBULE", "NEB": "NEBULE", "NEBS": "NEBULE",
-    "DPI": "DPI", "MDI": "MDI", "AEROSOL": "AEROSOL",
-    "METERED DOSE INHALER": "MDI", "DRY POWDER INHALER": "DPI",
-    "INHAL.AEROSOL": "AEROSOL", "INHAL.POWDER": "DPI",
-    "INHAL.SOLUTION": "NEBULE", "ORAL AEROSOL": "AEROSOL",
-    
     # Sprays
     "SPRAY": "SPRAY", "SPRAYS": "SPRAY", "NASAL SPRAY": "SPRAY",
-    "DISPENSER": "SPRAY",
+    "DISPENSER": "SPRAY", "SPRAY, SUSPENSION": "SPRAY",
+    "SPRAY, METERED": "SPRAY, METERED",  # Keep for nasal
+    
+    # Aerosols
+    "AEROSOL": "AEROSOL", "AEROSOLS": "AEROSOL",
+    "AEROSOL, SPRAY": "AEROSOL", "AEROSOL, FOAM": "AEROSOL", "AEROSOL, POWDER": "AEROSOL",
+    "AEROSOL, METERED": "AEROSOL, METERED",  # Keep for inhalation
+    
+    # Inhalers
+    "INHALER": "INHALER", "INHALERS": "INHALER", "INHALANT": "INHALER",
+    "MDI": "INHALER", "DPI": "INHALER",
+    "METERED DOSE INHALER": "INHALER", "DRY POWDER INHALER": "INHALER",
+    "NEBULE": "NEBULE", "NEBULES": "NEBULE", "NEB": "NEBULE", "NEBS": "NEBULE",
+    "NEBULIZER SOLUTION": "NEBULE",
+    # WHO specific inhalation forms
+    "INHAL.AEROSOL": "AEROSOL, METERED", "ORAL AEROSOL": "AEROSOL, METERED",
+    "INHAL.POWDER": "POWDER, METERED",
+    "INHAL.SOLUTION": "NEBULE",
     
     # Suppositories
     "SUPPOSITORY": "SUPPOSITORY", "SUPP": "SUPPOSITORY", "SUPPOSITORIES": "SUPPOSITORY",
     
     # Patches
-    "PATCH": "PATCH", "PATCHES": "PATCH",
+    "PATCH": "PATCH", "PATCHES": "PATCH", "PATCH, EXTENDED RELEASE": "PATCH",
     
     # Films
-    "FILM": "FILM", "FILMS": "FILM",
-    
-    # Ampules
-    "AMPULE": "AMPULE", "AMPUL": "AMPULE", "AMP": "AMPULE",
-    "AMPOULE": "AMPULE", "AMPS": "AMPULE", "AMPULES": "AMPULE",
+    "FILM": "FILM", "FILMS": "FILM", "FILM, SOLUBLE": "FILM",
+    "FILM, EXTENDED RELEASE": "FILM",
+    "LAMELLA": "FILM",
     
     # Other forms
     "LOZENGE": "LOZENGE", "LOZENGES": "LOZENGE",
     "MOUTHWASH": "MOUTHWASH",
-    "CHEWING GUM": "CHEWING GUM",
+    "CHEWING GUM": "GUM", "GUM, CHEWING": "GUM", "GUM": "GUM",
     "ELIXIR": "ELIXIR",
-    "IMPLANT": "IMPLANT", "IMPLANTS": "IMPLANT",
+    "IMPLANT": "IMPLANT", "IMPLANTS": "IMPLANT", "S.C. IMPLANT": "IMPLANT",
     "OVULE": "OVULE", "OVULES": "OVULE",
     "ENEMA": "ENEMA", "ENEMAS": "ENEMA",
     "BAR": "BAR", "BARS": "BAR",
@@ -386,13 +446,14 @@ FORM_CANON: Dict[str, str] = {
     "PELLET": "PELLET", "PELLETS": "PELLET",
     "RING": "RING", "RINGS": "RING",
     "INSERT": "INSERT", "INSERTS": "INSERT",
+    "PESSARY": "PESSARY",
     "SWAB": "SWAB", "SWABS": "SWAB",
     "CLOTH": "CLOTH", "CLOTHS": "CLOTH",
     "SPONGE": "SPONGE", "SPONGES": "SPONGE",
     "DRESSING": "DRESSING", "DRESSINGS": "DRESSING",
-    "LAMELLA": "LAMELLA",
-    "INSTILL.SOLUTION": "DROPS",
-    "S.C. IMPLANT": "IMPLANT",
+    "STICK": "STICK",
+    "LIQUID": "LIQUID",
+    "GAS": "GAS",
 }
 
 # ============================================================================
@@ -402,7 +463,7 @@ FORM_CANON: Dict[str, str] = {
 
 ROUTE_CANON: Dict[str, str] = {
     # Oral
-    "PO": "ORAL", "OR": "ORAL", "ORAL": "ORAL",
+    "PO": "ORAL", "OR": "ORAL", "O": "ORAL", "ORAL": "ORAL",
     "PER OREM": "ORAL", "BY MOUTH": "ORAL", "PER OS": "ORAL",
     
     # Intravenous
@@ -415,6 +476,10 @@ ROUTE_CANON: Dict[str, str] = {
     "SC": "SUBCUTANEOUS", "SUBCUTANEOUS": "SUBCUTANEOUS",
     "SUBCUT": "SUBCUTANEOUS", "SQ": "SUBCUTANEOUS",
     "SUBDERMAL": "SUBCUTANEOUS",
+    
+    # Parenteral (generic injectable)
+    "P": "PARENTERAL", "PARENTERAL": "PARENTERAL",
+    "INJ": "PARENTERAL", "INJECTION": "PARENTERAL",
     
     # Sublingual / Buccal
     "SL": "SUBLINGUAL", "SUBLINGUAL": "SUBLINGUAL",
@@ -432,17 +497,18 @@ ROUTE_CANON: Dict[str, str] = {
     "OTIC": "OTIC", "EAR": "OTIC",
     
     # Nasal
-    "NASAL": "NASAL", "INTRANASAL": "NASAL", "PER NASAL": "NASAL",
+    "N": "NASAL", "NASAL": "NASAL", "INTRANASAL": "NASAL", "PER NASAL": "NASAL",
     
     # Inhalation
-    "INH": "INHALATION", "INHALATION": "INHALATION",
+    "INH": "INHALATION", "INHAL": "INHALATION", "INHALATION": "INHALATION",
     "NEB": "INHALATION", "INHALER": "INHALATION",
+    "RESPIRATORY (INHALATION)": "INHALATION",
     
     # Rectal
-    "RECTAL": "RECTAL", "PR": "RECTAL", "PER RECTUM": "RECTAL",
+    "R": "RECTAL", "RECTAL": "RECTAL", "PR": "RECTAL", "PER RECTUM": "RECTAL",
     
     # Vaginal
-    "VAGINAL": "VAGINAL", "PV": "VAGINAL", "PER VAGINAM": "VAGINAL",
+    "V": "VAGINAL", "VAGINAL": "VAGINAL", "PV": "VAGINAL", "PER VAGINAM": "VAGINAL",
     
     # Other
     "INTRATHECAL": "INTRATHECAL",
@@ -455,38 +521,54 @@ ROUTE_CANON: Dict[str, str] = {
 # ============================================================================
 
 FORM_TO_ROUTE: Dict[str, str] = {
-    # Oral forms
+    # Oral forms (high confidence from DrugBank)
     "TABLET": "ORAL", "TAB": "ORAL", "TABS": "ORAL",
+    "TABLET, EXTENDED RELEASE": "ORAL", "TABLET, DELAYED RELEASE": "ORAL",
     "CAPSULE": "ORAL", "CAP": "ORAL", "CAPS": "ORAL", "CAPLET": "ORAL",
+    "CAPSULE, EXTENDED RELEASE": "ORAL", "CAPSULE, DELAYED RELEASE": "ORAL",
     "SYRUP": "ORAL", "SYRUPS": "ORAL", "SYR": "ORAL",
     "SUSPENSION": "ORAL", "SUSPENSIONS": "ORAL", "SUSP": "ORAL",
+    "SUSPENSION, EXTENDED RELEASE": "ORAL",
     "SOLUTION": "ORAL", "SOLUTIONS": "ORAL", "SOLN": "ORAL",
     "SACHET": "ORAL", "GRANULE": "ORAL", "GRANULES": "ORAL",
+    "GRANULE, DELAYED RELEASE": "ORAL",
+    "POWDER": "ORAL",  # When not metered
     "LOZENGE": "ORAL", "MOUTHWASH": "ORAL", "ELIXIR": "ORAL",
-    "DROPS": "ORAL", "ORAL DROPS": "ORAL",
-    "CHEWING GUM": "ORAL",
+    "GUM": "ORAL", "CHEWING GUM": "ORAL",
+    "WAFER": "ORAL", "STRIP": "ORAL",
+    "ORAL DROPS": "ORAL",
     
-    # Topical forms
+    # Topical forms (high confidence from DrugBank)
     "CREAM": "TOPICAL", "OINTMENT": "TOPICAL", "GEL": "TOPICAL",
     "LOTION": "TOPICAL", "SOAP": "TOPICAL", "SHAMPOO": "TOPICAL",
     "WASH": "TOPICAL", "PASTE": "TOPICAL", "FOAM": "TOPICAL",
+    "LIQUID": "TOPICAL", "EMULSION": "TOPICAL",
+    "SWAB": "TOPICAL", "CLOTH": "TOPICAL", "STICK": "TOPICAL",
+    "SPONGE": "TOPICAL", "DRESSING": "TOPICAL",
+    "SPRAY": "TOPICAL", "AEROSOL": "TOPICAL",
     
     # Transdermal
     "PATCH": "TRANSDERMAL",
     
-    # Inhalation forms
+    # Inhalation forms (from DrugBank/WHO)
     "INHALER": "INHALATION", "NEBULE": "INHALATION", "NEB": "INHALATION",
-    "MDI": "INHALATION", "DPI": "INHALATION", "AEROSOL": "INHALATION",
+    "MDI": "INHALATION", "DPI": "INHALATION",
+    "AEROSOL, METERED": "INHALATION", "POWDER, METERED": "INHALATION",
+    "GAS": "INHALATION",
     "METERED DOSE INHALER": "INHALATION", "DRY POWDER INHALER": "INHALATION",
     "INHAL.AEROSOL": "INHALATION", "INHAL.POWDER": "INHALATION",
     "INHAL.SOLUTION": "INHALATION", "ORAL AEROSOL": "INHALATION",
     
-    # Injectable forms (default to IV, may need context)
-    "AMPULE": "INTRAVENOUS", "AMP": "INTRAVENOUS", "AMPUL": "INTRAVENOUS",
-    "AMPOULE": "INTRAVENOUS", "VIAL": "INTRAVENOUS", "VL": "INTRAVENOUS",
-    "INJ": "INTRAVENOUS", "INJECTION": "INTRAVENOUS",
+    # Injectable forms (from DrugBank)
+    "INJECTION": "INTRAVENOUS",  # Most common
+    "INJECTION, EXTENDED RELEASE": "INTRAMUSCULAR",
+    "AMPULE": "PARENTERAL", "AMP": "PARENTERAL", "AMPUL": "PARENTERAL",
+    "AMPOULE": "PARENTERAL", "VIAL": "PARENTERAL", "VL": "PARENTERAL",
+    "INJ": "PARENTERAL",
+    "BOTTLE": "INTRAVENOUS", "BAG": "INTRAVENOUS",  # IV fluids
     
     # Ophthalmic
+    "DROPS": "OPHTHALMIC",  # Most common for drops
     "DROP": "OPHTHALMIC", "EYE DROP": "OPHTHALMIC", "EYE DROPS": "OPHTHALMIC",
     "INSTILL.SOLUTION": "OPHTHALMIC", "LAMELLA": "OPHTHALMIC",
     
@@ -494,13 +576,17 @@ FORM_TO_ROUTE: Dict[str, str] = {
     "EAR DROP": "OTIC", "EAR DROPS": "OTIC",
     
     # Nasal
-    "SPRAY": "NASAL", "NASAL SPRAY": "NASAL", "NASAL DROPS": "NASAL",
+    "SPRAY, METERED": "NASAL", "NASAL SPRAY": "NASAL", "NASAL DROPS": "NASAL",
     
     # Rectal
     "SUPPOSITORY": "RECTAL", "SUPP": "RECTAL", "ENEMA": "RECTAL",
     
     # Vaginal
     "OVULE": "VAGINAL", "OVULES": "VAGINAL",
+    "INSERT": "VAGINAL", "RING": "VAGINAL", "PESSARY": "VAGINAL",
+    
+    # Buccal/Sublingual
+    "FILM": "BUCCAL",
     
     # Subcutaneous
     "IMPLANT": "SUBCUTANEOUS", "S.C. IMPLANT": "SUBCUTANEOUS",
