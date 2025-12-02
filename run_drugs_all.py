@@ -524,28 +524,6 @@ def ensure_drugbank_mixtures_output(*, verbose: bool = True) -> Optional[Path]:
     return None
 
 
-def _maybe_run_drugbank_brands_script(include_flag: bool, *, verbose: bool = True) -> None:
-    if not include_flag:
-        return
-    script_path = PROJECT_DIR / "dependencies" / "drugbank_generics" / "drugbank_brands.R"
-    if not script_path.is_file():
-        if verbose:
-            print(f"[drugbank_brands] Placeholder script not found at {script_path}; skipping.")
-        return
-    rscript = shutil.which("Rscript")
-    if not rscript:
-        if verbose:
-            print("[drugbank_brands] Rscript executable not found; cannot run placeholder.")
-        return
-    if verbose:
-        print(f"[drugbank_brands] Executing placeholder R script {script_path}...")
-    env = os.environ.copy()
-    env.setdefault("ESOA_DRUGBANK_QUIET", "1")
-    subprocess.run([rscript, str(script_path)], check=True, cwd=str(script_path.parent), env=env)
-
-
-
-
 def main(argv: Optional[Sequence[str]] = None) -> None:
     parser = argparse.ArgumentParser(
         description="Run the complete 4-part drugs pipeline."
