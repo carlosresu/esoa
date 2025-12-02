@@ -26,30 +26,15 @@ DEPENDENCIES_DIR = PROJECT_ROOT / "dependencies"
 # Source files to sync
 SHARED_SCRIPTS_DIR = SCRIPT_DIR
 
-# Files to copy to ALL submodules under inputs/
+# Files to copy to ALL submodules under input/
+# (unified_constants.py includes all needed functions)
 UNIVERSAL_FILES = [
     "unified_constants.py",
 ]
 
-# Files to copy to specific submodules
+# Submodule-specific overrides (if any submodule needs different target dir)
 SUBMODULE_SPECIFIC_FILES = {
-    "fda_ph_scraper": {
-        "scripts": [
-            "unified_constants.py",  # Required by text_utils.py
-            "text_utils.py",
-            "routes_forms.py",
-        ]
-    },
-    "drugbank_generics": {
-        "inputs": [
-            "unified_constants.py",
-        ]
-    },
-    "atcd": {
-        "inputs": [
-            "unified_constants.py",
-        ]
-    },
+    # All submodules use input/ directory by default
 }
 
 
@@ -89,11 +74,11 @@ def sync_universal_files() -> List[Tuple[str, str]]:
     synced = []
     
     for submodule_dir in get_submodule_dirs():
-        inputs_dir = submodule_dir / "inputs"
+        input_dir = submodule_dir / "input"  # singular for consistency
         
         for filename in UNIVERSAL_FILES:
             src = SHARED_SCRIPTS_DIR / filename
-            dst = inputs_dir / filename
+            dst = input_dir / filename
             
             if copy_file_if_changed(src, dst):
                 synced.append((str(src.relative_to(PROJECT_ROOT)), 
@@ -152,11 +137,11 @@ def check_sync_status() -> dict:
     status = {"synced": [], "outdated": [], "missing_src": [], "missing_dst": []}
     
     for submodule_dir in get_submodule_dirs():
-        inputs_dir = submodule_dir / "inputs"
+        input_dir = submodule_dir / "input"  # singular for consistency
         
         for filename in UNIVERSAL_FILES:
             src = SHARED_SCRIPTS_DIR / filename
-            dst = inputs_dir / filename
+            dst = input_dir / filename
             
             if not src.exists():
                 status["missing_src"].append(str(src.relative_to(PROJECT_ROOT)))
