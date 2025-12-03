@@ -1,9 +1,12 @@
 [submodule "dependencies/atcd"]
 	path = dependencies/atcd
 	url = https://github.com/carlosresu/atcd
+	branch = master
 [submodule "dependencies/drugbank_generics"]
 	path = dependencies/drugbank_generics
 	url = https://github.com/carlosresu/drugbank_generics
+	branch = master
 [submodule "dependencies/fda_ph_scraper"]
 	path = dependencies/fda_ph_scraper
 	url = https://github.com/carlosresu/fda_ph_scraper
+	branch = master
