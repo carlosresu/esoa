@@ -408,12 +408,18 @@ def run_esoa_to_drug_code(
         # Extract dose from Drug Description
         annex_dose = extract_dose_mg(drug_desc)
         
+        # Extract form and route from Annex F
+        annex_form = normalize_for_match(row.get("form"))
+        annex_route = normalize_for_match(row.get("route"))
+        
         candidate = {
             "drug_code": drug_code,
             "atc_code": atc,
             "drugbank_id": drugbank_id,
             "generic_name": annex_generics[0],  # Primary generic
             "dose_mg": annex_dose,
+            "form": annex_form,
+            "route": annex_route,
             "description": drug_desc,
         }
         
@@ -500,7 +506,8 @@ def run_esoa_to_drug_code(
         
         return generics
     
-    # Match ESOA to Annex F
+    # Match ESOA to Annex F - STRICT MATCHING
+    # Only matches when: generic + dose + form + route all match (salt can vary)
     def match_to_drug_code(row):
         generic_raw = row.get("generic_final") or row.get("generic_name") or ""
         
@@ -516,27 +523,13 @@ def run_esoa_to_drug_code(
         if not generics:
             generics = extract_generics_from_description(esoa_desc)
         
-        atc = normalize_for_match(row.get("atc_code_final") or row.get("atc_code"))
-        esoa_drugbank_id = row.get("drugbank_id_final") or row.get("drugbank_id")
-        if pd.notna(esoa_drugbank_id):
-            esoa_drugbank_id = str(esoa_drugbank_id).strip()
-        else:
-            esoa_drugbank_id = None
-        
-        # Extract dose from ESOA DESCRIPTION
-        esoa_dose = extract_dose_mg(esoa_desc)
-        
         if not generics:
-            # Try DrugBank ID match even without generic
-            if esoa_drugbank_id and esoa_drugbank_id in drugbank_lookup:
-                candidates = drugbank_lookup[esoa_drugbank_id]
-                # Try to find dose match even with DrugBank ID
-                if esoa_dose:
-                    dose_matches = [c for c in candidates if c.get("dose_mg") == esoa_dose]
-                    if dose_matches:
-                        return dose_matches[0]["drug_code"], "matched_drugbank_id_dose"
-                return candidates[0]["drug_code"], "matched_drugbank_id"
             return None, "no_generic"
+        
+        # Extract ESOA attributes for matching
+        esoa_dose = extract_dose_mg(esoa_desc)
+        esoa_form = normalize_for_match(row.get("form"))
+        esoa_route = normalize_for_match(row.get("route"))
         
         # Try each generic component against the lookup
         candidates = []
@@ -546,47 +539,42 @@ def run_esoa_to_drug_code(
                 candidates.extend(annex_lookup.get(variant, []))
         
         if not candidates:
-            # Try DrugBank ID fallback
-            if esoa_drugbank_id and esoa_drugbank_id in drugbank_lookup:
-                candidates = drugbank_lookup[esoa_drugbank_id]
-                if esoa_dose:
-                    dose_matches = [c for c in candidates if c.get("dose_mg") == esoa_dose]
-                    if dose_matches:
-                        return dose_matches[0]["drug_code"], "matched_drugbank_id_dose"
-                return candidates[0]["drug_code"], "matched_drugbank_id"
             return None, "generic_not_in_annex"
         
-        # Priority 1: Match by ATC code + dose (EXACT dose match required)
-        if atc and esoa_dose:
-            atc_dose_matches = [c for c in candidates if c["atc_code"] == atc and c.get("dose_mg") == esoa_dose]
-            if atc_dose_matches:
-                return atc_dose_matches[0]["drug_code"], "matched_atc_dose"
+        # Deduplicate candidates by drug_code
+        seen_codes = set()
+        unique_candidates = []
+        for c in candidates:
+            if c["drug_code"] not in seen_codes:
+                seen_codes.add(c["drug_code"])
+                unique_candidates.append(c)
+        candidates = unique_candidates
         
-        # Priority 2: Match by dose only (generic + exact dose)
+        # Helper to check if form/route match (None matches anything)
+        def form_matches(cand_form, esoa_form):
+            if not esoa_form or not cand_form:
+                return True  # Missing form in either = compatible
+            return cand_form == esoa_form
+        
+        def route_matches(cand_route, esoa_route):
+            if not esoa_route or not cand_route:
+                return True  # Missing route in either = compatible
+            return cand_route == esoa_route
+        
+        # STRICT MATCHING: Require generic + dose + form + route
+        # Only return a match if dose matches (and form/route if available)
         if esoa_dose:
-            dose_matches = [c for c in candidates if c.get("dose_mg") == esoa_dose]
-            if dose_matches:
-                # If multiple dose matches, prefer one with ATC match
-                if atc:
-                    atc_in_dose = [c for c in dose_matches if c["atc_code"] == atc]
-                    if atc_in_dose:
-                        return atc_in_dose[0]["drug_code"], "matched_atc_dose"
-                return dose_matches[0]["drug_code"], "matched_generic_dose"
+            perfect_matches = [
+                c for c in candidates 
+                if c.get("dose_mg") == esoa_dose 
+                and form_matches(c.get("form"), esoa_form)
+                and route_matches(c.get("route"), esoa_route)
+            ]
+            if perfect_matches:
+                return perfect_matches[0]["drug_code"], "matched_perfect"
         
-        # Priority 3: Match by ATC code only (no dose match available)
-        if atc:
-            atc_matches = [c for c in candidates if c["atc_code"] == atc]
-            if atc_matches:
-                return atc_matches[0]["drug_code"], "matched_generic_atc"
-        
-        # Priority 4: Match by DrugBank ID
-        if esoa_drugbank_id:
-            dbid_matches = [c for c in candidates if c["drugbank_id"] == esoa_drugbank_id]
-            if dbid_matches:
-                return dbid_matches[0]["drug_code"], "matched_drugbank_id"
-        
-        # Fall back to generic-only match (no dose/ATC match)
-        return candidates[0]["drug_code"], "matched_generic_only"
+        # No perfect match found
+        return None, "no_perfect_match"
     
     if verbose:
         print("\nMatching ESOA to Drug Codes...")

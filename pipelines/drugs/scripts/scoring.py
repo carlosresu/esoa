@@ -352,7 +352,12 @@ def select_best_candidate(
             if input_salt in cand_ref or input_salt in cand_generic:
                 details_score -= 3
         
-        return (match_priority, atc_priority, form_priority, details_score, 0, cand_atc)
+        # Priority 5: Prefer longer/more specific generic names
+        # This prevents IODINE from being preferred over IODAMIDE when both match
+        # Negative length means longer = better (lower sort value)
+        length_priority = -len(cand_generic)
+        
+        return (match_priority, atc_priority, form_priority, details_score, length_priority, cand_atc)
     
     # Sort by rank and return best
     valid_candidates.sort(key=rank_candidate)

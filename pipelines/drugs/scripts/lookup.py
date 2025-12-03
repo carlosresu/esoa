@@ -385,6 +385,9 @@ def build_combination_keys(
     
     # Format: "A + B" (sorted)
     keys.add(" + ".join(sorted_parts))
+    # Format: "A + B" (original order - important for matching PNF/canonical refs)
+    keys.add(" + ".join(unique_parts))
+    keys.add(" + ".join(unique_parts[::-1]))  # Reverse order too
     # Format: "A AND B" (sorted, WHO style)
     keys.add(" AND ".join(sorted_parts))
     # Format: "B AND A" (reverse sorted, WHO style)

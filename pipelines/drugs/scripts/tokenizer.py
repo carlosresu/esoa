@@ -10,8 +10,8 @@ from typing import Dict, List, Optional, Set, Tuple
 from .unified_constants import (
     CATEGORY_DOSE, CATEGORY_FORM, CATEGORY_GENERIC, CATEGORY_OTHER,
     CATEGORY_ROUTE, CATEGORY_SALT, ELEMENT_DRUGS, FORM_CANON,
-    PURE_SALT_COMPOUNDS, ROUTE_CANON, SALT_TOKENS, STOPWORDS,
-    UNIT_TOKENS,
+    FORM_MODIFIER_IGNORE, PURE_SALT_COMPOUNDS, ROUTE_CANON, SALT_TOKENS,
+    STOPWORDS, UNIT_TOKENS,
 )
 
 # Legacy aliases for backward compatibility
@@ -187,6 +187,83 @@ def extract_drug_details(drug_name: str) -> Dict[str, Optional[str]]:
     working = re.sub(r"\(\s+", "(", working)
     working = re.sub(r"\s+\)", ")", working)
     
+    # Strip diluent/solvent patterns - these are packaging info, not drug components
+    # Patterns to remove:
+    # - "+ diluent", "+ 2 mL diluent", "+ solvent", "+ reconstitution fluid"
+    # - "LYOPHILIZED POWDER + DILUENT", "FREEZE-DRIED POWDER + DILUENT"
+    # - "monodose vial + 0.5 mL diluent", "1 dose + 1 mL diluent"
+    diluent_keywords = (
+        r"diluent|solvent|reconstitution\s+fluid|sterile\s+water|"
+        r"water\s+for\s+injection|w\.?f\.?i\.?"
+    )
+    # Pattern 1a: "+ X mL diluent" - explicit volume before keyword
+    diluent_pattern1a = re.compile(
+        r"\s*\+\s*\d+(?:[.,]\d+)?\s*m?L?\s+" + diluent_keywords,
+        re.IGNORECASE
+    )
+    working = diluent_pattern1a.sub("", working)
+    
+    # Pattern 1b: "+ diluent" without volume
+    diluent_pattern1b = re.compile(
+        r"\s*\+\s*" + diluent_keywords,
+        re.IGNORECASE
+    )
+    working = diluent_pattern1b.sub("", working)
+    
+    # Also strip leftover "+ X mL" patterns (orphaned after diluent stripped)
+    leftover_ml_pattern = re.compile(r"\s*\+\s*\d+(?:[.,]\d+)?\s*m?L?\s*(?=\s|$)", re.IGNORECASE)
+    working = leftover_ml_pattern.sub("", working)
+    
+    # Strip vaccine-specific potency info: "1000 DL 50 mouse min", "X PFU" (not regular mg/mcg doses)
+    # Only strip DL/LD (lethal dose) and PFU (plaque-forming units) patterns
+    vaccine_potency_pattern = re.compile(
+        r"\s+\d+(?:[.,]\d+)?\s*(?:DL|LD)(?:\s+\d+)?(?:\s+(?:mouse|mice))?\s*(?:min|minimum)?\s*",
+        re.IGNORECASE
+    )
+    working = vaccine_potency_pattern.sub(" ", working)
+    
+    # Strip "not less than X PFU" patterns from vaccines
+    potency_qualifier_pattern = re.compile(
+        r"\s+not\s+less\s+than(?:\s+\d+(?:[.,]\d+)?\s*(?:PFU)?)?\s*",
+        re.IGNORECASE
+    )
+    working = potency_qualifier_pattern.sub(" ", working)
+    
+    # Pattern 2: "POWDER + DILUENT", "SOLUTION + DILUENT" 
+    diluent_pattern2 = re.compile(
+        r"\s*\+\s*(?:\d+(?:[.,]\d+)?\s*(?:mL|g)\s+)?" + diluent_keywords,
+        re.IGNORECASE
+    )
+    working = diluent_pattern2.sub("", working)
+    
+    # Pattern 3: "dose + X mL diluent"
+    diluent_pattern3 = re.compile(
+        r"\b(?:\d+\s+)?dose\s*\+\s*(?:\d+(?:[.,]\d+)?\s*m?L?\s+)?" + diluent_keywords,
+        re.IGNORECASE
+    )
+    working = diluent_pattern3.sub("", working)
+    
+    # Pattern 4: Standalone diluent references like "VIAL + PRE-FILLED SYRINGE DILUENT"
+    diluent_pattern4 = re.compile(
+        r"\s+(?:PRE-?FILLED\s+)?(?:SYRINGE\s+)?DILUENT\b",
+        re.IGNORECASE
+    )
+    working = diluent_pattern4.sub("", working)
+    
+    # Pattern 5: Strip trailing packaging/form words like "monodose vial", "multidose vial", "SOLUTION VIAL"
+    packaging_pattern = re.compile(
+        r"\s+(?:mono|multi)?dose\s+(?:vial|ampoule?|syringe)(?:\s+SOLUTION\s+(?:VIAL|AMPOULE?|BOTTLE))?\s*$",
+        re.IGNORECASE
+    )
+    working = packaging_pattern.sub("", working)
+    # Also strip trailing form words: "SOLUTION VIAL", "SOLUTION BOTTLE", etc.
+    trailing_form_pattern = re.compile(
+        r"\s+(?:SOLUTION|SUSPENSION|POWDER|FREEZE-?DRIED(?:\s+POWDER)?|LYOPHILIZED(?:\s+POWDER)?)"
+        r"(?:\s+(?:VIAL|AMPOULE?|BOTTLE|DRUM|BAG))?\s*$",
+        re.IGNORECASE
+    )
+    working = trailing_form_pattern.sub("", working)
+    
     # Extract salt forms: ( as SODIUM SALT), ( as SULFATE), etc.
     salt_matches = _SALT_PARENTHETICAL.findall(working)
     if salt_matches:
@@ -267,6 +344,30 @@ def extract_drug_details(drug_name: str) -> Dict[str, Optional[str]]:
         working = working[:-10].strip()
     elif result["indication_details"] and working.endswith(" SOLUTION"):
         working = working[:-9].strip()
+    
+    # Strip trailing salt suffixes (SODIUM PHOSPHATE, SODIUM SUCCINATE, etc.)
+    # This handles ESOA-style "DEXAMETHASONE SODIUM PHOSPHATE" pattern
+    trailing_salt_suffixes = [
+        "SODIUM PHOSPHATE", "DISODIUM PHOSPHATE", "SODIUM SUCCINATE",
+        "SODIUM SULFATE", "SODIUM CHLORIDE", "POTASSIUM PHOSPHATE",
+        "CALCIUM PHOSPHATE", "MAGNESIUM SULFATE",
+    ]
+    for suffix in trailing_salt_suffixes:
+        if working.endswith(" " + suffix):
+            base = working[:-len(suffix)-1].strip()
+            # Only strip if there's still a meaningful base name
+            if base and len(base) > 2:
+                if result["salt_details"]:
+                    result["salt_details"] += "|" + suffix
+                else:
+                    result["salt_details"] = suffix
+                working = base
+                break
+    
+    # Normalize "DRUG+DRUG" to "DRUG + DRUG" (add spaces around +)
+    if "+" in working and " + " not in working:
+        working = re.sub(r"\+", " + ", working)
+        working = re.sub(r"\s+", " ", working).strip()
     
     result["generic_name"] = working if working else drug_name.strip().upper()
     
@@ -507,9 +608,14 @@ def normalize_tokens(
     tokens: List[str],
     drop_stopwords: bool = True,
     multiword_generics: Optional[Set[str]] = None,
+    original_text: Optional[str] = None,
 ) -> List[str]:
     """
     Normalize tokens: uppercase, strip punctuation, handle multi-word generics.
+    
+    Args:
+        original_text: If provided, used to detect "( as ...)" salt patterns
+                      so we can exclude multiword matches inside them.
     """
     if multiword_generics is None:
         multiword_generics = set()
@@ -517,9 +623,43 @@ def normalize_tokens(
     result = []
     text = " ".join(tokens).upper()
     
-    # First, extract multi-word generics
+    # Find "( as ...)" salt pattern ranges if original_text provided
+    salt_pattern_content: Set[str] = set()
+    if original_text:
+        for match in re.finditer(r"\(\s*as\s+([^)]+)\)", original_text, re.IGNORECASE):
+            salt_pattern_content.add(match.group(1).strip().upper())
+    
+    # Also identify trailing salt suffixes (DRUG SALT pattern)
+    trailing_salt_words = {
+        "SODIUM PHOSPHATE", "DISODIUM PHOSPHATE", "SODIUM SUCCINATE",
+        "SODIUM SULFATE", "POTASSIUM PHOSPHATE", "CALCIUM PHOSPHATE",
+        "MAGNESIUM SULFATE", "SODIUM CHLORIDE",
+    }
+    
+    def is_trailing_salt(mwg: str, orig_text: str) -> bool:
+        """Check if multiword is a trailing salt suffix in the original text."""
+        if not orig_text or mwg not in trailing_salt_words:
+            return False
+        orig_upper = orig_text.upper()
+        pos = orig_upper.find(mwg)
+        if pos < 0:
+            return False
+        before = orig_upper[:pos].strip()
+        if before and len(before.split()) >= 1:
+            last_word = before.split()[-1]
+            if last_word not in {"SODIUM", "DISODIUM", "POTASSIUM", "CALCIUM", "MAGNESIUM"}:
+                return True
+        return False
+    
+    # First, extract multi-word generics (but exclude those inside salt patterns)
     for mwg in sorted(multiword_generics, key=len, reverse=True):
         if mwg in text:
+            # Skip if this multiword is inside a salt pattern
+            if any(mwg in sc or sc in mwg for sc in salt_pattern_content):
+                continue
+            # Skip if this multiword is a trailing salt suffix
+            if is_trailing_salt(mwg, original_text):
+                continue
             result.append(mwg)
             text = text.replace(mwg, " ")
     
@@ -635,9 +775,55 @@ def extract_generic_tokens(
     # Check for multiword generics BEFORE tokenizing
     # Sort by length descending to prefer longer matches and avoid substrings
     text_upper = text.upper()
+    
+    # Find "( as ...)" salt pattern ranges to exclude matches inside them
+    salt_pattern_ranges = []
+    for match in re.finditer(r"\(\s*as\s+[^)]+\)", text_upper, re.IGNORECASE):
+        salt_pattern_ranges.append((match.start(), match.end()))
+    
+    # Also identify trailing salt suffixes (DRUG SALT pattern like "DEXAMETHASONE SODIUM PHOSPHATE")
+    trailing_salt_words = {
+        "SODIUM PHOSPHATE", "DISODIUM PHOSPHATE", "SODIUM SUCCINATE",
+        "SODIUM SULFATE", "POTASSIUM PHOSPHATE", "CALCIUM PHOSPHATE",
+        "MAGNESIUM SULFATE", "SODIUM CHLORIDE",
+    }
+    
+    def is_trailing_salt_suffix(mw: str) -> bool:
+        """Check if multiword is a trailing salt suffix in the text."""
+        if mw not in trailing_salt_words:
+            return False
+        # Check if it appears at end of a word sequence (after a drug name)
+        # Pattern: DRUGNAME + SALT at start of text
+        pos = text_upper.find(mw)
+        if pos < 0:
+            return False
+        # If there's at least one word before the salt, it's likely a trailing suffix
+        before = text_upper[:pos].strip()
+        if before and len(before.split()) >= 1:
+            # Check if the word before isn't another salt word
+            last_word = before.split()[-1]
+            if last_word not in {"SODIUM", "DISODIUM", "POTASSIUM", "CALCIUM", "MAGNESIUM"}:
+                return True
+        return False
+    
+    def is_inside_salt_pattern(pos: int, length: int) -> bool:
+        """Check if position range overlaps with any salt pattern."""
+        end = pos + length
+        for start, stop in salt_pattern_ranges:
+            if pos >= start and end <= stop:
+                return True
+        return False
+    
     matched_multiword = []
     for mw in sorted(multiword_generics, key=len, reverse=True):
         if mw in text_upper:
+            pos = text_upper.find(mw)
+            # Skip if this multiword is inside a "( as ...)" salt pattern
+            if is_inside_salt_pattern(pos, len(mw)):
+                continue
+            # Skip if this multiword is a trailing salt suffix (DRUG SALT pattern)
+            if is_trailing_salt_suffix(mw):
+                continue
             # Check if this is a substring of an already-matched multiword
             is_substring = False
             for _, existing_mw in matched_multiword:
@@ -645,7 +831,6 @@ def extract_generic_tokens(
                     is_substring = True
                     break
             if not is_substring:
-                pos = text_upper.find(mw)
                 matched_multiword.append((pos, mw))
     # Sort by position in text
     matched_multiword.sort(key=lambda x: x[0])
@@ -653,7 +838,7 @@ def extract_generic_tokens(
     # Tokenize
     raw_tokens = split_with_parentheses(text)
     raw_tokens = detect_compound_salts(raw_tokens, text)
-    tokens = normalize_tokens(raw_tokens, drop_stopwords=True, multiword_generics=multiword_generics)
+    tokens = normalize_tokens(raw_tokens, drop_stopwords=True, multiword_generics=multiword_generics, original_text=text)
     
     # Categorize
     categories = categorize_tokens(tokens)
@@ -674,23 +859,72 @@ def extract_generic_tokens(
                 generic_tokens.append(mw)
     
     # Add pure salt compounds that appear in text
+    # BUT exclude those that appear inside "( as ...)" salt patterns or as trailing salts
     text_upper = text.upper()
+    # Find salt pattern content to exclude
+    salt_pattern_content = set()
+    for match in re.finditer(r"\(\s*as\s+([^)]+)\)", text_upper, re.IGNORECASE):
+        salt_pattern_content.add(match.group(1).strip())
+    
     for psc in PURE_SALT_COMPOUNDS:
         if psc in text_upper and psc not in generic_tokens:
+            # Skip if this pure salt is inside a "( as ...)" pattern
+            if any(psc in salt_content for salt_content in salt_pattern_content):
+                continue
+            # Skip if this is a trailing salt suffix (DRUG SALT pattern)
+            if is_trailing_salt_suffix(psc):
+                continue
             generic_tokens.append(psc)
     
     # Handle combination drugs with "+" separator
+    # BUT skip if "+" is preceded by "diluent", "solvent", "dose", etc. (packaging info)
     if "+" in text_upper:
         parts = text_upper.split("+")
         added_parts = []
+        skip_combo_words = {"DILUENT", "SOLVENT", "DOSE", "DOSES", "VIAL", "AMPULE", "SYRINGE"}
+        form_words = {"TABLET", "CAPSULE", "SOLUTION", "INJECTION", "SYRUP", "OINTMENT", "CREAM"}
         for part in parts:
             part = part.strip()
-            words = []
-            for word in part.split():
+            # Skip parts that are packaging/diluent info
+            part_words = part.split()
+            if part_words and part_words[0] in skip_combo_words:
+                continue
+            # Remove salt parentheticals from the part before extracting words
+            part_clean = re.sub(r"\(\s*as\s+[^)]+\)", "", part, flags=re.IGNORECASE)
+            # Also remove any remaining empty or near-empty parentheticals
+            part_clean = re.sub(r"\(\s*\)", "", part_clean)
+            
+            # First pass: collect all non-dose words
+            all_words = []
+            for word in part_clean.split():
                 if word and not any(c.isdigit() for c in word) and word not in UNIT_TOKENS:
-                    words.append(word)
+                    if word not in form_words:
+                        all_words.append(word)
                 else:
                     break
+            
+            # Check if the full combo part is a known multiword generic
+            full_combo = " ".join(all_words)
+            if full_combo in multiword_generics:
+                # Use the full multiword generic as-is
+                if full_combo and full_combo not in generic_tokens:
+                    generic_tokens.append(full_combo)
+                    added_parts.append(full_combo)
+                continue
+            
+            # Second pass: filter stopwords/salt tokens, but keep them if they're standalone
+            # (e.g., ZINC alone should be kept, not filtered as a salt token)
+            words = []
+            for word in all_words:
+                if word in STOPWORDS or word in SALT_TOKENS:
+                    # Keep if it's the only word (likely the actual drug)
+                    if len(all_words) == 1:
+                        words.append(word)
+                    else:
+                        continue
+                else:
+                    words.append(word)
+            
             if words:
                 combo_part = " ".join(words)
                 if combo_part and combo_part not in generic_tokens:
@@ -699,8 +933,9 @@ def extract_generic_tokens(
         
         # Remove combined tokens that contain + if we've added individual parts
         # e.g., remove "IBUPROFEN+PARACETAMOL" if we added "IBUPROFEN" and "PARACETAMOL"
+        # Also remove tokens that start with + (e.g., "+ZINC" from "ACID+ZINC")
         if len(added_parts) >= 2:
-            generic_tokens = [g for g in generic_tokens if "+" not in g]
+            generic_tokens = [g for g in generic_tokens if "+" not in g and not g.startswith("+")]
     
     # Handle " IN " separator for IV solutions
     # Reorder generics so active ingredient (before IN) comes first
@@ -749,6 +984,36 @@ def extract_generic_tokens(
                 # Add remaining generics
                 new_order.extend(generic_tokens)
                 generic_tokens = new_order
+    
+    # Filter out form modifier words that appear after form words (e.g., GELATIN after CAPSULE)
+    # This prevents matching GELATIN as a drug in "CAPSULE SOFT GELATIN"
+    form_words = {"CAPSULE", "CAPSULES", "TABLET", "TABLETS", "SOLUTION", "SOLUTIONS",
+                  "SUSPENSION", "CREAM", "OINTMENT", "GEL", "LOTION", "POWDER"}
+    text_upper = text.upper()
+    
+    # Check if any form word appears in text
+    form_pos = -1
+    for fw in form_words:
+        pos = text_upper.find(fw)
+        if pos >= 0:
+            if form_pos < 0 or pos < form_pos:
+                form_pos = pos
+    
+    if form_pos >= 0:
+        # Remove generic tokens that are form modifiers AND appear after the form word
+        filtered_generics = []
+        for g in generic_tokens:
+            g_upper = g.upper()
+            if g_upper in FORM_MODIFIER_IGNORE:
+                g_pos = text_upper.find(g_upper)
+                # Only filter if this token appears AFTER the first form word
+                if g_pos > form_pos:
+                    continue  # Skip this token
+            filtered_generics.append(g)
+        
+        # Only apply filter if we still have at least one generic token
+        if filtered_generics:
+            generic_tokens = filtered_generics
     
     return tokens, generic_tokens
 

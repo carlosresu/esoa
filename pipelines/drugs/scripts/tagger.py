@@ -229,16 +229,27 @@ class UnifiedTagger:
         if not self._mixtures_loaded:
             return None
         
-        # Filter out junk tokens like "+"
+        # Filter out junk tokens like "+" and tokens starting with "+"
         junk = {"+", "MG", "ML", "MCG", "G", "L", ""}
-        generics = [g for g in generics if g.upper() not in junk]
+        generics = [g for g in generics if g.upper() not in junk and not g.startswith("+")]
         
         if len(generics) < 2:
             return None
         
         # Normalize generics (apply synonyms) and build lookup key
-        normalized = [self._apply_synonyms(g.upper()) for g in generics]
-        component_key = '|'.join(sorted(normalized))
+        # Use lowercase for key since mixtures table has lowercase keys
+        normalized = [self._apply_synonyms(g.upper()).lower() for g in generics]
+        
+        # Deduplicate and remove substrings (e.g., "ascorbic" is substring of "ascorbic acid")
+        unique = []
+        for n in sorted(normalized, key=len, reverse=True):  # Longest first
+            if not any(n in existing for existing in unique):
+                unique.append(n)
+        
+        if len(unique) < 2:
+            return None
+        
+        component_key = '|'.join(sorted(unique))
         
         # Fast lookup by component_key
         try:
@@ -251,9 +262,11 @@ class UnifiedTagger:
             
             if rows:
                 drugbank_id, mixture_name, component_generics = rows[0]
+                # Use uppercase for display name
+                display_name = ' + '.join(sorted([n.upper() for n in unique]))
                 return {
                     'drugbank_id': drugbank_id,
-                    'generic_name': ' AND '.join(sorted(normalized)),
+                    'generic_name': display_name,
                     'mixture_name': mixture_name,
                     'atc_code': None,
                     'source': 'drugbank_mixture',

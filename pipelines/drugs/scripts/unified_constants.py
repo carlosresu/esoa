@@ -99,6 +99,27 @@ STOPWORDS: Set[str] = {
 STOPWORDS_LOWER: Set[str] = {s.lower() for s in STOPWORDS}
 
 # ============================================================================
+# FORM MODIFIER WORDS - Words that are valid drug names but should be ignored
+# when they appear as form/packaging descriptors (after CAPSULE, TABLET, etc.)
+# ============================================================================
+
+FORM_MODIFIER_IGNORE: Set[str] = {
+    # These are real drugs but commonly appear as form descriptors
+    "GELATIN",        # DB11242 - but also describes capsule shells
+    "STARCH",         # DB00930 - but also excipient
+    "CELLULOSE",      # Excipient
+    "LACTOSE",        # Excipient
+    
+    # Modifiers that appear after form words
+    "COATED", "FILM", "ENTERIC", "SUGAR", "HARD", "LIQUID",
+    "FILLED", "EXTENDED", "SUSTAINED", "MODIFIED", "DELAYED",
+    "IMMEDIATE", "CONTROLLED", "DISPERSIBLE", "CHEWABLE",
+    "EFFERVESCENT", "SUBLINGUAL", "BUCCAL", "ORALLY",
+    "DISINTEGRATING", "FREEZE", "DRIED", "LYOPHILIZED",
+    "DEPOT", "RETARD",
+}
+
+# ============================================================================
 # SALT TOKENS - Pharmaceutical salt/hydrate suffixes
 # Merged from: SALT_TOKENS (3 copies), SPECIAL_SALT_TOKENS, SALT_FORM_SUFFIXES
 # ============================================================================
