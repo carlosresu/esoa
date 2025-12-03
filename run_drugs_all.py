@@ -138,7 +138,11 @@ def _find_rscript() -> Optional[Path]:
 
 
 def _run_with_spinner(label: str, func: Callable[[], T]) -> T:
-    """Run func() while showing a lightweight CLI spinner with elapsed time."""
+    """Run func() while showing a lightweight CLI spinner with elapsed time.
+    
+    Output format: XXXX.XXs - [done] - label
+    Times are right-aligned by decimal point (7 chars total: ####.##s)
+    """
     import threading
     import time
 
@@ -157,7 +161,7 @@ def _run_with_spinner(label: str, func: Callable[[], T]) -> T:
     start = time.perf_counter()
     thread = threading.Thread(target=worker, daemon=True)
     thread.start()
-    frames = "|/-\\"
+    frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
     idx = 0
     while not done.wait(0.1):
         elapsed = time.perf_counter() - start
@@ -166,8 +170,8 @@ def _run_with_spinner(label: str, func: Callable[[], T]) -> T:
         idx += 1
     thread.join()
     elapsed = time.perf_counter() - start
-    status = "done" if not err else "error"
-    sys.stdout.write(f"\r[{status}] {elapsed:7.2f}s {label}\n")
+    complete = "⣿" if not err else "✗"
+    sys.stdout.write(f"\r{complete} {elapsed:7.2f}s {label}\n")
     sys.stdout.flush()
     if err:
         raise err[0]
@@ -451,11 +455,11 @@ def refresh_drugbank_generics_exports(*, verbose: bool = True) -> tuple[Optional
             print(f"[skip] {script_name} (not found)")
             continue
         
-        # Build shell command - keep stderr visible for debugging
+        # Build shell command - suppress ALL output (stdout AND stderr)
         if sys.platform == "win32":
-            cmd = f'cd /d "{drugbank_dir}" && "{rscript}" "{script_path}" >nul'
+            cmd = f'cd /d "{drugbank_dir}" && "{rscript}" "{script_path}" >nul 2>&1'
         else:
-            cmd = f'cd "{drugbank_dir}" && "{rscript}" "{script_path}" >/dev/null'
+            cmd = f'cd "{drugbank_dir}" && "{rscript}" "{script_path}" >/dev/null 2>&1'
         
         # Run with live timer update
         start = time.perf_counter()
@@ -471,11 +475,11 @@ def refresh_drugbank_generics_exports(*, verbose: bool = True) -> tuple[Optional
         r_thread.start()
         
         # Update timer while R runs
-        frames = "|/-\\"
+        frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
         idx = 0
         while not done_event.wait(0.1):
             elapsed = time.perf_counter() - start
-            sys.stdout.write(f"\r{frames[idx % 4]} {elapsed:6.1f}s {script_name}")
+            sys.stdout.write(f"\r{frames[idx % len(frames)]} {elapsed:7.2f}s {script_name}")
             sys.stdout.flush()
             idx += 1
         
@@ -483,9 +487,9 @@ def refresh_drugbank_generics_exports(*, verbose: bool = True) -> tuple[Optional
         elapsed = time.perf_counter() - start
         
         if exit_code_holder[0] == 0:
-            sys.stdout.write(f"\r[done] {elapsed:6.1f}s {script_name}\n")
+            sys.stdout.write(f"\r⣿ {elapsed:7.2f}s {script_name}\n")
         else:
-            sys.stdout.write(f"\r[fail] {elapsed:6.1f}s {script_name} (exit {exit_code_holder[0]})\n")
+            sys.stdout.write(f"\r✗ {elapsed:7.2f}s {script_name} (exit {exit_code_holder[0]})\n")
         sys.stdout.flush()
     
     module_output = drugbank_dir / "output"
@@ -623,10 +627,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
 
     _ensure_inputs_dir()
     
-    # Auto-purge old dated files in inputs/drugs
-    deleted = purge_old_dated_files(DRUGS_INPUTS_DIR, quiet=True)
-    if deleted > 0:
-        print(f"[cleanup] Removed {deleted} old dated files from inputs/drugs")
+    # Auto-purge old dated files in inputs/drugs (silent)
+    purge_old_dated_files(DRUGS_INPUTS_DIR, quiet=True)
 
     print("=" * 60)
     print("ESOA DRUGS PIPELINE")
@@ -644,10 +646,9 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
 
     # Run selected parts
     if 1 in parts_to_run:
-        print("\n" + "=" * 60)
         print("PART 1: Prepare Dependencies")
         print("=" * 60)
-        artifacts = run_part_1(
+        run_part_1(
             esoa_path=args.esoa,
             skip_who=args.skip_who,
             skip_drugbank=args.skip_drugbank,
@@ -657,32 +658,25 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             allow_fda_food_scrape=args.allow_fda_food_scrape,
             standalone=False,
         )
-        print("\nPart 1 artifacts:")
-        for label, path in artifacts.items():
-            print(f"  - {label}: {path}")
 
     if 2 in parts_to_run:
-        print("\n" + "=" * 60)
-        print("PART 2: Match Annex F with ATC/DrugBank IDs")
+        print("\nPART 2: Match Annex F with ATC/DrugBank IDs")
         print("=" * 60)
         results = run_annex_f_tagging(verbose=True)
 
     if 3 in parts_to_run:
-        print("\n" + "=" * 60)
-        print("PART 3: Match ESOA with ATC/DrugBank IDs")
+        print("\nPART 3: Match ESOA with ATC/DrugBank IDs")
         print("=" * 60)
         from pathlib import Path
         esoa_path = Path(args.esoa) if args.esoa else None
         results = run_esoa_tagging(esoa_path=esoa_path, verbose=True)
 
     if 4 in parts_to_run:
-        print("\n" + "=" * 60)
-        print("PART 4: Bridge ESOA to Annex F Drug Codes")
+        print("\nPART 4: Bridge ESOA to Annex F Drug Codes")
         print("=" * 60)
         results = run_esoa_to_drug_code(verbose=True)
 
-    print("\n" + "=" * 60)
-    print("PIPELINE COMPLETE")
+    print("\nPIPELINE COMPLETE")
     print("=" * 60)
 
 

@@ -265,11 +265,6 @@ def run_esoa_to_drug_code(
     if output_path is None:
         output_path = PIPELINE_OUTPUTS_DIR / "esoa_with_drug_code.csv"
     
-    if verbose:
-        print("=" * 60)
-        print("Part 4: Match ESOA to Annex F Drug Codes")
-        print("=" * 60)
-    
     # Load data
     if not esoa_path.exists():
         raise FileNotFoundError(f"ESOA with ATC not found: {esoa_path}")

@@ -363,22 +363,24 @@ class UnifiedTagger:
             
             if show_progress:
                 chunk_time = time.time() - chunk_start
-                elapsed = time.time() - start_time
                 rows_done = end_idx
-                rate = rows_done / elapsed if elapsed > 0 else 0
-                eta = (total_rows - rows_done) / rate if rate > 0 else 0
+                rows_remaining = total_rows - rows_done
+                # ETA based on latest chunk speed
+                chunk_rate = len(chunk_texts) / chunk_time if chunk_time > 0 else 0
+                eta = rows_remaining / chunk_rate if chunk_rate > 0 else 0
                 
                 print(
-                    f"  Chunk {chunk_num}/{num_chunks}: "
-                    f"{rows_done:,}/{total_rows:,} rows "
-                    f"({chunk_time:.1f}s, {rate:.0f} rows/s, ETA {eta:.0f}s)"
+                    f"⣿ {chunk_time:7.2f}s "
+                    f"Chunk {chunk_num}/{num_chunks}: {rows_done:,}/{total_rows:,} rows "
+                    f"ETA {eta:.0f}s"
                 )
         
         total_time = time.time() - start_time
         if show_progress:
+            rate = total_rows / total_time if total_time > 0 else 0
             print(
-                f"  Total: {total_rows:,} rows in {total_time:.1f}s "
-                f"({total_rows/total_time:.0f} rows/s)"
+                f"⣿ {total_time:7.2f}s "
+                f"Total: {total_rows:,} rows ({rate:.0f} rows/s)"
             )
         
         return pd.DataFrame(all_results)

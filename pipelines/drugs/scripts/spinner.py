@@ -13,7 +13,11 @@ T = TypeVar("T")
 
 
 def run_with_spinner(label: str, func: Callable[[], T]) -> T:
-    """Run func() while showing a lightweight CLI spinner with elapsed time."""
+    """Run func() while showing a lightweight CLI spinner with elapsed time.
+    
+    Output format: XXXX.XXs - [done] - label
+    Times are right-aligned by decimal point (7 chars total: ####.##s)
+    """
     done = threading.Event()
     result: list[T] = []
     err: list[BaseException] = []
@@ -29,7 +33,7 @@ def run_with_spinner(label: str, func: Callable[[], T]) -> T:
     start = time.perf_counter()
     thread = threading.Thread(target=worker, daemon=True)
     thread.start()
-    frames = "|/-\\"
+    frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
     idx = 0
     while not done.wait(0.1):
         elapsed = time.perf_counter() - start
@@ -38,8 +42,8 @@ def run_with_spinner(label: str, func: Callable[[], T]) -> T:
         idx += 1
     thread.join()
     elapsed = time.perf_counter() - start
-    status = "done" if not err else "error"
-    sys.stdout.write(f"\r[{status}] {elapsed:7.2f}s {label}\n")
+    complete = "⣿" if not err else "✗"
+    sys.stdout.write(f"\r{complete} {elapsed:7.2f}s {label}\n")
     sys.stdout.flush()
     if err:
         raise err[0]

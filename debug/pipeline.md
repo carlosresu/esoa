@@ -465,6 +465,10 @@ Some FDA rows have brand/generic swapped. Detect by:
 
 ## Decision Log
 
+### 2025-12-03 – CLI progress formatting refresh
+- **Decision:** Unified all pipeline spinners to use a braille-dot animation with aligned `[done]` completions and updated chunk ETA messages.
+- **Rationale:** This keeps console output readable, ensures long-running steps (e.g., DrugBank refresh and ESOA chunking) report timings consistently, and helps operators track progress without the earlier `[done]` offset issues.
+
 ### 2025-11-27: Initial Architecture
 - **Decision:** Use Annex F tagging algorithm as base (97% accuracy)
 - **Rationale:** Proven accuracy, well-tested
