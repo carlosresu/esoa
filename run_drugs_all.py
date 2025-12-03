@@ -301,36 +301,15 @@ def _run_r_script(
         raise RuntimeError(f"{script_path.name} exited with status {exc.returncode}") from exc
 
 
-def _copy_to_pipeline_inputs(source: Path, dest: Path) -> None:
+def _mirror_module_output(source: Path, dest: Path) -> None:
     """Mirror a module export into the Drugs pipeline inputs directory."""
     if not source.is_file():
         raise FileNotFoundError(f"Expected output from module at {source}, but it was not created.")
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, dest)
-    parquet_src = source.with_suffix(".parquet")
-    if parquet_src.is_file():
-        shutil.copy2(parquet_src, dest.with_suffix(".parquet"))
 
 
-def _ensure_parquet_sibling(csv_path: Path, *, verbose: bool = True) -> Optional[Path]:
-    """Create a Parquet sibling for a CSV if missing."""
-    if csv_path.suffix.lower() != ".csv":
-        return None
-    parquet_path = csv_path.with_suffix(".parquet")
-    if parquet_path.exists():
-        return parquet_path
-    try:
-        df = pd.read_csv(csv_path)
-        parquet_path.parent.mkdir(parents=True, exist_ok=True)
-        df.to_parquet(parquet_path, index=False)
-        return parquet_path
-    except Exception as exc:
-        if verbose:
-            print(f"[parquet] Warning: could not create {parquet_path} from {csv_path}: {exc}")
-        return None
-
-
-def _natural_esoa_part_order(path: Path) -> tuple[int, str]:
+def _sort_esoa_parts(path: Path) -> tuple[int, str]:
     """Sort helper that orders esoa_pt_* files by their numeric suffix."""
     for token in path.stem.split("_"):
         if token.isdigit():
@@ -369,9 +348,8 @@ def _concatenate_csv(parts: Sequence[Path], dest: Path) -> Path:
             f"- [esoa] Deduplicated: {before:,} → {after:,} rows (removed {before - after:,} duplicates)",
         )
     
-    # Save both CSV and parquet
+    # Save CSV only
     combined.to_csv(dest, index=False)
-    _ensure_parquet_sibling(dest)
     return dest
 
 
@@ -389,7 +367,7 @@ def _resolve_esoa_source(inputs_dir: Path, esoa_hint: Optional[str]) -> Path:
         raise FileNotFoundError(f"Unable to resolve eSOA input at {hint}")
     
     # Check for esoa_pt_*.csv in raw/drugs/ and combine them
-    part_files = sorted(raw_dir.glob("esoa_pt_*.csv"), key=_natural_esoa_part_order)
+    part_files = sorted(raw_dir.glob("esoa_pt_*.csv"), key=_sort_esoa_parts)
     if part_files:
         return _concatenate_csv(part_files, inputs_dir / "esoa_combined.csv")
     
@@ -483,9 +461,9 @@ def refresh_fda_food(
     if latest is None:
         raise FileNotFoundError("FDA food catalog not produced.")
     dest_path = inputs_dir / latest.name
-    _copy_to_pipeline_inputs(latest, dest_path)
+    _mirror_module_output(latest, dest_path)
     # Clean up legacy copies if present
-    for pattern in ("fda_food_products*.csv", "fda_food_products*.parquet", "fda_food_export_*.csv"):
+    for pattern in ("fda_food_products*.csv", "fda_food_export_*.csv"):
         for legacy in inputs_dir.glob(pattern):
             legacy.unlink(missing_ok=True)
     if verbose:
@@ -565,7 +543,7 @@ def refresh_drugbank_generics_exports(*, verbose: bool = True) -> tuple[Optional
     
     module_output = drugbank_dir / "output"
     
-    # Copy lean exports (both CSV and parquet per AGENTS.md policy)
+    # Copy lean exports (CSV-only per updated AGENTS.md policy)
     lean_basenames = [
         "generics_lean",
         "synonyms_lean", 
@@ -585,12 +563,12 @@ def refresh_drugbank_generics_exports(*, verbose: bool = True) -> tuple[Optional
     ]
     
     for basename in lean_basenames:
-        for ext in (".parquet", ".csv"):
+        for ext in (".csv",):
             source = module_output / f"{basename}{ext}"
             if source.is_file():
-                _copy_to_pipeline_inputs(source, DRUGS_INPUTS_DIR / f"{basename}{ext}")
+                _mirror_module_output(source, DRUGS_INPUTS_DIR / f"{basename}{ext}")
     
-    inputs_generics = DRUGS_INPUTS_DIR / "generics_lean.parquet"
+    inputs_generics = DRUGS_INPUTS_DIR / "generics_lean.csv"
     if not inputs_generics.exists():
         if verbose:
             print(f"[drugbank] Warning: {inputs_generics} not found after refresh.")

@@ -13,11 +13,9 @@ LABS_CODE = "LaboratoryAndDiagnostic"
 ITEM_EXCLUDE_START = 1540
 ITEM_EXCLUDE_END = 1896
 
-def _write_csv_and_parquet(frame: pd.DataFrame, csv_path: Path) -> None:
-    """Persist a dataframe to CSV and Parquet using the same stem."""
+def _write_csv_only(frame: pd.DataFrame, csv_path: Path) -> None:
+    """Persist a dataframe to CSV only (canonical format)."""
     frame.to_csv(csv_path, index=False, encoding="utf-8")
-    parquet_path = Path(csv_path).with_suffix(".parquet")
-    frame.to_parquet(parquet_path, index=False)
 
 
 def _load_esoa_file(path: Path, *, sep: str = ",") -> pd.DataFrame:
@@ -74,5 +72,5 @@ def prepare_labs_inputs(
     combined.sort_values(by=["ITEM_NUMBER", "DESCRIPTION"], inplace=True)
 
     dest_csv.parent.mkdir(parents=True, exist_ok=True)
-    _write_csv_and_parquet(combined, dest_csv)
+    _write_csv_only(combined, dest_csv)
     return dest_csv

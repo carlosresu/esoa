@@ -56,7 +56,6 @@ def run_part_1(
     from run_drugs_all import (
         PROJECT_ROOT,
         _ensure_inputs_dir,
-        _ensure_parquet_sibling,
         refresh_pnf,
         refresh_who,
         refresh_fda_brand_map,
@@ -133,15 +132,9 @@ def run_part_1(
                 f"Annex F CSV not found at {annex_path}. "
                 "Please provide a normalized annex_f.csv in raw/drugs/."
             )
-        _ensure_parquet_sibling(annex_path, verbose=False)
         return annex_path
     
     artifacts["annex_f"] = run_with_spinner("Verify Annex F", _verify_annex_f)
-
-    # Ensure Parquet siblings
-    for path in artifacts.values():
-        if path and path.suffix.lower() == ".csv":
-            _ensure_parquet_sibling(path, verbose=False)
 
     if standalone:
         print("\nPart 1 artifacts:")

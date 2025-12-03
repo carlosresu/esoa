@@ -11,19 +11,15 @@ from typing import List, Optional
 import pandas as pd
 
 
-def write_csv_and_parquet(df: pd.DataFrame, csv_path: Path) -> None:
-    """Write DataFrame to both CSV and Parquet."""
+def write_csv(df: pd.DataFrame, csv_path: Path) -> None:
+    """Write DataFrame to CSV (canonical format)."""
     df.to_csv(csv_path, index=False)
-    parquet_path = csv_path.with_suffix(".parquet")
-    try:
-        # Convert object columns to string for parquet compatibility
-        df_copy = df.copy()
-        for col in df_copy.columns:
-            if df_copy[col].dtype == object:
-                df_copy[col] = df_copy[col].fillna("").astype(str)
-        df_copy.to_parquet(parquet_path, index=False)
-    except Exception as e:
-        print(f"Warning: Parquet write failed: {e}", file=sys.stderr)
+
+
+# Backward compatibility alias
+def write_csv_and_parquet(df: pd.DataFrame, csv_path: Path) -> None:
+    """Deprecated: use write_csv instead. Now writes CSV only."""
+    write_csv(df, csv_path)
 
 
 def reorder_columns_after(

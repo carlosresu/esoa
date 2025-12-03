@@ -12,8 +12,8 @@ These rules are meant for GPT agents. Apply them whenever you are editing this r
 1. **Keep the standalone FDA scraper dependency files aligned.** Whenever you touch `pipelines/drugs/scripts/` (especially the normalization helpers or third-party imports) make sure the counterpart `dependencies/fda_ph_scraper/text_utils.py` captures the same text-processing logic and the `dependencies/fda_ph_scraper/requirements.txt` lists the packages needed by those scripts so the standalone scraper runs with the same dependencies as the pipeline helpers.
 2. **Standalone runner behavior.** The scripts under `dependencies/fda_ph_scraper`, `dependencies/atcd`, and `dependencies/drugbank_generics` must continue to be runnable on their own roots; they should default to writing outputs under their own `output/` directories while downstream runners copy those exports into `inputs/drugs/`.
 3. **Commit & submodule workflow.** Before creating a commit, inspect every submodule (`git submodule status`) for unstaged changes. If a submodule changed, commit and push that submodule first using a concise message describing its diff, then update the main repository's submodule pointer (commit and push that change separately). Always pull/push as appropriate within each repository before moving on so every agent run leaves the working tree clean.
-4. **Parquet-first data policy.** Parquet is the primary data format across all pipeline steps. When reading data, prefer `.parquet` files over `.csv` when both exist. When writing data, always export both `.parquet` (primary) and `.csv` (compatibility fallback). CSV exports exist only for human readability and compatibility with external tools.
-5. **Canonical file naming.** Use date-stamped naming for reference datasets: `who_atc_YYYY-MM-DD.parquet`, `fda_drug_YYYY-MM-DD.parquet`, etc. Legacy naming patterns like `*_molecules.csv` are deprecated.
+4. **CSV-first data policy.** CSV is the primary data format across all pipeline steps. When reading data, prefer `.csv` files over `.parquet` when both exist. When writing data, always export only `.csv` format. All data operations should use CSV as the canonical format.
+5. **Canonical file naming.** Use date-stamped naming for reference datasets: `who_atc_YYYY-MM-DD.csv`, `fda_drug_YYYY-MM-DD.csv`, etc. Legacy naming patterns like `*_molecules.csv` are deprecated.
 
 ## Pipeline Execution
 
@@ -28,42 +28,59 @@ These rules are meant for GPT agents. Apply them whenever you are editing this r
 
 8. **Unified tagging algorithm.** Both Annex F and ESOA use the SAME tagging algorithm. The Annex F tagger (Part 2) is the base - do not create separate algorithms for different input types.
 
-9. **DuckDB for all queries.** Use DuckDB for all reference lookups instead of Aho-Corasick tries. Load parquet files into DuckDB and query with SQL. This is faster for exact/prefix matching after tokenization.
+9. **DuckDB for all queries.** Use DuckDB for all reference lookups instead of Aho-Corasick tries. Load CSV files into DuckDB and query with SQL. This is faster for exact/prefix matching after tokenization.
 
-10. **Three reference tables.** The unified reference consists of:
-    - **Generics table**: All single-entity drug names (base generics, normalized)
-    - **Brands table**: FDA + DrugBank brands → maps to generic(s)
-    - **Mixtures table**: Component combinations → maps to mixture info
+10. **DrugBank lean tables.** The single R script `drugbank_lean_export.R` exports 8 lean data tables:
+    - `generics_lean.csv` - drugbank_id → name (one row per drug)
+    - `synonyms_lean.csv` - drugbank_id → synonym (English, INN/BAN/USAN/JAN/USP)
+    - `dosages_lean.csv` - drugbank_id × form × route × strength (valid combos)
+    - `brands_lean.csv` - brand → drugbank_id (international brands)
+    - `salts_lean.csv` - parent drugbank_id → salt info
+    - `mixtures_lean.csv` - mixture components with component_key
+    - `products_lean.csv` - drugbank_id × dosage_form × strength × route
+    - `atc_lean.csv` - drugbank_id → atc_code (with hierarchy levels)
 
-11. **Unified reference dataset schema.** The main reference is `unified_drug_reference.parquet`:
-    - Exploded by: `drugbank_id × atc_code × form × route` (only valid combos)
-    - Aggregated columns: `salts`, `doses`, `brands`, `mixtures` as pipe-delimited
-    - Sources tracked: `sources` column with pipe-delimited provenance
+11. **DrugBank lookup tables.** The same R script also exports 6 lookup tables for normalization:
+    - `lookup_salt_suffixes.csv` - salt suffixes to strip (HYDROCHLORIDE, SODIUM, etc.)
+    - `lookup_pure_salts.csv` - compounds that ARE salts (SODIUM CHLORIDE, etc.)
+    - `lookup_form_canonical.csv` - form aliases → canonical form
+    - `lookup_route_canonical.csv` - route aliases → canonical route
+    - `lookup_form_to_route.csv` - infer route from form
+    - `lookup_per_unit.csv` - per-unit normalization (ML, TAB, etc.)
+
+12. **Unified reference building.** Python script `build_unified_reference.py` consumes lean tables and builds:
+    - `unified_generics.csv` - drugbank_id → generic_name
+    - `unified_synonyms.csv` - drugbank_id → synonyms (pipe-separated)
+    - `unified_atc.csv` - drugbank_id → atc_code (one row per combo)
+    - `unified_dosages.csv` - drugbank_id × form × route × dose
+    - `unified_brands.csv` - brand_name → generic_name, drugbank_id
+    - `unified_salts.csv` - drugbank_id → salt forms
+    - `unified_mixtures.csv` - mixture components with component_key
 
 ## Drug Matching Policies
 
-12. **Salt handling.** Use `drugbank$salts` dataset for salt detection. Strip salts from matching basis UNLESS the compound is a pure salt (e.g., sodium chloride, calcium carbonate). Auto-detect pure salts: compounds where base would be empty after stripping.
+13. **Salt handling.** Use `lookup_salt_suffixes.csv` and `lookup_pure_salts.csv` for salt detection. Strip salts from matching basis UNLESS the compound is a pure salt (e.g., sodium chloride, calcium carbonate). Auto-detect pure salts: compounds where base would be empty after stripping.
 
-13. **Dose normalization.** Canonical formats:
+14. **Dose normalization.** Canonical formats:
     - Weight: normalize to `mg` (e.g., `1g` → `1000mg`)
     - Combinations: `500mg+200mg` (fixed combo), `500mg/200mg` (ratio)
     - Concentration: `10mg/mL`, `5%`
     - Volume: `mL` is canonical for liquids
 
-14. **Form-route validity.** Maintain `form_route_validity.parquet` with provenance. Only allow form-route combinations that exist in reference datasets. If form or route missing in input, infer the most common one.
+15. **Form-route validity.** Use `lookup_form_to_route.csv` and `dosages_lean.csv` for form-route inference. Only allow form-route combinations that exist in reference datasets. If form or route missing in input, infer the most common one.
 
-15. **Multi-word generic names.** Preserve known multi-word generics as single tokens (e.g., "tranexamic acid", "folic acid", "insulin glargine"). Do not split these into individual words during tokenization.
+16. **Multi-word generic names.** Preserve known multi-word generics as single tokens (e.g., "tranexamic acid", "folic acid", "insulin glargine"). Do not split these into individual words during tokenization.
 
-16. **Single vs combination ATC codes.** When an input row contains a single molecule, prefer single-drug ATC codes over combination ATCs. For example, LOSARTAN alone should get C09CA01, not C09DA01 (losartan+HCTZ combo).
+17. **Single vs combination ATC codes.** When an input row contains a single molecule, prefer single-drug ATC codes over combination ATCs. For example, LOSARTAN alone should get C09CA01, not C09DA01 (losartan+HCTZ combo).
 
-17. **R and Python constants sync.** The DrugBank R scripts (`dependencies/drugbank_generics/*.R`) have hardcoded constants that must stay in sync with Python constants (`pipelines/drugs/scripts/tagging/unified_constants.py`):
-   - Salt suffixes: `drugbank_salts.R:salt_suffixes` ↔ `SALT_TOKENS`
-   - Pure salts: `drugbank_salts.R:pure_salt_compounds` ↔ `PURE_SALT_COMPOUNDS`
-   - Unit mappings: `drugbank_generics.R:PER_UNIT_MAP` ↔ `UNIT_TOKENS`
-   - Salt synonyms: `drugbank_mixtures.R:SALT_SYNONYM_LOOKUP` ↔ (should be added to Python)
+18. **R and Python constants sync.** The DrugBank R script (`dependencies/drugbank_generics/drugbank_lean_export.R`) exports lookup tables that must stay in sync with Python constants (`pipelines/drugs/scripts/unified_constants.py`):
+   - Salt suffixes: `lookup_salt_suffixes.csv` ↔ `SALT_TOKENS`
+   - Pure salts: `lookup_pure_salts.csv` ↔ `PURE_SALT_COMPOUNDS`
+   - Form canonicals: `lookup_form_canonical.csv` ↔ `FORM_CANON`
+   - Route canonicals: `lookup_route_canonical.csv` ↔ `ROUTE_CANON`
    When modifying constants in either location, update the other to match.
 
-18. **Scoring algorithm.** Use deterministic pharmaceutical-principled scoring (NOT numeric weights):
+19. **Scoring algorithm.** Use deterministic pharmaceutical-principled scoring (NOT numeric weights):
     - Generic match is REQUIRED (no match without it)
     - Salt forms are IGNORED (unless pure salt compound)
     - Dose is FLEXIBLE for ATC tagging, EXACT for Drug Code matching
@@ -74,18 +91,8 @@ These rules are meant for GPT agents. Apply them whenever you are editing this r
 
 ## Reference Data
 
-18. **DrugBank data extraction.** The `dependencies/drugbank_generics/` directory contains R scripts that extract from the `dbdataset` package:
-    - `drugbank_generics.R` → `drugbank_generics_master.csv`
-    - `drugbank_mixtures.R` → `drugbank_mixtures_master.csv`
-    - `drugbank_brands.R` → `drugbank_brands_master.csv` + `drugbank_products_export.csv`
-    - `drugbank_salts.R` → `drugbank_salts_master.csv`
+20. **WHO ATC data.** Use the canonical `who_atc_YYYY-MM-DD.csv` files from `dependencies/atcd/`. The `load_who_molecules()` function loads CSV files.
 
-19. **WHO ATC data.** Use the canonical `who_atc_YYYY-MM-DD.parquet` files. The `load_who_molecules()` function supports both parquet and CSV formats.
-
-20. **Unified dataset enrichment.** DrugBank generics is the base dataset. Enrich with:
-    - PNF: synonyms, ATC codes
-    - WHO: ATC codes, names
-    - DrugBank products: dose/form/route variants
-    - DrugBank mixtures: combination info
-    - FDA drug brands: brand names, dose/form/route
-    - Deduplicate across all steps to prevent row explosion
+21. **FDA data.** Use `dependencies/fda_ph_scraper/` to generate:
+    - `fda_drug_YYYY-MM-DD.csv` - brand → generic mapping with dose/form/route
+    - `fda_food_YYYY-MM-DD.csv` - food product catalog (fallback for non-drugs)

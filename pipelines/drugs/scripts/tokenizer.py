@@ -29,6 +29,259 @@ _DOSE_PATTERN = re.compile(
 )
 _PARENTHESES_PATTERN = re.compile(r"\([^)]*\)")
 
+# Patterns for extracting details from drug names
+_SALT_PARENTHETICAL = re.compile(r"\(\s*as\s+([^)]+)\)", re.IGNORECASE)
+_BRAND_PARENTHETICAL = re.compile(r"\(([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\)")  # Title case = brand
+_QUALIFIER_PATTERN = re.compile(r"\b(for|in)\s+(hepatic|renal|infants?|pediatric|adults?|immunonutrition|immunoenhancement)\b", re.IGNORECASE)
+_INDICATION_PATTERN = re.compile(r"\bfor\s+(\w+(?:\s+\w+){0,3}?)(?:\s+(?:failure|conditions?|patients?))?", re.IGNORECASE)
+
+# Release detail keywords (defined early for use in extract_drug_details)
+_RELEASE_KEYWORDS = {
+    "EXTENDED RELEASE", "EXTENDED-RELEASE",
+    "SUSTAINED RELEASE", "SUSTAINED-RELEASE",
+    "MODIFIED RELEASE", "MODIFIED-RELEASE",
+    "CONTROLLED RELEASE", "CONTROLLED-RELEASE",
+    "DELAYED RELEASE", "DELAYED-RELEASE",
+    "IMMEDIATE RELEASE", "IMMEDIATE-RELEASE",
+    "LONG ACTING", "LONG-ACTING",
+    "RETARD", "SLOW RELEASE",
+}
+_RELEASE_ABBREVS = {"ER", "XR", "XL", "SR", "CR", "DR", "IR", "MR", "LA"}
+
+# Form detail keywords (non-release modifiers)
+_FORM_DETAIL_KEYWORDS = {
+    "FILM COATED", "FILM-COATED",
+    "ENTERIC COATED", "ENTERIC-COATED",
+    "SUGAR COATED", "SUGAR-COATED",
+    "CHEWABLE", "DISPERSIBLE", "EFFERVESCENT",
+    "SUBLINGUAL", "BUCCAL", "ORALLY DISINTEGRATING",
+    "RECTAL", "VAGINAL",
+}
+_FORM_DETAIL_ABBREVS = {"FC", "EC", "ODT"}
+
+
+def _extract_type_detail_impl(text: str) -> Tuple[str, Optional[str]]:
+    """Internal: Extract type detail from comma-separated text."""
+    if "," not in text:
+        return text, None
+    if " + " in text.upper() or " AND " in text.upper():
+        return text, None
+    parts = text.split(",", 1)
+    base = parts[0].strip()
+    after_comma = parts[1].strip() if len(parts) > 1 else ""
+    if not after_comma:
+        return base, None
+    after_upper = after_comma.upper()
+    after_words = set(after_upper.split())
+    for kw in _RELEASE_KEYWORDS:
+        if kw in after_upper:
+            return text, None
+    for kw in _FORM_DETAIL_KEYWORDS:
+        if kw in after_upper:
+            return text, None
+    if after_words & (_FORM_DETAIL_ABBREVS | _RELEASE_ABBREVS):
+        return text, None
+    form_words = {"TABLET", "CAPSULE", "SOLUTION", "SUSPENSION", "INJECTION", "CREAM", "OINTMENT"}
+    if any(fw in after_upper for fw in form_words):
+        return text, None
+    return base, after_comma
+
+
+def _extract_release_detail_impl(form_text: str) -> Tuple[str, Optional[str]]:
+    """Internal: Extract release modifier from form text."""
+    form_upper = form_text.upper()
+    form_words = form_upper.split()
+    if "," in form_text:
+        parts = form_text.split(",", 1)
+        base = parts[0].strip()
+        after_comma = parts[1].strip() if len(parts) > 1 else ""
+        after_upper = after_comma.upper()
+        after_words = set(after_upper.split())
+        for kw in _RELEASE_KEYWORDS:
+            if kw in after_upper:
+                return base, after_comma
+        if after_words & _RELEASE_ABBREVS:
+            return base, after_comma
+    for kw in _RELEASE_KEYWORDS:
+        if f" {kw}" in form_upper or form_upper.endswith(f" {kw}"):
+            idx = form_upper.find(kw)
+            base = form_text[:idx].strip()
+            release = form_text[idx:].strip()
+            if base:
+                return base, release
+    if len(form_words) >= 2 and form_words[-1] in _RELEASE_ABBREVS:
+        base = " ".join(form_text.split()[:-1])
+        return base, form_words[-1]
+    for word in form_words:
+        if word in _RELEASE_ABBREVS:
+            return form_text, word
+    return form_text, None
+
+
+def _extract_form_detail_impl(form_text: str) -> Tuple[str, Optional[str]]:
+    """Internal: Extract form modifier (non-release) from form text."""
+    form_upper = form_text.upper()
+    form_words = form_upper.split()
+    if "," in form_text:
+        parts = form_text.split(",", 1)
+        base = parts[0].strip()
+        after_comma = parts[1].strip() if len(parts) > 1 else ""
+        after_upper = after_comma.upper()
+        after_words = set(after_upper.split())
+        for kw in _FORM_DETAIL_KEYWORDS:
+            if kw in after_upper:
+                return base, after_comma
+        if after_words & _FORM_DETAIL_ABBREVS:
+            return base, after_comma
+    for kw in _FORM_DETAIL_KEYWORDS:
+        if f" {kw}" in form_upper or form_upper.endswith(f" {kw}"):
+            idx = form_upper.find(kw)
+            base = form_text[:idx].strip()
+            detail = form_text[idx:].strip()
+            if base:
+                return base, detail
+    if len(form_words) >= 2 and form_words[-1] in _FORM_DETAIL_ABBREVS:
+        base = " ".join(form_text.split()[:-1])
+        return base, form_words[-1]
+    for word in form_words:
+        if word in _FORM_DETAIL_ABBREVS:
+            return form_text, word
+    return form_text, None
+
+
+def extract_drug_details(drug_name: str) -> Dict[str, Optional[str]]:
+    """
+    Extract parentheticals and qualifiers from a drug name into separate fields.
+    
+    Returns dict with:
+        - generic_name: Base drug name without qualifiers
+        - salt_details: Salt form (e.g., "SODIUM SALT", "SULFATE")
+        - brand_details: Brand names in parentheses
+        - indication_details: Indication qualifiers (e.g., "FOR HEPATIC FAILURE")
+        - alias_details: Other aliases (e.g., "VIT. D3")
+        - type_details: Type qualifier (e.g., "DRY POWDER", "HUMAN")
+        - release_details: Release modifier (e.g., "SR", "MR", "EXTENDED RELEASE")
+        - form_details: Form qualifier (e.g., "FILM COATED", "CHEWABLE")
+    
+    Examples:
+        "AMINO ACID SOLUTIONS FOR HEPATIC FAILURE" 
+            -> generic: "AMINO ACIDS", indication: "FOR HEPATIC FAILURE"
+        "ALENDRONATE + CHOLECALCIFEROL (VIT. D3) ( as SODIUM SALT)"
+            -> generic: "ALENDRONATE + CHOLECALCIFEROL", salt: "SODIUM SALT", alias: "VIT. D3"
+        "NIFEDIPINE 30 mg MR TABLET"
+            -> generic: "NIFEDIPINE", release: "MR"
+    """
+    result = {
+        "generic_name": drug_name.strip().upper(),
+        "salt_details": None,
+        "brand_details": None,
+        "indication_details": None,
+        "alias_details": None,
+        "type_details": None,
+        "release_details": None,
+        "form_details": None,
+    }
+    
+    working = drug_name.strip()
+    # Normalize: remove whitespace after opening parenthesis and before closing
+    working = re.sub(r"\(\s+", "(", working)
+    working = re.sub(r"\s+\)", ")", working)
+    
+    # Extract salt forms: ( as SODIUM SALT), ( as SULFATE), etc.
+    salt_matches = _SALT_PARENTHETICAL.findall(working)
+    if salt_matches:
+        result["salt_details"] = "|".join(s.strip().upper() for s in salt_matches)
+        working = _SALT_PARENTHETICAL.sub("", working)
+    
+    # Extract indication qualifiers: FOR HEPATIC FAILURE, FOR INFANTS, etc.
+    indication_match = _INDICATION_PATTERN.search(working)
+    if indication_match:
+        indication = indication_match.group(0).strip().upper()
+        # Common indication patterns
+        if any(x in indication.upper() for x in ["HEPATIC", "RENAL", "INFANT", "PEDIATRIC", "IMMUNONUTRITION", "IMMUNOENHANCEMENT"]):
+            result["indication_details"] = indication
+            # Remove from generic name
+            working = working[:indication_match.start()] + working[indication_match.end():]
+    
+    # Also check for "SOLUTIONS FOR X" pattern
+    solutions_match = re.search(r"\bSOLUTIONS?\s+FOR\s+(\w+(?:\s+\w+){0,3})", working, re.IGNORECASE)
+    if solutions_match and not result["indication_details"]:
+        result["indication_details"] = solutions_match.group(0).strip().upper()
+        working = working[:solutions_match.start()] + "SOLUTIONS" + working[solutions_match.end():]
+    
+    # Extract remaining parentheticals as aliases (but not doses)
+    remaining_parens = re.findall(r"\(([^)]+)\)", working)
+    aliases = []
+    for paren in remaining_parens:
+        paren_upper = paren.strip().upper()
+        # Skip if it looks like a dose
+        if re.match(r"^\d+", paren_upper) or any(u in paren_upper for u in ["MG", "ML", "MCG", "IU", "%"]):
+            continue
+        # Skip if it's a salt we already captured
+        if paren_upper.startswith("AS "):
+            continue
+        aliases.append(paren_upper)
+    
+    if aliases:
+        result["alias_details"] = "|".join(aliases)
+        # Remove alias parentheticals from working string
+        for alias in aliases:
+            working = re.sub(r"\(\s*" + re.escape(alias) + r"\s*\)", "", working, flags=re.IGNORECASE)
+    
+    # Handle comma-separated details
+    # e.g., "VITAMIN A, RETINOL" → generic: "VITAMIN A", alias: "RETINOL"
+    # But NOT "A, B AND C" patterns (multi-ingredient) or if + appears after comma
+    if "," in working and " + " not in working:
+        parts = working.split(",")
+        first_part = parts[0].strip()
+        
+        # Check if this looks like a multi-ingredient comma list (A, B AND C)
+        remaining = ",".join(parts[1:]).strip()
+        is_multi_ingredient = bool(re.search(r"\bAND\b", remaining, re.IGNORECASE)) or "+" in remaining
+        
+        if not is_multi_ingredient and len(parts) > 1:
+            # Everything after first comma is detail
+            comma_details = [p.strip().upper() for p in parts[1:] if p.strip()]
+            # Filter out dose-like details
+            comma_details = [d for d in comma_details if not re.match(r"^\d+", d)]
+            
+            if comma_details:
+                if result["alias_details"]:
+                    result["alias_details"] += "|" + "|".join(comma_details)
+                else:
+                    result["alias_details"] = "|".join(comma_details)
+                working = first_part
+    
+    # Clean up generic name
+    working = re.sub(r"\s+", " ", working).strip().upper()
+    
+    # Strip dose/form info from the end
+    # Match patterns like "70 MG + 2800 IU TABLET" or "400 UNITS + 5 MG + 5000 UNITS OINTMENT"
+    # Find where numeric dose info starts (number followed by unit)
+    dose_start = re.search(r"\s+\d+(?:\.\d+)?\s*(?:MG|G|MCG|UG|IU|ML|L|UNITS?|%)", working, re.IGNORECASE)
+    if dose_start:
+        working = working[:dose_start.start()].strip()
+    
+    # Remove trailing "SOLUTIONS" if we extracted indication
+    if result["indication_details"] and working.endswith(" SOLUTIONS"):
+        working = working[:-10].strip()
+    elif result["indication_details"] and working.endswith(" SOLUTION"):
+        working = working[:-9].strip()
+    
+    result["generic_name"] = working if working else drug_name.strip().upper()
+    
+    # Extract type/release/form details from original text
+    # These functions are defined later in this module
+    _, type_det = _extract_type_detail_impl(drug_name)
+    _, release_det = _extract_release_detail_impl(drug_name)
+    _, form_det = _extract_form_detail_impl(drug_name) if not release_det else (None, None)
+    
+    result["type_details"] = type_det
+    result["release_details"] = release_det
+    result["form_details"] = form_det
+    
+    return result
+
 # Dose with denominator pattern: 500MG/5ML, 10MG/ML, etc.
 _DOSE_RATIO_PATTERN = re.compile(
     r"(\d+(?:\.\d+)?)\s*(mg|g|mcg|ug|iu)\s*/\s*(\d+(?:\.\d+)?)\s*(ml|l)",
@@ -148,35 +401,6 @@ def normalize_weight_to_mg(dose_str: str) -> Tuple[str, bool]:
     
     return normalized, True
 
-# Release detail keywords
-# Note: Short abbreviations are checked as whole words only
-_RELEASE_KEYWORDS = {
-    "EXTENDED RELEASE", "EXTENDED-RELEASE",
-    "SUSTAINED RELEASE", "SUSTAINED-RELEASE",
-    "CONTROLLED RELEASE", "CONTROLLED-RELEASE",
-    "DELAYED RELEASE", "DELAYED-RELEASE",
-    "IMMEDIATE RELEASE", "IMMEDIATE-RELEASE",
-    "MODIFIED RELEASE", "MODIFIED-RELEASE",
-    "LONG ACTING", "LONG-ACTING",
-    "RETARD", "SLOW RELEASE",
-}
-# Short abbreviations that need whole-word matching
-_RELEASE_ABBREVS = {"ER", "XR", "XL", "SR", "CR", "DR", "IR", "MR", "LA"}
-
-# Form detail keywords (non-release modifiers)
-# Note: Short abbreviations are checked as whole words only
-_FORM_DETAIL_KEYWORDS = {
-    "FILM COATED", "FILM-COATED",
-    "ENTERIC COATED", "ENTERIC-COATED",
-    "SUGAR COATED", "SUGAR-COATED",
-    "CHEWABLE", "DISPERSIBLE", "EFFERVESCENT",
-    "SUBLINGUAL", "BUCCAL", "ORALLY DISINTEGRATING",
-    "RECTAL", "VAGINAL",
-}
-# Short abbreviations that need whole-word matching
-_FORM_DETAIL_ABBREVS = {"FC", "EC", "ODT"}
-
-
 def extract_type_detail(text: str) -> Tuple[str, Optional[str]]:
     """
     Extract type detail from comma-separated text.
@@ -188,41 +412,7 @@ def extract_type_detail(text: str) -> Tuple[str, Optional[str]]:
     
     Returns (base_text, type_detail or None).
     """
-    if "," not in text:
-        return text, None
-    
-    # Don't process if it looks like a combination drug (has +, AND, etc.)
-    if " + " in text.upper() or " AND " in text.upper():
-        return text, None
-    
-    parts = text.split(",", 1)
-    base = parts[0].strip()
-    after_comma = parts[1].strip() if len(parts) > 1 else ""
-    
-    if not after_comma:
-        return base, None
-    
-    # Check if after comma is a type detail (not a form/release modifier)
-    after_upper = after_comma.upper()
-    after_words = set(after_upper.split())
-    
-    # Skip if it's a release or form detail
-    for kw in _RELEASE_KEYWORDS:
-        if kw in after_upper:
-            return text, None
-    for kw in _FORM_DETAIL_KEYWORDS:
-        if kw in after_upper:
-            return text, None
-    # Check abbreviations as whole words
-    if after_words & (_FORM_DETAIL_ABBREVS | _RELEASE_ABBREVS):
-        return text, None
-    
-    # Skip if it contains dosage form words
-    form_words = {"TABLET", "CAPSULE", "SOLUTION", "SUSPENSION", "INJECTION", "CREAM", "OINTMENT"}
-    if any(fw in after_upper for fw in form_words):
-        return text, None
-    
-    return base, after_comma
+    return _extract_type_detail_impl(text)
 
 
 def extract_release_detail(form_text: str) -> Tuple[str, Optional[str]]:
@@ -236,47 +426,7 @@ def extract_release_detail(form_text: str) -> Tuple[str, Optional[str]]:
     
     Returns (base_form, release_detail or None).
     """
-    form_upper = form_text.upper()
-    form_words = form_upper.split()
-    
-    # Check for comma-separated release detail
-    if "," in form_text:
-        parts = form_text.split(",", 1)
-        base = parts[0].strip()
-        after_comma = parts[1].strip() if len(parts) > 1 else ""
-        after_upper = after_comma.upper()
-        after_words = set(after_upper.split())
-        
-        for kw in _RELEASE_KEYWORDS:
-            if kw in after_upper:
-                return base, after_comma
-        # Check abbreviations as whole words
-        matched_abbrevs = after_words & _RELEASE_ABBREVS
-        if matched_abbrevs:
-            return base, after_comma
-    
-    # Check for space-separated release detail (full keywords)
-    for kw in _RELEASE_KEYWORDS:
-        if f" {kw}" in form_upper or form_upper.endswith(f" {kw}"):
-            idx = form_upper.find(kw)
-            base = form_text[:idx].strip()
-            release = form_text[idx:].strip()
-            if base:
-                return base, release
-    
-    # Check for abbreviations at end (whole word)
-    if len(form_words) >= 2:
-        last_word = form_words[-1]
-        if last_word in _RELEASE_ABBREVS:
-            base = " ".join(form_text.split()[:-1])
-            return base, last_word
-    
-    # Check for abbreviations anywhere in the string (whole word)
-    for i, word in enumerate(form_words):
-        if word in _RELEASE_ABBREVS:
-            return form_text, word
-    
-    return form_text, None
+    return _extract_release_detail_impl(form_text)
 
 
 def extract_form_detail(form_text: str) -> Tuple[str, Optional[str]]:
@@ -290,47 +440,7 @@ def extract_form_detail(form_text: str) -> Tuple[str, Optional[str]]:
     
     Returns (base_form, form_detail or None).
     """
-    form_upper = form_text.upper()
-    form_words = form_upper.split()
-    
-    # Check for comma-separated form detail
-    if "," in form_text:
-        parts = form_text.split(",", 1)
-        base = parts[0].strip()
-        after_comma = parts[1].strip() if len(parts) > 1 else ""
-        after_upper = after_comma.upper()
-        after_words = set(after_upper.split())
-        
-        for kw in _FORM_DETAIL_KEYWORDS:
-            if kw in after_upper:
-                return base, after_comma
-        # Check abbreviations as whole words
-        matched_abbrevs = after_words & _FORM_DETAIL_ABBREVS
-        if matched_abbrevs:
-            return base, after_comma
-    
-    # Check for space-separated form detail (full keywords)
-    for kw in _FORM_DETAIL_KEYWORDS:
-        if f" {kw}" in form_upper or form_upper.endswith(f" {kw}"):
-            idx = form_upper.find(kw)
-            base = form_text[:idx].strip()
-            detail = form_text[idx:].strip()
-            if base:
-                return base, detail
-    
-    # Check for abbreviations at end (whole word)
-    if len(form_words) >= 2:
-        last_word = form_words[-1]
-        if last_word in _FORM_DETAIL_ABBREVS:
-            base = " ".join(form_text.split()[:-1])
-            return base, last_word
-    
-    # Check for abbreviations anywhere in the string (whole word)
-    for i, word in enumerate(form_words):
-        if word in _FORM_DETAIL_ABBREVS:
-            return form_text, word
-    
-    return form_text, None
+    return _extract_form_detail_impl(form_text)
 
 
 def split_with_parentheses(text: str) -> List[str]:

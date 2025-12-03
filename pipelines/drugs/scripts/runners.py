@@ -74,8 +74,14 @@ def run_annex_f_tagging(
     
     # Merge results
     annex_df["row_idx"] = range(len(annex_df))
+    merge_cols = ["row_idx", "atc_code", "drugbank_id", "generic_name", "reference_text", 
+                  "match_score", "match_reason", "sources",
+                  "dose", "form", "route", "type_details", "release_details", "form_details",
+                  "salt_details", "brand_details", "indication_details", "alias_details"]
+    # Only include columns that exist in results_df
+    merge_cols = [c for c in merge_cols if c in results_df.columns]
     merged = annex_df.merge(
-        results_df[["row_idx", "atc_code", "drugbank_id", "generic_name", "reference_text", "match_score", "match_reason", "sources"]],
+        results_df[merge_cols],
         on="row_idx",
         how="left",
     ).drop(columns=["row_idx"])
@@ -181,8 +187,14 @@ def run_esoa_tagging(
     results_df = results_df.rename(columns={"input_text": "_tag_text"})
     esoa_df["_tag_text"] = esoa_df[text_column].fillna("").astype(str)
     
+    merge_cols = ["_tag_text", "atc_code", "drugbank_id", "generic_name", "reference_text", 
+                  "match_score", "match_reason", "sources",
+                  "dose", "form", "route", "type_details", "release_details", "form_details",
+                  "salt_details", "brand_details", "indication_details", "alias_details"]
+    # Only include columns that exist in results_df
+    merge_cols = [c for c in merge_cols if c in results_df.columns]
     merged = esoa_df.merge(
-        results_df[["_tag_text", "atc_code", "drugbank_id", "generic_name", "reference_text", "match_score", "match_reason", "sources"]],
+        results_df[merge_cols],
         on="_tag_text",
         how="left",
     ).drop(columns=["_tag_text"])
@@ -260,13 +272,13 @@ def run_esoa_to_drug_code(
     Returns dict with results summary.
     """
     if esoa_path is None:
-        esoa_path = PIPELINE_OUTPUTS_DIR / "esoa_with_atc.parquet"
+        esoa_path = PIPELINE_OUTPUTS_DIR / "esoa_with_atc.csv"
         if not esoa_path.exists():
-            esoa_path = PIPELINE_OUTPUTS_DIR / "esoa_with_atc.csv"
+            esoa_path = PIPELINE_OUTPUTS_DIR / "esoa_with_atc.parquet"
     if annex_path is None:
-        annex_path = PIPELINE_OUTPUTS_DIR / "annex_f_with_atc.parquet"
+        annex_path = PIPELINE_OUTPUTS_DIR / "annex_f_with_atc.csv"
         if not annex_path.exists():
-            annex_path = PIPELINE_OUTPUTS_DIR / "annex_f_with_atc.csv"
+            annex_path = PIPELINE_OUTPUTS_DIR / "annex_f_with_atc.parquet"
     if output_path is None:
         output_path = PIPELINE_OUTPUTS_DIR / "esoa_with_drug_code.csv"
     
@@ -297,11 +309,16 @@ def run_esoa_to_drug_code(
         return str(s).upper().strip()
     
     # Build synonym mappings from generics_master and merge with static constants
-    generics_master_path = PIPELINE_OUTPUTS_DIR / "generics_master.parquet"
+    generics_master_path = PIPELINE_OUTPUTS_DIR / "generics_master.csv"
+    if not generics_master_path.exists():
+        generics_master_path = PIPELINE_OUTPUTS_DIR / "generics_master.parquet"
     all_synonyms = dict(ALL_DRUG_SYNONYMS)  # Start with static synonyms from unified_constants
     
     if generics_master_path.exists():
-        gm = pd.read_parquet(generics_master_path)
+        if str(generics_master_path).endswith('.parquet'):
+            gm = pd.read_parquet(generics_master_path)
+        else:
+            gm = pd.read_csv(generics_master_path)
         for _, row in gm.iterrows():
             generic = str(row['generic_name']).upper().strip()
             synonyms_str = row.get('synonyms', '')
@@ -406,9 +423,22 @@ def run_esoa_to_drug_code(
                 annex_lookup[generic] = []
             annex_lookup[generic].append(candidate)
             
+            # Also index by base name without parentheticals (e.g., "ASCORBIC ACID (VITAMIN C)" -> "ASCORBIC ACID")
+            base_generic = re.sub(r'\s*\([^)]*\)', '', generic).strip()
+            if base_generic and base_generic != generic:
+                if base_generic not in annex_lookup:
+                    annex_lookup[base_generic] = []
+                annex_lookup[base_generic].append(candidate)
+            
             # Also add synonym mappings (from unified_constants)
             if generic in ALL_DRUG_SYNONYMS:
                 syn = ALL_DRUG_SYNONYMS[generic]
+                if syn not in annex_lookup:
+                    annex_lookup[syn] = []
+                annex_lookup[syn].append(candidate)
+            # Check base generic for synonyms too
+            if base_generic and base_generic in ALL_DRUG_SYNONYMS:
+                syn = ALL_DRUG_SYNONYMS[base_generic]
                 if syn not in annex_lookup:
                     annex_lookup[syn] = []
                 annex_lookup[syn].append(candidate)
@@ -613,9 +643,9 @@ def load_fda_food_lookup(inputs_dir: Path = None) -> dict:
         inputs_dir = PIPELINE_INPUTS_DIR
     
     # Find latest FDA food file
-    food_files = sorted(glob.glob(str(inputs_dir / "fda_food_*.parquet")))
+    food_files = sorted(glob.glob(str(inputs_dir / "fda_food_*.csv")))
     if not food_files:
-        food_files = sorted(glob.glob(str(inputs_dir / "fda_food_*.csv")))
+        food_files = sorted(glob.glob(str(inputs_dir / "fda_food_*.parquet")))
     
     if not food_files:
         return {}

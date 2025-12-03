@@ -4,13 +4,13 @@
 Build unified drug reference tables - LEAN version.
 
 Tables produced (no explosions except valid form×route×dose combos):
-    unified_generics.parquet   - drugbank_id → generic_name (lean, one per drug)
-    unified_synonyms.parquet   - drugbank_id → synonyms (pipe-separated)
-    unified_atc.parquet        - drugbank_id → atc_code (one row per valid combo)
-    unified_products.parquet   - drugbank_id × form × route × dose (valid combos only)
-    unified_brands.parquet     - brand_name → generic_name, drugbank_id
-    unified_salts.parquet      - drugbank_id → salt forms
-    unified_mixtures.parquet   - mixture components with component_key
+    unified_generics.csv     - drugbank_id → generic_name (lean, one per drug)
+    unified_synonyms.csv     - drugbank_id → synonyms (pipe-separated)
+    unified_atc.csv          - drugbank_id → atc_code (one row per valid combo)
+    unified_dosages.csv      - drugbank_id × form × route × dose (valid combos only)
+    unified_brands.csv       - brand_name → generic_name, drugbank_id
+    unified_salts.csv        - drugbank_id → salt forms
+    unified_mixtures.csv     - mixture components with component_key
 
 Usage:
     python -m pipelines.drugs.scripts.build_unified_reference_v2
@@ -25,20 +25,43 @@ from typing import Optional
 import duckdb
 import pandas as pd
 
+from .unified_constants import CANONICAL_GENERICS, CANONICAL_ATC_MAPPINGS
+from .tokenizer import extract_drug_details
+
+
+ALL_DETAILS_COLS = [
+    "salt_details", "brand_details", "indication_details", "alias_details",
+    "type_details", "release_details", "form_details",
+]
+
+def _add_details_columns(df: pd.DataFrame, name_col: str = "generic_name") -> pd.DataFrame:
+    """
+    Add _details columns by parsing the specified name column.
+    Columns: salt_details, brand_details, indication_details, alias_details,
+             type_details, release_details, form_details
+    """
+    if name_col not in df.columns or df.empty:
+        for col in ALL_DETAILS_COLS:
+            df[col] = None
+        return df
+    
+    details = df[name_col].fillna("").apply(extract_drug_details)
+    for col in ALL_DETAILS_COLS:
+        df[col] = details.apply(lambda d, c=col: d.get(c))
+    return df
+
 PROJECT_DIR = Path(__file__).resolve().parents[3]
 INPUTS_DIR = PROJECT_DIR / "inputs" / "drugs"
 OUTPUTS_DIR = PROJECT_DIR / "outputs" / "drugs"
 
 
 def _save_table(df: pd.DataFrame, outputs_dir: Path, name: str, verbose: bool = True):
-    """Save dataframe as parquet + csv."""
-    parquet_path = outputs_dir / f"{name}.parquet"
+    """Save dataframe as CSV (canonical format)."""
     csv_path = outputs_dir / f"{name}.csv"
-    df.to_parquet(parquet_path, index=False)
     df.to_csv(csv_path, index=False)
     if verbose:
         print(f"  ✓ {name}: {len(df):,} rows")
-    return parquet_path
+    return csv_path
 
 
 def build_unified_reference(
@@ -64,19 +87,15 @@ def build_unified_reference(
     if verbose:
         print("\n[Step 1] Loading lean exports...")
     
-    # Helper: prefer parquet over csv
+    # Helper: load CSV files (canonical format)
     def load_table(table_name: str, basename: str):
-        parquet_path = inputs_dir / f"{basename}.parquet"
         csv_path = inputs_dir / f"{basename}.csv"
-        if parquet_path.exists():
-            con.execute(f"CREATE TABLE {table_name} AS SELECT * FROM read_parquet('{parquet_path}')")
-            return parquet_path
-        elif csv_path.exists():
+        if csv_path.exists():
             con.execute(f"CREATE TABLE {table_name} AS SELECT * FROM read_csv_auto('{csv_path}')")
             return csv_path
         return None
     
-    # Lean DrugBank tables (prefer parquet)
+    # Lean DrugBank tables
     lean_tables = [
         ("generics", "generics_lean"),
         ("synonyms", "synonyms_lean"),
@@ -94,7 +113,7 @@ def build_unified_reference(
             count = con.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
             print(f"  - {table_name}: {count:,} rows")
     
-    # Lookup tables (prefer parquet)
+    # Lookup tables
     lookup_tables = [
         ("lookup_salt_suffixes", "lookup_salt_suffixes"),
         ("lookup_pure_salts", "lookup_pure_salts"),
@@ -108,22 +127,32 @@ def build_unified_reference(
         load_table(table_name, basename)
     
     # WHO ATC
-    who_files = sorted(glob.glob(str(inputs_dir / "who_atc_*.parquet")))
+    who_files = sorted(glob.glob(str(inputs_dir / "who_atc_*.csv")))
     if who_files:
         who_path = who_files[-1]
-        con.execute(f"CREATE TABLE who_atc AS SELECT * FROM read_parquet('{who_path}')")
+        con.execute(f"CREATE TABLE who_atc AS SELECT * FROM read_csv_auto('{who_path}')")
         if verbose:
             count = con.execute("SELECT COUNT(*) FROM who_atc").fetchone()[0]
             print(f"  - who_atc: {count:,} rows")
     
     # FDA brands
-    fda_files = sorted(glob.glob(str(inputs_dir / "fda_drug_*.parquet")))
+    fda_files = sorted(glob.glob(str(inputs_dir / "fda_drug_*.csv")))
     if fda_files:
         fda_path = fda_files[-1]
-        con.execute(f"CREATE TABLE fda_brands AS SELECT * FROM read_parquet('{fda_path}')")
+        con.execute(f"CREATE TABLE fda_brands AS SELECT * FROM read_csv_auto('{fda_path}')")
         if verbose:
             count = con.execute("SELECT COUNT(*) FROM fda_brands").fetchone()[0]
             print(f"  - fda_brands: {count:,} rows")
+    
+    # PNF (Philippine National Formulary) - prepared data
+    pnf_path = inputs_dir / "pnf_prepared.csv"
+    pnf_loaded = False
+    if pnf_path.exists():
+        con.execute(f"CREATE TABLE pnf AS SELECT * FROM read_csv_auto('{pnf_path}')")
+        pnf_loaded = True
+        if verbose:
+            count = con.execute("SELECT COUNT(*) FROM pnf").fetchone()[0]
+            print(f"  - pnf: {count:,} rows")
 
     # =========================================================================
     # TABLE 1: unified_generics - LEAN (one row per generic)
@@ -159,16 +188,104 @@ def build_unified_reference(
     except Exception:
         pass
     
+    # Add PNF generics (Philippine National Formulary)
+    if pnf_loaded:
+        try:
+            existing = set(generics_df['generic_name'].str.upper().unique())
+            pnf_df = con.execute("""
+                SELECT DISTINCT
+                    NULL as drugbank_id,
+                    UPPER(TRIM(generic_normalized)) as generic_name,
+                    LOWER(REGEXP_REPLACE(generic_normalized, '[^a-zA-Z0-9 ]', '', 'g')) as name_key,
+                    'pnf' as source
+                FROM pnf
+                WHERE generic_normalized IS NOT NULL AND generic_normalized != ''
+            """).fetchdf()
+            pnf_new = pnf_df[~pnf_df['generic_name'].isin(existing)]
+            generics_df = pd.concat([generics_df, pnf_new], ignore_index=True)
+            if verbose:
+                print(f"    + Added {len(pnf_new)} PNF-only generics")
+        except Exception as e:
+            if verbose:
+                print(f"    ! PNF generics error: {e}")
+    
     generics_df = generics_df.drop_duplicates(subset=['generic_name'])
     
-    # Add canonical drug name aliases for common combinations
-    canonical_generics = [
-        {"drugbank_id": "DB00766", "generic_name": "AMOXICILLIN + CLAVULANIC ACID", "name_key": "amoxicillin + clavulanic acid", "source": "canonical"},
-        {"drugbank_id": None, "generic_name": "COTRIMOXAZOLE", "name_key": "cotrimoxazole", "source": "canonical"},
-        {"drugbank_id": None, "generic_name": "SULFAMETHOXAZOLE + TRIMETHOPRIM", "name_key": "sulfamethoxazole + trimethoprim", "source": "canonical"},
-    ]
-    canonical_gen_df = pd.DataFrame(canonical_generics)
-    generics_df = pd.concat([generics_df, canonical_gen_df], ignore_index=True).drop_duplicates(subset=['generic_name'])
+    # Add canonical drug name aliases from unified_constants.py
+    # These are combination drugs or special products that need explicit handling
+    canonical_gen_df = pd.DataFrame(CANONICAL_GENERICS)
+    # Add name_key column if not present
+    if 'name_key' not in canonical_gen_df.columns:
+        canonical_gen_df['name_key'] = canonical_gen_df['generic_name'].str.lower().str.replace(r'[^a-z0-9 ]', '', regex=True)
+    
+    # For canonicals with DrugBank IDs, UPDATE existing entries rather than just concat
+    # This ensures we preserve DrugBank IDs even if PNF/WHO added the generic first
+    canonical_with_db = canonical_gen_df[canonical_gen_df['drugbank_id'].notna()]
+    canonical_no_db = canonical_gen_df[canonical_gen_df['drugbank_id'].isna()]
+    
+    # Update existing entries with DrugBank IDs from canonicals
+    for _, row in canonical_with_db.iterrows():
+        mask = generics_df['generic_name'] == row['generic_name']
+        if mask.any():
+            generics_df.loc[mask, 'drugbank_id'] = row['drugbank_id']
+            generics_df.loc[mask, 'source'] = 'canonical'
+        else:
+            # Add new entry
+            generics_df = pd.concat([generics_df, pd.DataFrame([row])], ignore_index=True)
+    
+    # Add canonicals without DrugBank ID only if not already present
+    existing = set(generics_df['generic_name'].str.upper().unique())
+    canonical_no_db_new = canonical_no_db[~canonical_no_db['generic_name'].str.upper().isin(existing)]
+    generics_df = pd.concat([generics_df, canonical_no_db_new], ignore_index=True)
+    
+    generics_df = generics_df.drop_duplicates(subset=['generic_name'])
+    
+    # Also add raw PNF molecule names (not just normalized) for better matching
+    if pnf_loaded:
+        try:
+            existing = set(generics_df['generic_name'].str.upper().unique())
+            pnf_raw_df = con.execute("""
+                SELECT DISTINCT
+                    NULL as drugbank_id,
+                    UPPER(TRIM(raw_molecule)) as generic_name,
+                    LOWER(REGEXP_REPLACE(raw_molecule, '[^a-zA-Z0-9 ]', '', 'g')) as name_key,
+                    'pnf_raw' as source
+                FROM pnf
+                WHERE raw_molecule IS NOT NULL AND raw_molecule != ''
+            """).fetchdf()
+            pnf_raw_new = pnf_raw_df[~pnf_raw_df['generic_name'].isin(existing)]
+            generics_df = pd.concat([generics_df, pnf_raw_new], ignore_index=True)
+            if verbose:
+                print(f"    + Added {len(pnf_raw_new)} PNF raw molecule names")
+        except Exception as e:
+            if verbose:
+                print(f"    ! PNF raw error: {e}")
+    
+    # Add _details columns by parsing generic names
+    # This preserves information like salt forms, brand names, indications, and aliases
+    generics_df = _add_details_columns(generics_df, "generic_name")
+    
+    # Also try to pull PNF details if available (more precise since already parsed)
+    if pnf_loaded:
+        try:
+            # Build column list for SQL query
+            details_cols_sql = ", ".join(ALL_DETAILS_COLS)
+            pnf_details = con.execute(f"""
+                SELECT DISTINCT
+                    UPPER(TRIM(generic_normalized)) as generic_name,
+                    {details_cols_sql}
+                FROM pnf
+                WHERE generic_normalized IS NOT NULL
+            """).fetchdf()
+            # Merge PNF details into generics_df (prefer PNF details when available)
+            for _, prow in pnf_details.iterrows():
+                mask = generics_df['generic_name'] == prow['generic_name']
+                if mask.any():
+                    for col in ALL_DETAILS_COLS:
+                        if col in prow.index and pd.notna(prow[col]) and prow[col]:
+                            generics_df.loc[mask, col] = prow[col]
+        except Exception:
+            pass  # PNF may not have details columns yet
     
     # =========================================================================
     # TABLE 2: unified_synonyms - drugbank_id → synonyms (aggregated)
@@ -219,19 +336,31 @@ def build_unified_reference(
     except Exception:
         pass
     
+    # Add PNF ATC entries (Philippine National Formulary)
+    if pnf_loaded:
+        try:
+            pnf_atc_df = con.execute("""
+                SELECT DISTINCT
+                    NULL as drugbank_id,
+                    UPPER(TRIM(generic_normalized)) as generic_name,
+                    TRIM(atc_code) as atc_code
+                FROM pnf
+                WHERE atc_code IS NOT NULL AND atc_code != ''
+                  AND generic_normalized IS NOT NULL AND generic_normalized != ''
+            """).fetchdf()
+            before_count = len(atc_map_df)
+            atc_map_df = pd.concat([atc_map_df, pnf_atc_df], ignore_index=True)
+            if verbose:
+                print(f"    + Added {len(pnf_atc_df)} PNF ATC mappings")
+        except Exception as e:
+            if verbose:
+                print(f"    ! PNF ATC error: {e}")
+    
     atc_map_df = atc_map_df.drop_duplicates()
     
-    # Add canonical drug name aliases for common combinations
-    # These map user-friendly names to their ATC codes
-    canonical_aliases = [
-        # Amoxicillin + Clavulanic acid combinations -> J01CR02
-        {"drugbank_id": "DB00766", "generic_name": "AMOXICILLIN + CLAVULANIC ACID", "atc_code": "J01CR02"},
-        {"drugbank_id": "DB00766", "generic_name": "CO-AMOXICLAV", "atc_code": "J01CR02"},
-        # Sulfamethoxazole + Trimethoprim -> J01EE01
-        {"drugbank_id": None, "generic_name": "COTRIMOXAZOLE", "atc_code": "J01EE01"},
-        {"drugbank_id": None, "generic_name": "SULFAMETHOXAZOLE + TRIMETHOPRIM", "atc_code": "J01EE01"},
-    ]
-    canonical_df = pd.DataFrame(canonical_aliases)
+    # Add canonical ATC mappings from unified_constants.py
+    # These map combination names to their ATC codes
+    canonical_df = pd.DataFrame(CANONICAL_ATC_MAPPINGS)
     atc_map_df = pd.concat([atc_map_df, canonical_df], ignore_index=True).drop_duplicates()
     
     # =========================================================================
@@ -240,19 +369,52 @@ def build_unified_reference(
     if verbose:
         print("\n[Step 5] Building unified_dosages (valid combos only)...")
     
+    # DrugBank dosages (canonical)
     dosages_df = con.execute("""
         SELECT DISTINCT
-            drugbank_id,
-            UPPER(TRIM(form)) as form,
-            UPPER(TRIM(route)) as route,
-            UPPER(TRIM(strength)) as dose
-        FROM dosages
-        WHERE drugbank_id IS NOT NULL
+            d.drugbank_id,
+            UPPER(TRIM(g.name)) as generic_name,
+            UPPER(TRIM(d.form)) as form,
+            UPPER(TRIM(d.route)) as route,
+            UPPER(TRIM(d.strength)) as dose,
+            'drugbank' as source
+        FROM dosages d
+        LEFT JOIN generics g ON d.drugbank_id = g.drugbank_id
+        WHERE d.drugbank_id IS NOT NULL
     """).fetchdf()
+    
+    if verbose:
+        print(f"    - DrugBank: {len(dosages_df):,} combos")
+    
+    # Add PNF form/route/dose combos (Philippine-context valid combinations)
+    # These are critical for matching Philippine hospital data (ESOA) to Philippine formulary (Annex F)
+    if pnf_loaded:
+        try:
+            pnf_dosages_df = con.execute("""
+                SELECT DISTINCT
+                    NULL as drugbank_id,
+                    UPPER(TRIM(generic_normalized)) as generic_name,
+                    UPPER(TRIM(form_token)) as form,
+                    UPPER(TRIM(route_allowed)) as route,
+                    CASE 
+                        WHEN strength_mg IS NOT NULL THEN CAST(CAST(strength_mg AS INTEGER) AS VARCHAR) || ' MG'
+                        WHEN strength IS NOT NULL AND unit IS NOT NULL THEN CAST(CAST(strength AS INTEGER) AS VARCHAR) || ' ' || UPPER(unit)
+                        ELSE NULL
+                    END as dose,
+                    'pnf' as source
+                FROM pnf
+                WHERE generic_normalized IS NOT NULL AND generic_normalized != ''
+            """).fetchdf()
+            dosages_df = pd.concat([dosages_df, pnf_dosages_df], ignore_index=True)
+            if verbose:
+                print(f"    + PNF: {len(pnf_dosages_df):,} Philippine-context combos")
+        except Exception as e:
+            if verbose:
+                print(f"    ! PNF dosages error: {e}")
     
     dosages_df = dosages_df.fillna('').drop_duplicates()
     if verbose:
-        print(f"    - {len(dosages_df):,} valid combos")
+        print(f"    - Total: {len(dosages_df):,} valid combos")
     
     # =========================================================================
     # TABLE 5: unified_brands - brand → generic mapping

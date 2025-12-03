@@ -30,7 +30,7 @@
 ┌─────────────────────────────────────────────────────────────────┐
 │                        PART 1: PREPARE                          │
 │  Refresh: WHO ATC, DrugBank (R scripts), FDA, PNF              │
-│  Output: inputs/drugs/*.parquet                                 │
+│  Output: inputs/drugs/*.csv                                   │
 └─────────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────────┐
@@ -42,9 +42,9 @@
                               ↓
 ┌─────────────────────────────────────────────────────────────────┐
 │                      PART 3: TAG ESOA                           │
-│  Input: esoa_combined.parquet                                  │
+│  Input: esoa_combined.csv                                      │
 │  Process: UnifiedTagger assigns ATC + DrugBank ID              │
-│  Output: esoa_with_atc.parquet                                 │
+│  Output: esoa_with_atc.csv                                     │
 └─────────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────────┐
@@ -152,45 +152,47 @@ Scoring is deterministic based on pharmaceutical principles, not arbitrary numer
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                    DRUGBANK (BASE)                              │
-│  - drugbank_generics_master (~392K)                            │
-│  - drugbank_mixtures_master (~153K)                            │
-│  - drugbank_brands_master (~209K)                              │
-│  - drugbank_products_export (~456K)                            │
-│  - drugbank_salts_master (~3K)                                 │
+│                    DRUGBANK LEAN TABLES                         │
+│  8 data tables: generics, synonyms, dosages, brands, salts,    │
+│                 mixtures, products, atc                         │
+│  6 lookup tables: salt_suffixes, pure_salts, form_canonical,   │
+│                   route_canonical, form_to_route, per_unit      │
 └─────────────────────────────────────────────────────────────────┘
                     ↑ ENRICHED BY ↑
 ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
 │     PNF      │  │     WHO      │  │   FDA DRUG   │  │   FDA FOOD   │
-│   (~3K)      │  │   (~6K)      │  │   (~31K)     │  │   (~XXK)     │
+│   (~3K)      │  │   (~6K)      │  │   (~31K)     │  │   (~135K)    │
 │  PH formulary│  │  ATC codes   │  │  PH brands   │  │  Fallback    │
 │  synonyms    │  │  DDD info    │  │  dose/form   │  │  for non-drug│
 └──────────────┘  └──────────────┘  └──────────────┘  └──────────────┘
 ```
 
-### Primary Reference Datasets
+### Primary Reference Datasets (DrugBank Lean Tables)
 
-| Dataset | Source | Rows | Purpose |
-|---------|--------|------|---------|
-| `drugbank_generics_master` | DrugBank | ~392K | **BASE** - Generic drug info |
-| `drugbank_mixtures_master` | DrugBank | ~153K | Combination drugs |
-| `drugbank_brands_master` | DrugBank | ~209K | Brand names |
-| `drugbank_products_export` | DrugBank | ~456K | Product variants (dose/form/route) |
-| `drugbank_salts_master` | DrugBank | ~3K | Salt forms |
+| Dataset | Source | Purpose |
+|---------|--------|---------|
+| `generics_lean.csv` | DrugBank | **BASE** - drugbank_id → name (one per drug) |
+| `synonyms_lean.csv` | DrugBank | drugbank_id → synonym (English, INN/BAN/USAN/JAN/USP) |
+| `dosages_lean.csv` | DrugBank | drugbank_id × form × route × strength |
+| `brands_lean.csv` | DrugBank | brand → drugbank_id (international) |
+| `salts_lean.csv` | DrugBank | parent drugbank_id → salt info |
+| `mixtures_lean.csv` | DrugBank | mixture components with component_key |
+| `products_lean.csv` | DrugBank | drugbank_id × dosage_form × strength × route |
+| `atc_lean.csv` | DrugBank | drugbank_id → atc_code (with hierarchy) |
 
 ### Enrichment Datasets
 
 | Dataset | Source | Rows | Enriches With |
 |---------|--------|------|---------------|
-| `pnf_lexicon.parquet` | Philippine National Formulary | ~3K | PH-specific synonyms, ATC codes |
-| `who_atc_*.parquet` | WHO ATC Index | ~6K | ATC codes, DDD (Defined Daily Dose) |
-| `fda_drug_*.parquet` | FDA Philippines | ~31K | PH brand names, dose/form/route |
+| `pnf_lexicon.csv` | Philippine National Formulary | ~3K | PH-specific synonyms, ATC codes |
+| `who_atc_*.csv` | WHO ATC Index | ~6K | ATC codes, DDD (Defined Daily Dose) |
+| `fda_drug_*.csv` | FDA Philippines | ~31K | PH brand names, dose/form/route |
 
 ### Fallback Dataset
 
 | Dataset | Source | Rows | Purpose |
 |---------|--------|------|---------|
-| `fda_food_*.parquet` | FDA Philippines | ~135K | Last resort for non-drug items (herbs, supplements) |
+| `fda_food_*.csv` | FDA Philippines | ~135K | Last resort for non-drug items (herbs, supplements) |
 
 ### No Source Priority
 There is NO preference between sources. All sources contribute to a single unified reference. The unified reference is the authority.
@@ -585,26 +587,38 @@ Some FDA rows have brand/generic swapped. Detect by:
 
 | File | Rows | Status |
 |------|------|--------|
-| `generics_lookup.parquet` | ~6K | ✅ Generated |
-| `brands_lookup.parquet` | ~126K | ✅ Generated |
-| `mixtures_lookup.parquet` | ~153K | ✅ Generated |
-| `form_route_validity.parquet` | ~15K | ✅ Generated |
-| `unified_drug_reference.parquet` | ~15K | ⚠️ Needs rebuild with new schema |
+| `generics_lookup.csv` | ~6K | ✅ Generated |
+| `brands_lookup.csv` | ~126K | ✅ Generated |
+| `mixtures_lookup.csv` | ~153K | ✅ Generated |
+| `form_route_validity.csv` | ~15K | ✅ Generated |
+| `unified_drug_reference.csv` | ~15K | ⚠️ Needs rebuild with new schema |
 
 #### Input Datasets (in `inputs/drugs/`)
 
-| File | Rows | Status |
-|------|------|--------|
-| `drugbank_generics_master.csv` | ~392K | ✅ Fresh |
-| `drugbank_mixtures_master.csv` | ~153K | ✅ Fresh |
-| `drugbank_brands_master.csv` | ~209K | ✅ Fresh |
-| `drugbank_products_export.csv` | ~456K | ✅ Fresh |
-| `drugbank_salts_master.csv` | ~3K | ✅ Fresh |
-| `pnf_lexicon.csv` | ~3K | ✅ Fresh |
-| `who_atc_2025-11-27.parquet` | ~6K | ✅ Fresh |
-| `fda_drug_2025-11-12.parquet` | ~31K | ✅ Fresh |
-| `fda_food_2025-11-23.parquet` | ~135K | ✅ Fresh |
-| `esoa_combined.csv` | 258,878 | ⚠️ Has duplicates (~145K unique) |
+| File | Status |
+|------|--------|
+| **DrugBank Lean Tables** | |
+| `generics_lean.csv` | ✅ From drugbank_lean_export.R |
+| `synonyms_lean.csv` | ✅ From drugbank_lean_export.R |
+| `dosages_lean.csv` | ✅ From drugbank_lean_export.R |
+| `brands_lean.csv` | ✅ From drugbank_lean_export.R |
+| `salts_lean.csv` | ✅ From drugbank_lean_export.R |
+| `mixtures_lean.csv` | ✅ From drugbank_lean_export.R |
+| `products_lean.csv` | ✅ From drugbank_lean_export.R |
+| `atc_lean.csv` | ✅ From drugbank_lean_export.R |
+| **Lookup Tables** | |
+| `lookup_salt_suffixes.csv` | ✅ From drugbank_lean_export.R |
+| `lookup_pure_salts.csv` | ✅ From drugbank_lean_export.R |
+| `lookup_form_canonical.csv` | ✅ From drugbank_lean_export.R |
+| `lookup_route_canonical.csv` | ✅ From drugbank_lean_export.R |
+| `lookup_form_to_route.csv` | ✅ From drugbank_lean_export.R |
+| `lookup_per_unit.csv` | ✅ From drugbank_lean_export.R |
+| **Other Sources** | |
+| `pnf_lexicon.csv` | ✅ Fresh |
+| `who_atc_YYYY-MM-DD.csv` | ✅ From atcd/ |
+| `fda_drug_YYYY-MM-DD.csv` | ✅ From fda_ph_scraper/ |
+| `fda_food_YYYY-MM-DD.csv` | ✅ From fda_ph_scraper/ |
+| `esoa_combined.csv` | ⚠️ Has duplicates (~145K unique) |
 
 ---
 
@@ -664,7 +678,7 @@ All submodules are in `./dependencies/`:
 | File | Purpose | Status |
 |------|---------|--------|
 | `atcd.R` | Main scraper | ✅ Working |
-| `export.R` | Export to CSV/Parquet | ✅ Working |
+| `export.R` | Export to CSV | ✅ Working |
 | `filter.R` | Filter ATC data | ✅ Working |
 
 **Output:** `who_atc_YYYY-MM-DD.csv` in `output/`
@@ -672,34 +686,38 @@ All submodules are in `./dependencies/`:
 **Notes:**
 - Scrapes from WHO website
 - Parallelized with `future` package
-- Exports both CSV and Parquet
+- Exports CSV only
 
 ---
 
 #### `dependencies/drugbank_generics/` (DrugBank Extractor)
-**Status:** ✅ WORKING (but slow)
+**Status:** ✅ WORKING
 
 | File | Purpose | Status |
 |------|---------|--------|
-| `drugbank_all.R` | Orchestrator | ✅ Working |
-| `drugbank_generics.R` | Extract generics | ✅ Working, slow |
-| `drugbank_mixtures.R` | Extract mixtures | ✅ Working |
-| `drugbank_brands.R` | Extract brands | ✅ Working |
-| `drugbank_salts.R` | Extract salts | ✅ Working |
+| `drugbank_lean_export.R` | Single script exports all lean tables + lookups | ✅ Working |
 
-**Outputs:**
-- `drugbank_generics_master.csv` (~392K rows)
-- `drugbank_mixtures_master.csv` (~153K rows)
-- `drugbank_brands_master.csv` (~209K rows)
-- `drugbank_products_export.csv` (~456K rows)
-- `drugbank_salts_master.csv` (~3K rows)
-- `drugbank_pure_salts.csv` (51 rows)
-- `drugbank_salt_suffixes.csv` (58 rows)
+**Outputs (8 lean data tables):**
+- `generics_lean.csv` - drugbank_id → name (one per drug)
+- `synonyms_lean.csv` - drugbank_id → synonym (English, INN/BAN/USAN/JAN/USP)
+- `dosages_lean.csv` - drugbank_id × form × route × strength
+- `brands_lean.csv` - brand → drugbank_id (international)
+- `salts_lean.csv` - parent drugbank_id → salt info
+- `mixtures_lean.csv` - mixture components with component_key
+- `products_lean.csv` - drugbank_id × dosage_form × strength × route
+- `atc_lean.csv` - drugbank_id → atc_code (with hierarchy)
 
-**Known Issues:**
-- `drugbank_generics.R` is very slow (TODO #26)
-- May be over-parallelizing or under-vectorizing
+**Outputs (6 lookup tables):**
+- `lookup_salt_suffixes.csv` - salt suffixes to strip
+- `lookup_pure_salts.csv` - compounds that ARE salts
+- `lookup_form_canonical.csv` - form aliases → canonical
+- `lookup_route_canonical.csv` - route aliases → canonical
+- `lookup_form_to_route.csv` - infer route from form
+- `lookup_per_unit.csv` - per-unit normalization
+
+**Notes:**
 - Uses `dbdataset` package from GitHub
+- Exports CSV only (CSV-first policy)
 
 ---
 
@@ -720,7 +738,7 @@ All submodules are in `./dependencies/`:
 **Notes:**
 - Scrapes from FDA PH verification website
 - Supports both CSV download and HTML scraping fallback
-- Exports both CSV and Parquet
+- Exports CSV only
 
 ---
 

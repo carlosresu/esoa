@@ -67,17 +67,17 @@
 - SQL-based aggregation and joining across sources
 
 #### #17: Build Tier 1 Unified Reference ✅
-- **unified_drug_reference.parquet**: 52,002 rows
+- **unified_drug_reference.csv**: 52,002 rows
 - Exploded by: drugbank_id × atc_code × form × route
 - Aggregated doses per combination
 
 #### #15: Form-Route Validity Mapping ✅
-- **form_route_validity.parquet**: 53,039 combinations
+- **form_route_validity.csv**: 53,039 combinations
 - Sources: PNF, DrugBank products, FDA drug
 
 #### #11: Synonyms from DrugBank ✅
 - Already implemented in R script with proper filtering (language=english, not iupac-only)
-- **generics_lookup.parquet**: 7,345 generics with synonyms
+- **generics_lookup.csv**: 7,345 generics with synonyms
 
 #### #29: Enrich from DrugBank Products ✅
 - Extracted 455,970 product rows with dose/form/route
@@ -181,7 +181,7 @@
 #### #20: PNF Lexicon Improvements ✅
 - prepare_drugs.py already applies all normalizations
 - Includes: extract_base_and_salts, clean_atc, dose parsing
-- pnf_lexicon.parquet properly normalized
+- pnf_lexicon.csv properly normalized
 
 ---
 

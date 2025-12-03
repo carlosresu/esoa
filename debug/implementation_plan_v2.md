@@ -174,7 +174,7 @@
 **Completed (Nov 28, 2025):** Already implemented in `drugbank_generics.R`:
 - Lines 786-811 filter synonyms with `has_allowed & !only_iupac`
 - Synonyms included in lexeme column, exploded to rows
-- 7,345 generics with synonyms in generics_lookup.parquet
+- 7,345 generics with synonyms in generics_lookup.csv
 
 ---
 
@@ -183,7 +183,7 @@
 
 **Completed (Nov 28, 2025):**
 - `build_unified_reference.py` Step 2 extracts form-route combinations
-- **form_route_validity.parquet**: 53,039 combinations with source provenance
+- **form_route_validity.csv**: 53,039 combinations with source provenance
 
 ---
 
@@ -201,7 +201,7 @@
 **What:** Create unified reference with explosion logic.
 
 **Completed (Nov 28, 2025):**
-- **unified_drug_reference.parquet**: 52,002 rows
+- **unified_drug_reference.csv**: 52,002 rows
 - Exploded by: drugbank_id × atc_code × form × route
 - Aggregated doses per combination
 - Separate lookup tables: generics, brands, mixtures

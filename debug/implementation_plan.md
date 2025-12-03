@@ -60,7 +60,7 @@ drugbank_id | atc_code | generic_name | form | route | salts | doses | brands | 
 ### 1.1 Load Source Datasets into DuckDB
 Load all sources:
 - `pnf_lexicon.csv` / `pnf_prepared.csv`
-- `who_atc_*.parquet`
+- `who_atc_*.csv`
 - `drugbank_generics_master.csv`
 - `drugbank_mixtures_master.csv`
 - `drugbank_brands_master.csv`
@@ -80,7 +80,7 @@ Load all sources:
 - Normalize to canonical DrugBank name
 
 ### 1.4 Extract Form-Route Validity Mapping
-**Output:** `form_route_validity.parquet` (longform with provenance)
+**Output:** `form_route_validity.csv` (longform with provenance)
 ```
 form | route | source | example_drugbank_id
 tablet | oral | pnf | DB00316
@@ -94,7 +94,7 @@ Explosion logic: `drugbank_id × atc_code × form × route`
 - Track sources
 
 ### 1.6 Export and Index
-- Export as `unified_drug_reference.parquet`
+- Export as `unified_drug_reference.csv`
 - Create DuckDB indexes for fast queries
 
 ---

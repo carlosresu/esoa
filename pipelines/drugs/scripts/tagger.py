@@ -20,10 +20,12 @@ from .lookup import (
     swap_brand_to_generic,
 )
 from .scoring import select_best_candidate, sort_atc_codes
+from .spinner import run_with_spinner
 from .tokenizer import (
-    categorize_tokens, detect_compound_salts, extract_generic_tokens,
-    extract_form_detail, extract_release_detail, extract_type_detail,
-    normalize_tokens, split_with_parentheses, strip_salt_suffix,
+    categorize_tokens, detect_compound_salts, extract_drug_details,
+    extract_generic_tokens, extract_form_detail, extract_release_detail,
+    extract_type_detail, normalize_tokens, split_with_parentheses,
+    strip_salt_suffix,
 )
 
 
@@ -76,11 +78,11 @@ class UnifiedTagger:
         # Create in-memory DuckDB
         self.con = duckdb.connect(":memory:")
         
-        # Load unified_generics (main reference)
-        generics_path = self.outputs_dir / "unified_generics.parquet"
+        # Load unified_generics (main reference) - CSV is canonical format
+        generics_path = self.outputs_dir / "unified_generics.csv"
         if not generics_path.exists():
-            raise FileNotFoundError(f"unified_generics.parquet not found: {generics_path}")
-        self.con.execute(f"CREATE TABLE unified AS SELECT * FROM read_parquet('{generics_path}')")
+            raise FileNotFoundError(f"unified_generics.csv not found: {generics_path}")
+        self.con.execute(f"CREATE TABLE unified AS SELECT * FROM read_csv_auto('{generics_path}')")
         # Create index for faster lookups
         self.con.execute("CREATE INDEX IF NOT EXISTS idx_unified_generic ON unified(generic_name)")
         count = self.con.execute("SELECT COUNT(*) FROM unified").fetchone()[0]
@@ -88,33 +90,33 @@ class UnifiedTagger:
         self._log(f"  - unified_generics: {count:,} rows ({unique_generics:,} unique)")
         
         # Load unified_brands
-        brands_path = self.outputs_dir / "unified_brands.parquet"
+        brands_path = self.outputs_dir / "unified_brands.csv"
         if brands_path.exists():
-            self.con.execute(f"CREATE TABLE brands AS SELECT * FROM read_parquet('{brands_path}')")
+            self.con.execute(f"CREATE TABLE brands AS SELECT * FROM read_csv_auto('{brands_path}')")
             brand_count = self.con.execute("SELECT COUNT(*) FROM brands").fetchone()[0]
             self._log(f"  - unified_brands: {brand_count:,} rows")
         
         # Load unified_synonyms
-        synonyms_path = self.outputs_dir / "unified_synonyms.parquet"
+        synonyms_path = self.outputs_dir / "unified_synonyms.csv"
         if synonyms_path.exists():
-            self.con.execute(f"CREATE TABLE synonyms AS SELECT * FROM read_parquet('{synonyms_path}')")
+            self.con.execute(f"CREATE TABLE synonyms AS SELECT * FROM read_csv_auto('{synonyms_path}')")
             syn_count = self.con.execute("SELECT COUNT(*) FROM synonyms").fetchone()[0]
             self._log(f"  - unified_synonyms: {syn_count:,} rows")
         
         # Load unified_mixtures (queried on-demand for multi-generic inputs)
-        mixtures_path = self.outputs_dir / "unified_mixtures.parquet"
+        mixtures_path = self.outputs_dir / "unified_mixtures.csv"
         self._mixtures_loaded = False
         if mixtures_path.exists():
-            self.con.execute(f"CREATE TABLE mixtures AS SELECT * FROM read_parquet('{mixtures_path}')")
+            self.con.execute(f"CREATE TABLE mixtures AS SELECT * FROM read_csv_auto('{mixtures_path}')")
             mix_count = self.con.execute("SELECT COUNT(*) FROM mixtures").fetchone()[0]
             self._log(f"  - unified_mixtures: {mix_count:,} rows")
             self._mixtures_loaded = True
         
         # Load unified_atc (for ATC selection with form/route/dose)
-        atc_path = self.outputs_dir / "unified_atc.parquet"
+        atc_path = self.outputs_dir / "unified_atc.csv"
         self._atc_loaded = False
         if atc_path.exists():
-            self.con.execute(f"CREATE TABLE atc AS SELECT * FROM read_parquet('{atc_path}')")
+            self.con.execute(f"CREATE TABLE atc AS SELECT * FROM read_csv_auto('{atc_path}')")
             self.con.execute("CREATE INDEX IF NOT EXISTS idx_atc_generic ON atc(generic_name)")
             atc_count = self.con.execute("SELECT COUNT(*) FROM atc").fetchone()[0]
             self._log(f"  - unified_atc: {atc_count:,} rows")
@@ -354,32 +356,40 @@ class UnifiedTagger:
         all_results = []
         num_chunks = (total_rows + chunk_size - 1) // chunk_size
         start_time = time.time()
+        last_rate: float = 0.0  # rows/s from previous chunk
         
         for i in range(0, total_rows, chunk_size):
-            chunk_start = time.time()
             chunk_num = i // chunk_size + 1
             end_idx = min(i + chunk_size, total_rows)
             
             chunk_texts = texts[i:end_idx]
             chunk_ids = ids[i:end_idx]
             
-            chunk_results = self._tag_batch(chunk_texts, chunk_ids)
-            all_results.extend(chunk_results)
-            
             if show_progress:
-                chunk_time = time.time() - chunk_start
-                rows_done = end_idx
-                rows_remaining = total_rows - rows_done
-                # ETA based on latest chunk speed
-                chunk_rate = len(chunk_texts) / chunk_time if chunk_time > 0 else 0
-                eta = rows_remaining / chunk_rate if chunk_rate > 0 else 0
+                rows_in_chunk = len(chunk_texts)
+                est_time = rows_in_chunk / last_rate if last_rate > 0 else 0.0
                 
-                rows_per_sec = chunk_rate if chunk_rate > 0 else 0
-                print(
-                    f"⣿ {chunk_time:7.2f}s "
-                    f"Chunk {chunk_num:02d}/{num_chunks:02d}: {rows_per_sec:,.0f} rows/s "
-                    f"ETA {eta:.0f}s"
+                def make_label(elapsed: float, n: int = rows_in_chunk, c: int = chunk_num, t: int = num_chunks, est: float = est_time) -> str:
+                    if est > 0:
+                        eta = est - elapsed
+                        return f"Chunk {c:02d}/{t:02d} (ETA {eta:7.2f}s)"
+                    return f"Chunk {c:02d}/{t:02d}"
+                
+                completion = lambda elapsed, n=rows_in_chunk, c=chunk_num, t=num_chunks: f"Chunk {c:02d}/{t:02d}: {n/elapsed:,.0f} rows/s"
+                chunk_results = run_with_spinner(
+                    make_label,
+                    lambda t=chunk_texts, ids=chunk_ids: self._tag_batch(t, ids),
+                    completion_label=completion,
                 )
+                # Update rate for next chunk's ETA
+                chunk_time = time.time() - start_time - sum(r.get("_elapsed", 0) for r in all_results[:i] if isinstance(r, dict))
+            else:
+                chunk_results = self._tag_batch(chunk_texts, chunk_ids)
+            all_results.extend(chunk_results)
+            # Track rate after each chunk
+            elapsed_so_far = time.time() - start_time
+            rows_so_far = end_idx
+            last_rate = rows_so_far / elapsed_so_far if elapsed_so_far > 0 else 0
         
         total_time = time.time() - start_time
         if show_progress:
@@ -464,9 +474,28 @@ class UnifiedTagger:
         all_tokens = []
         all_generic_tokens = []
         all_brand_swaps = []  # Track which tokens were brand-swapped
+        all_drug_details = []  # Store extracted details for later use
         
         for text in texts:
+            # Pre-process: extract parentheticals and qualifiers into separate fields
+            drug_details = extract_drug_details(text)
+            all_drug_details.append(drug_details)
+            
+            # Use cleaned generic name for tokenization
+            clean_text = drug_details["generic_name"]
+            # But also keep the original for dose/form extraction
             tokens, generic_tokens = extract_generic_tokens(text, self.multiword_generics)
+            
+            # If we extracted a cleaner generic name, use it
+            clean_generic_tokens = []
+            if drug_details["generic_name"] and drug_details["generic_name"] != text.upper():
+                # Also extract from the cleaned version
+                _, clean_generic_tokens = extract_generic_tokens(clean_text, self.multiword_generics)
+                # Merge: prefer clean tokens but keep unique from original
+                generic_tokens = list(dict.fromkeys(clean_generic_tokens + generic_tokens))
+            
+            # Store clean tokens for combo key building (without junk like "DRY", "POWDER", etc.)
+            drug_details["_clean_tokens"] = clean_generic_tokens if clean_generic_tokens else generic_tokens[:2]
             
             # Apply brand → generic swapping
             swapped_generics = []
@@ -483,7 +512,7 @@ class UnifiedTagger:
         
         # Collect unique generics for batch lookup
         unique_generics: Set[str] = set()
-        for gt in all_generic_tokens:
+        for idx, gt in enumerate(all_generic_tokens):
             # Normalize each component through synonyms
             normalized_components = []
             for g in gt:
@@ -514,6 +543,17 @@ class UnifiedTagger:
                 nck_syn = self._apply_synonyms(nck)
                 if nck_syn != nck:
                     unique_generics.add(nck_syn)
+            
+            # CRITICAL: Also build combo keys from CLEAN tokens (without junk like DRY, POWDER)
+            # This ensures combinations like "BUDESONIDE + FORMOTEROL" are properly looked up
+            clean_tokens = all_drug_details[idx].get("_clean_tokens", [])
+            if clean_tokens and len(clean_tokens) >= 2:
+                clean_combo_keys = build_combination_keys(clean_tokens)
+                unique_generics.update(clean_combo_keys)
+                for cck in clean_combo_keys:
+                    cck_syn = self._apply_synonyms(cck)
+                    if cck_syn != cck:
+                        unique_generics.add(cck_syn)
         
         # Batch lookup with cached generics for faster fuzzy matching
         generic_cache = batch_lookup_generics(
@@ -545,7 +585,19 @@ class UnifiedTagger:
             # Collect matches - COMBO MATCHES FIRST for priority (e.g., ETHYL ALCOHOL -> ETHANOL)
             generic_matches = []
             
-            # Add combination matches FIRST (both original and normalized)
+            # CRITICAL: First try combo keys from CLEAN tokens (e.g., "BUDESONIDE + FORMOTEROL")
+            # These are extracted by extract_drug_details and don't contain junk like "DRY", "POWDER"
+            clean_tokens = all_drug_details[i].get("_clean_tokens", [])
+            if clean_tokens and len(clean_tokens) >= 2:
+                clean_combo_keys = build_combination_keys(clean_tokens)
+                for cck in clean_combo_keys:
+                    if cck in generic_cache:
+                        generic_matches.extend(generic_cache[cck])
+                    cck_syn = self._apply_synonyms(cck)
+                    if cck_syn != cck and cck_syn in generic_cache:
+                        generic_matches.extend(generic_cache[cck_syn])
+            
+            # Add combination matches from stripped generics (both original and normalized)
             # This ensures combo matches like ETHANOL take priority over single-token fuzzy matches
             combo_keys = build_combination_keys(stripped_generics)
             for ck in combo_keys:
@@ -624,6 +676,16 @@ class UnifiedTagger:
                             "match_score": 100,
                             "match_reason": "matched",
                             "sources": mixture_match.get("source", ""),
+                            "dose": None,
+                            "form": None,
+                            "route": None,
+                            "type_details": None,
+                            "release_details": None,
+                            "form_details": None,
+                            "salt_details": all_drug_details[i].get("salt_details"),
+                            "brand_details": all_drug_details[i].get("brand_details"),
+                            "indication_details": all_drug_details[i].get("indication_details"),
+                            "alias_details": all_drug_details[i].get("alias_details"),
                         })
                         continue
                 
@@ -637,7 +699,17 @@ class UnifiedTagger:
                     "reference_text": None,
                     "match_score": 0,
                     "match_reason": "no_candidates",
-                    "sources": "",
+                    "sources": None,
+                    "dose": None,
+                    "form": None,
+                    "route": None,
+                    "type_details": None,
+                    "release_details": None,
+                    "form_details": None,
+                    "salt_details": all_drug_details[i].get("salt_details"),
+                    "brand_details": all_drug_details[i].get("brand_details"),
+                    "indication_details": all_drug_details[i].get("indication_details"),
+                    "alias_details": all_drug_details[i].get("alias_details"),
                 })
                 continue
             
@@ -656,11 +728,11 @@ class UnifiedTagger:
                             "atc_code": atc,
                             "drugbank_id": gm.get("drugbank_id"),
                             "generic_name": gm.get("generic_name"),
-                            "reference_text": gm.get("reference_text", ""),
+                            "reference_text": gm.get("reference_text"),
                             "source": gm.get("source"),
-                            "form": "",
-                            "route": "",
-                            "doses": "",
+                            "form": None,
+                            "route": None,
+                            "doses": None,
                         })
                 else:
                     # For mixtures without ATC codes, add candidate with drugbank_id only
@@ -670,11 +742,11 @@ class UnifiedTagger:
                             "atc_code": None,
                             "drugbank_id": gm.get("drugbank_id"),
                             "generic_name": gm.get("generic_name"),
-                            "reference_text": gm.get("reference_text", ""),
+                            "reference_text": gm.get("reference_text"),
                             "source": gm.get("source"),
-                            "form": "",
-                            "route": "",
-                            "doses": "",
+                            "form": None,
+                            "route": None,
+                            "doses": None,
                         })
             
             if not candidates:
@@ -688,7 +760,17 @@ class UnifiedTagger:
                     "reference_text": None,
                     "match_score": 0,
                     "match_reason": "no_candidates",
-                    "sources": "",
+                    "sources": None,
+                    "dose": None,
+                    "form": None,
+                    "route": None,
+                    "type_details": None,
+                    "release_details": None,
+                    "form_details": None,
+                    "salt_details": all_drug_details[i].get("salt_details"),
+                    "brand_details": all_drug_details[i].get("brand_details"),
+                    "indication_details": all_drug_details[i].get("indication_details"),
+                    "alias_details": all_drug_details[i].get("alias_details"),
                 })
                 continue
             
@@ -731,7 +813,7 @@ class UnifiedTagger:
             is_combination = num_input > 1 and has_plus
             is_single_drug = num_input == 1
             
-            # Select best candidate
+            # Select best candidate, using extracted details for tie-breaking
             best = select_best_candidate(
                 candidates=candidates,
                 input_tokens=tokens,
@@ -742,6 +824,7 @@ class UnifiedTagger:
                 is_iv_solution=is_iv_solution,
                 stripped_generics=stripped_generics,
                 apply_synonyms_fn=self._apply_synonyms,
+                input_details=all_drug_details[i],
             )
             
             # Extract categorized tokens for output
@@ -783,12 +866,16 @@ class UnifiedTagger:
                     "dose": "|".join(input_doses) if input_doses else None,
                     "form": base_form,
                     "route": "|".join(input_routes) if input_routes else None,
-                    "type_detail": type_detail,
-                    "release_detail": release_detail,
-                    "form_detail": form_detail,
+                    "type_details": type_detail,
+                    "release_details": release_detail,
+                    "form_details": form_detail,
                     "match_score": 1,
                     "match_reason": "matched",
-                    "sources": best.get("source", ""),
+                    "sources": best.get("source"),
+                    "salt_details": all_drug_details[i].get("salt_details"),
+                    "brand_details": all_drug_details[i].get("brand_details"),
+                    "indication_details": all_drug_details[i].get("indication_details"),
+                    "alias_details": all_drug_details[i].get("alias_details"),
                 })
             else:
                 # Try mixture lookup for multi-generic inputs when scoring fails
@@ -806,12 +893,16 @@ class UnifiedTagger:
                             "dose": "|".join(input_doses) if input_doses else None,
                             "form": base_form,
                             "route": "|".join(input_routes) if input_routes else None,
-                            "type_detail": type_detail,
-                            "release_detail": release_detail,
-                            "form_detail": form_detail,
+                            "type_details": type_detail,
+                            "release_details": release_detail,
+                            "form_details": form_detail,
                             "match_score": 100,
                             "match_reason": "matched",
-                            "sources": mixture_match.get("source", ""),
+                            "sources": mixture_match.get("source"),
+                            "salt_details": all_drug_details[i].get("salt_details"),
+                            "brand_details": all_drug_details[i].get("brand_details"),
+                            "indication_details": all_drug_details[i].get("indication_details"),
+                            "alias_details": all_drug_details[i].get("alias_details"),
                         })
                         continue
                 
@@ -826,12 +917,16 @@ class UnifiedTagger:
                     "dose": "|".join(input_doses) if input_doses else None,
                     "form": base_form,
                     "route": "|".join(input_routes) if input_routes else None,
-                    "type_detail": type_detail,
-                    "release_detail": release_detail,
-                    "form_detail": form_detail,
+                    "type_details": type_detail,
+                    "release_details": release_detail,
+                    "form_details": form_detail,
                     "match_score": 0,
                     "match_reason": "no_match",
-                    "sources": "",
+                    "sources": None,
+                    "salt_details": all_drug_details[i].get("salt_details"),
+                    "brand_details": all_drug_details[i].get("brand_details"),
+                    "indication_details": all_drug_details[i].get("indication_details"),
+                    "alias_details": all_drug_details[i].get("alias_details"),
                 })
         
         return results

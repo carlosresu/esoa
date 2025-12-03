@@ -210,6 +210,7 @@ def select_best_candidate(
     is_iv_solution: bool,
     stripped_generics: List[str],
     apply_synonyms_fn,
+    input_details: Optional[Dict[str, Optional[str]]] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Select the best candidate using rule-based matching.
@@ -220,9 +221,11 @@ def select_best_candidate(
     3. Form equivalence (tablet/capsule are interchangeable)
     4. Dose is flexible (same ATC regardless of dose)
     5. Salt is flexible (same base drug regardless of salt form)
+    6. Tie-break using _details (type, release, form, indication, etc.)
     
     Returns the best candidate or None.
     """
+    input_details = input_details or {}
     # Extract input characteristics
     input_forms = set(input_categories.get(CATEGORY_FORM, {}).keys())
     input_routes = set(input_categories.get(CATEGORY_ROUTE, {}).keys())
@@ -276,13 +279,22 @@ def select_best_candidate(
     if len(valid_candidates) == 1:
         return valid_candidates[0][0]
     
+    # Extract input details for tie-breaking
+    input_type = str(input_details.get("type_details") or "").upper()
+    input_release = str(input_details.get("release_details") or "").upper()
+    input_form_det = str(input_details.get("form_details") or "").upper()
+    input_indication = str(input_details.get("indication_details") or "").upper()
+    input_salt = str(input_details.get("salt_details") or "").upper()
+    
     # Rank valid candidates by preference
-    def rank_candidate(item: Tuple[Dict[str, Any], str]) -> Tuple[int, int, int, int, str]:
+    def rank_candidate(item: Tuple[Dict[str, Any], str]) -> Tuple[int, int, int, int, int, str]:
         cand, match_reason = item
         cand_atc = str(cand.get("atc_code", ""))
         cand_form = str(cand.get("form", "")).upper()
         cand_route = str(cand.get("route", "")).upper()
         cand_source = str(cand.get("source", "")).lower()
+        cand_generic = str(cand.get("generic_name", "")).upper()
+        cand_ref = str(cand.get("reference_text", "")).upper()
         
         # Priority 1: Match type (exact > substring > combo)
         match_priority = {
@@ -311,11 +323,36 @@ def select_best_candidate(
             else:
                 form_priority = 2  # Different form
         
-        # Priority 4: No source preference (all sources are equal)
-        # Sources are tracked for provenance but don't affect ranking
-        source_priority = 0
+        # Priority 4: Details match (tie-breaker)
+        # Count how many detail fields match between input and candidate
+        details_score = 0
         
-        return (match_priority, atc_priority, form_priority, source_priority, cand_atc)
+        # Release details match (e.g., MR, SR, XR, ER)
+        if input_release:
+            if input_release in cand_ref or input_release in cand_generic:
+                details_score -= 10  # Lower is better
+        
+        # Type details match (e.g., HUMAN, ANHYDROUS)
+        if input_type:
+            if input_type in cand_ref or input_type in cand_generic:
+                details_score -= 5
+        
+        # Form details match (e.g., FILM COATED, CHEWABLE)
+        if input_form_det:
+            if input_form_det in cand_ref or input_form_det in cand_generic:
+                details_score -= 5
+        
+        # Indication details match (e.g., FOR HEPATIC FAILURE)
+        if input_indication:
+            if input_indication in cand_ref or input_indication in cand_generic:
+                details_score -= 5
+        
+        # Salt details match - bonus if reference mentions same salt
+        if input_salt:
+            if input_salt in cand_ref or input_salt in cand_generic:
+                details_score -= 3
+        
+        return (match_priority, atc_priority, form_priority, details_score, 0, cand_atc)
     
     # Sort by rank and return best
     valid_candidates.sort(key=rank_candidate)

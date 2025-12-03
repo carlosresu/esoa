@@ -23,6 +23,7 @@ from .text_utils import (
     slug_id,
 )
 from .concurrency import maybe_parallel_map
+from .tokenizer import extract_drug_details
 
 
 def _calc_strength_mg(payload: tuple[object, object]) -> float | None:
@@ -41,11 +42,9 @@ def _calc_ratio_mg_per_ml(payload: tuple[object, object, object, object, object]
     return None
 
 
-def _write_csv_and_parquet(frame: pd.DataFrame, csv_path: str) -> None:
-    """Persist a dataframe to CSV and Parquet using the same stem."""
+def _write_csv(frame: pd.DataFrame, csv_path: str) -> None:
+    """Persist a dataframe to CSV (canonical format)."""
     frame.to_csv(csv_path, index=False, encoding="utf-8")
-    parquet_path = Path(csv_path).with_suffix(".parquet")
-    frame.to_parquet(parquet_path, index=False)
 
 
 def prepare(pnf_csv: str, esoa_csv: str, outdir: str = ".") -> tuple[str, str]:
@@ -78,6 +77,17 @@ def prepare(pnf_csv: str, esoa_csv: str, outdir: str = ".") -> tuple[str, str]:
     pnf["route_tokens"] = maybe_parallel_map(route_values, map_route_token)
     atc_values = pnf["ATC Code"].fillna("").astype(str).tolist()
     pnf["atc_code"] = maybe_parallel_map(atc_values, clean_atc)
+
+    # Extract details (salt, brand, indication, alias, type, release, form) from raw molecule text
+    # These preserve information that would otherwise be lost during normalization
+    details_list = maybe_parallel_map(molecule_list, extract_drug_details)
+    pnf["salt_details"] = [d.get("salt_details") for d in details_list]
+    pnf["brand_details"] = [d.get("brand_details") for d in details_list]
+    pnf["indication_details"] = [d.get("indication_details") for d in details_list]
+    pnf["alias_details"] = [d.get("alias_details") for d in details_list]
+    pnf["type_details"] = [d.get("type_details") for d in details_list]
+    pnf["release_details"] = [d.get("release_details") for d in details_list]
+    pnf["form_details"] = [d.get("form_details") for d in details_list]
 
     # Consolidate all textual dose evidence into a single normalized field that
     # the dose parser can read once.  The parser expects clean text, hence the
@@ -118,10 +128,12 @@ def prepare(pnf_csv: str, esoa_csv: str, outdir: str = ".") -> tuple[str, str]:
         "route_allowed", "form_token", "dose_kind",
         "strength", "unit", "per_val", "per_unit", "pct",
         "strength_mg", "ratio_mg_per_ml",
+        "salt_details", "brand_details", "indication_details", "alias_details",
+        "type_details", "release_details", "form_details",
     ]].copy()
 
     pnf_out = os.path.join(outdir, "pnf_prepared.csv")
-    _write_csv_and_parquet(pnf_prepared, pnf_out)
+    _write_csv(pnf_prepared, pnf_out)
 
     # eSOA preparation is intentionally light-weight: only rename the primary
     # text column but still validate that the source CSV carries it.
@@ -130,6 +142,6 @@ def prepare(pnf_csv: str, esoa_csv: str, outdir: str = ".") -> tuple[str, str]:
         raise ValueError("esoa.csv is missing required column: DESCRIPTION")
     esoa_prepared = esoa.rename(columns={"DESCRIPTION": "raw_text"}).copy()
     esoa_out = os.path.join(outdir, "esoa_prepared.csv")
-    _write_csv_and_parquet(esoa_prepared, esoa_out)
+    _write_csv(esoa_prepared, esoa_out)
 
     return pnf_out, esoa_out
