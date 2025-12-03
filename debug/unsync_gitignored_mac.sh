@@ -3,8 +3,8 @@ set -euo pipefail
 
 # Username-agnostic teardown for OneDrive symlinks.
 
-REPO_ROOT="${ESOA_REPO_ROOT:-$HOME/github_repos/esoa}"
-OD_ROOT="${ESOA_ONEDRIVE_ROOT:-$HOME/Library/CloudStorage/OneDrive-Personal/GitIgnored/esoa}"
+REPO_ROOT="${ESOA_REPO_ROOT:-$HOME/github_repos/pids-drg-esoa}"
+OD_ROOT="${ESOA_ONEDRIVE_ROOT:-$HOME/Library/CloudStorage/OneDrive-Personal/GitIgnored/pids-drg-esoa}"
 FOLDERS=("raw" "outputs" "inputs")
 
 is_symlink() { [[ -L "$1" ]]; }

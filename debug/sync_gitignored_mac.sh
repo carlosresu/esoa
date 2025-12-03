@@ -4,8 +4,8 @@ set -euo pipefail
 # Username-agnostic OneDrive symlink setup for raw/outputs/inputs.
 #
 # Defaults:
-#   Repo root:     "$HOME/github_repos/esoa"
-#   OneDrive root: "$HOME/Library/CloudStorage/OneDrive-Personal/GitIgnored/esoa"
+#   Repo root:     "$HOME/github_repos/pids-drg-esoa"
+#   OneDrive root: "$HOME/Library/CloudStorage/OneDrive-Personal/GitIgnored/pids-drg-esoa"
 # Overrides (optional):
 #   ESOA_REPO_ROOT
 #   ESOA_ONEDRIVE_ROOT
@@ -17,8 +17,8 @@ set -euo pipefail
 #     - removes repo folder
 # - Creates directory symlink in repo -> OneDrive folder.
 
-REPO_ROOT="${ESOA_REPO_ROOT:-$HOME/github_repos/esoa}"
-OD_ROOT="${ESOA_ONEDRIVE_ROOT:-$HOME/Library/CloudStorage/OneDrive-Personal/GitIgnored/esoa}"
+REPO_ROOT="${ESOA_REPO_ROOT:-$HOME/github_repos/pids-drg-esoa}"
+OD_ROOT="${ESOA_ONEDRIVE_ROOT:-$HOME/Library/CloudStorage/OneDrive-Personal/GitIgnored/pids-drg-esoa}"
 FOLDERS=("raw" "outputs" "inputs")
 
 mkdir -p "$REPO_ROOT" "$OD_ROOT"

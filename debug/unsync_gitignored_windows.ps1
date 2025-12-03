@@ -2,8 +2,8 @@
 Teardown for OneDrive symlinks (username-agnostic).
 
 Defaults:
-  Repo root:      %USERPROFILE%\github_repos\esoa
-  OneDrive root:  %OneDrive%\GitIgnored\esoa
+  Repo root:      %USERPROFILE%\github_repos\pids-drg-esoa
+  OneDrive root:  %OneDrive%\GitIgnored\pids-drg-esoa
 Overrides (optional):
   $env:ESOA_REPO_ROOT
   $env:ESOA_ONEDRIVE_ROOT
@@ -47,8 +47,8 @@ $ErrorActionPreference = "Stop"
 $userHome = $env:USERPROFILE
 $oneDrive = if ($env:OneDrive) { $env:OneDrive } else { Join-Path $userHome "OneDrive" }
 
-$repoRoot = if ($env:ESOA_REPO_ROOT) { $env:ESOA_REPO_ROOT } else { Join-Path $userHome "github_repos\esoa" }
-$odRoot   = if ($env:ESOA_ONEDRIVE_ROOT) { $env:ESOA_ONEDRIVE_ROOT } else { Join-Path $oneDrive "GitIgnored\esoa" }
+$repoRoot = if ($env:ESOA_REPO_ROOT) { $env:ESOA_REPO_ROOT } else { Join-Path $userHome "github_repos\pids-drg-esoa" }
+$odRoot   = if ($env:ESOA_ONEDRIVE_ROOT) { $env:ESOA_ONEDRIVE_ROOT } else { Join-Path $oneDrive "GitIgnored\pids-drg-esoa" }
 
 $folders  = @("raw", "outputs", "inputs")
 $copyBack = $false   # <- set true if you want real folders restored with contents
