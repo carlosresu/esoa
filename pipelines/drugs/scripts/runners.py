@@ -100,7 +100,8 @@ def run_annex_f_tagging(
     total = len(merged)
     matched_atc = merged["atc_code"].notna().sum()
     matched_drugbank = merged["drugbank_id"].notna().sum()
-    
+    reason_counts = {str(reason): int(count) for reason, count in merged["match_reason"].value_counts().items() if pd.notna(reason)}
+
     results = {
         "total": total,
         "matched_atc": matched_atc,
@@ -108,6 +109,7 @@ def run_annex_f_tagging(
         "matched_drugbank": matched_drugbank,
         "matched_drugbank_pct": 100 * matched_drugbank / total if total else 0,
         "output_path": output_path,
+        "reason_counts": reason_counts,
     }
     
     # Log metrics
@@ -126,6 +128,7 @@ def run_esoa_tagging(
     esoa_path: Optional[Path] = None,
     output_path: Optional[Path] = None,
     verbose: bool = True,
+    show_progress: bool = True,
 ) -> dict:
     """
     Run ESOA tagging (Part 3).
@@ -169,7 +172,7 @@ def run_esoa_tagging(
         esoa_df,
         text_column=text_column,
         chunk_size=10000,
-        show_progress=verbose,
+        show_progress=show_progress,
         deduplicate=True,
     )
     
@@ -217,15 +220,17 @@ def run_esoa_tagging(
         "output_path": output_path,
     }
     
+    reason_counts = {str(reason): int(count) for reason, count in merged["match_reason"].value_counts().items() if pd.notna(reason)}
+
     if verbose:
         print(f"\nESOA tagging complete: {output_path}")
         print(f"  Total: {total:,}")
         print(f"  Has ATC: {matched_atc_count:,} ({results['matched_atc_pct']:.1f}%)")
         print(f"  Has DrugBank ID: {matched_drugbank_count:,} ({results['matched_drugbank_pct']:.1f}%)")
-        
         print("\nMatch reasons:")
-        for reason, count in merged["match_reason"].value_counts().head(10).items():
-            print(f"  {reason}: {count:,} ({100*count/total:.1f}%)")
+        for reason, count in list(reason_counts.items())[:10]:
+            pct = 100 * count / total if total else 0
+            print(f"  {reason}: {count:,} ({pct:.1f}%)")
     
     # Log metrics
     log_metrics("esoa", {
@@ -568,21 +573,23 @@ def run_esoa_to_drug_code(
     total = len(esoa_df)
     matched = esoa_df["drug_code"].notna().sum()
     
+    reason_counts = {str(reason): int(count) for reason, count in esoa_df["drug_code_match_reason"].value_counts().items() if pd.notna(reason)}
     result_summary = {
         "total": total,
         "matched": matched,
         "matched_pct": 100 * matched / total if total else 0,
         "output_path": output_path,
+        "reason_counts": reason_counts,
     }
     
     if verbose:
         print(f"\nPart 4 complete: {output_path}")
         print(f"  Total: {total:,}")
         print(f"  Matched: {matched:,} ({result_summary['matched_pct']:.1f}%)")
-        
         print("\nMatch reasons:")
-        for reason, count in esoa_df["drug_code_match_reason"].value_counts().items():
-            print(f"  {reason}: {count:,} ({100*count/total:.1f}%)")
+        for reason, count in reason_counts.items():
+            pct = 100 * count / total if total else 0
+            print(f"  {reason}: {count:,} ({pct:.1f}%)")
     
     # Log metrics
     log_metrics("esoa_to_drug_code", {

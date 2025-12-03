@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
+from datetime import datetime
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
 _VENV_PYTHON = _SCRIPT_DIR / ".venv" / "bin" / "python"
@@ -29,7 +30,7 @@ import csv
 import re
 import shutil
 import subprocess
-from typing import Callable, List, Optional, Sequence, TypeVar
+from typing import Callable, List, Optional, Sequence, TypeVar, Mapping
 
 import pandas as pd
 
@@ -43,7 +44,78 @@ from pipelines.drugs.scripts.prepare import prepare
 
 PROJECT_DIR = PROJECT_ROOT
 DRUGS_INPUTS_DIR = PIPELINE_INPUTS_DIR
+RUN_SUMMARY_PATH = PROJECT_ROOT / "run_summary.md"
+RUN_SUMMARY_SECTIONS: dict[str, list[str]] = {}
 T = TypeVar("T")
+
+
+def add_run_summary(section: str, lines: str | Sequence[str]) -> None:
+    entries = RUN_SUMMARY_SECTIONS.setdefault(section, [])
+    if isinstance(lines, str):
+        entries.append(lines)
+    else:
+        entries.extend([line for line in lines if line])
+
+
+def write_run_summary() -> None:
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    entry_lines = [f"## Run completed {timestamp}", ""]
+    sections_order = [
+        "Code State",
+        "Part 1: Prepare Dependencies",
+        "Part 2: Match Annex F with ATC/DrugBank IDs",
+        "Part 3: Match ESOA with ATC/DrugBank IDs",
+        "Part 4: Bridge ESOA to Annex F Drug Codes",
+        "Overall",
+    ]
+    for section in sections_order:
+        entries = RUN_SUMMARY_SECTIONS.get(section)
+        if not entries:
+            continue
+        entry_lines.append(f"### {section}")
+        entry_lines.extend(entries)
+        entry_lines.append("")
+    entry_text = "\n".join(entry_lines).strip() + "\n\n"
+    if RUN_SUMMARY_PATH.exists():
+        existing = RUN_SUMMARY_PATH.read_text().rstrip() + "\n\n"
+    else:
+        existing = "# Pipeline Run History\n\n"
+    RUN_SUMMARY_PATH.write_text(existing + entry_text)
+    RUN_SUMMARY_SECTIONS.clear()
+
+
+def capture_code_state() -> None:
+    lines: list[str] = []
+    try:
+        branch = subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=PROJECT_DIR).decode().strip()
+    except Exception:
+        branch = "unknown"
+    try:
+        commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=PROJECT_DIR).decode().strip()[:7]
+    except Exception:
+        commit = "unknown"
+    lines.append(f"- Branch: {branch}")
+    lines.append(f"- Commit: {commit}")
+    try:
+        status = subprocess.check_output(["git", "status", "-sb"], cwd=PROJECT_DIR).decode().splitlines()
+        dirty_lines = [line.strip() for line in status[1:]]
+        clean = not dirty_lines
+        lines.append(f"- Working tree: {'clean' if clean else 'dirty'}")
+        for line in dirty_lines[:5]:
+            lines.append(f"  - {line}")
+    except Exception:
+        lines.append("- Working tree: unknown")
+    add_run_summary("Code State", lines)
+
+
+def _format_reason_lines(reason_counts: Mapping[str, int], total: int, prefix: str = "- Match reasons:") -> list[str]:
+    if not reason_counts or not total:
+        return []
+    lines = [prefix]
+    for reason, count in sorted(reason_counts.items(), key=lambda item: item[1], reverse=True):
+        pct = 100 * count / total if total else 0
+        lines.append(f"  - {reason}: {count:,} ({pct:.1f}%)")
+    return lines
 
 # Regex to match dated files: name_YYYY-MM-DD.ext or name_YYYY-MM-DD_*.ext
 DATED_FILE_PATTERN = re.compile(r"^(.+?)_(\d{4}-\d{2}-\d{2})(?:_.*)?(\.\w+)$")
@@ -138,11 +210,7 @@ def _find_rscript() -> Optional[Path]:
 
 
 def _run_with_spinner(label: str, func: Callable[[], T]) -> T:
-    """Run func() while showing a lightweight CLI spinner with elapsed time.
-    
-    Output format: XXXX.XXs - [done] - label
-    Times are right-aligned by decimal point (7 chars total: ####.##s)
-    """
+    """Run func() while showing a braille spinner before the elapsed time."""
     import threading
     import time
 
@@ -296,7 +364,10 @@ def _concatenate_csv(parts: Sequence[Path], dest: Path) -> Path:
     after = len(combined)
     
     if before != after:
-        print(f"  [esoa] Deduplicated: {before:,} → {after:,} rows (removed {before - after:,} duplicates)")
+        add_run_summary(
+            "Part 1: Prepare Dependencies",
+            f"- [esoa] Deduplicated: {before:,} → {after:,} rows (removed {before - after:,} duplicates)",
+        )
     
     # Save both CSV and parquet
     combined.to_csv(dest, index=False)
@@ -633,12 +704,17 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     print("=" * 60)
     print("ESOA DRUGS PIPELINE")
     print("=" * 60)
+    capture_code_state()
 
     # Determine which parts to run
     if args.only:
         parts_to_run = [args.only]
     else:
         parts_to_run = list(range(args.start_from, 5))
+
+    part2_stats: dict | None = None
+    part3_stats: dict | None = None
+    part4_stats: dict | None = None
 
     # Import part functions
     from run_drugs_pt_1_prepare_dependencies import run_part_1
@@ -648,7 +724,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     if 1 in parts_to_run:
         print("PART 1: Prepare Dependencies")
         print("=" * 60)
-        run_part_1(
+        artifacts = run_part_1(
             esoa_path=args.esoa,
             skip_who=args.skip_who,
             skip_drugbank=args.skip_drugbank,
@@ -658,23 +734,75 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             allow_fda_food_scrape=args.allow_fda_food_scrape,
             standalone=False,
         )
+        add_run_summary(
+            "Part 1: Prepare Dependencies",
+            [
+                "- WHO ATC refreshed",
+                "- DrugBank lean export refreshed",
+                "- FDA brand map rebuilt",
+                "- FDA food catalog refreshed",
+                "- PNF prepared",
+                "- Annex F verified",
+            ],
+        )
 
     if 2 in parts_to_run:
         print("\nPART 2: Match Annex F with ATC/DrugBank IDs")
         print("=" * 60)
-        results = run_annex_f_tagging(verbose=True)
+        part2_stats = run_annex_f_tagging(verbose=False)
+        lines = [
+            f"- Total rows: {part2_stats['total']:,}",
+            f"- Matched ATC: {part2_stats['matched_atc']:,} ({part2_stats['matched_atc_pct']:.1f}%)",
+            f"- Matched DrugBank ID: {part2_stats['matched_drugbank']:,} ({part2_stats['matched_drugbank_pct']:.1f}%)",
+            f"- Output: {part2_stats['output_path']}",
+        ]
+        lines.extend(_format_reason_lines(part2_stats.get("reason_counts", {}), part2_stats["total"]))
+        add_run_summary("Part 2: Match Annex F with ATC/DrugBank IDs", lines)
 
     if 3 in parts_to_run:
         print("\nPART 3: Match ESOA with ATC/DrugBank IDs")
         print("=" * 60)
         from pathlib import Path
         esoa_path = Path(args.esoa) if args.esoa else None
-        results = run_esoa_tagging(esoa_path=esoa_path, verbose=True)
+        part3_stats = run_esoa_tagging(esoa_path=esoa_path, verbose=False, show_progress=True)
+        lines = [
+            f"- Total rows: {part3_stats['total']:,}",
+            f"- Matched ATC: {part3_stats['matched_atc']:,} ({part3_stats['matched_atc_pct']:.1f}%)",
+            f"- Matched DrugBank ID: {part3_stats['matched_drugbank']:,} ({part3_stats['matched_drugbank_pct']:.1f}%)",
+            f"- Output: {part3_stats['output_path']}",
+        ]
+        lines.extend(_format_reason_lines(part3_stats.get("reason_counts", {}), part3_stats["total"]))
+        add_run_summary("Part 3: Match ESOA with ATC/DrugBank IDs", lines)
 
     if 4 in parts_to_run:
         print("\nPART 4: Bridge ESOA to Annex F Drug Codes")
         print("=" * 60)
-        results = run_esoa_to_drug_code(verbose=True)
+        part4_stats = run_esoa_to_drug_code(verbose=False)
+        lines = [
+            f"- Total rows: {part4_stats['total']:,}",
+            f"- Matched drug codes: {part4_stats['matched']:,} ({part4_stats['matched_pct']:.1f}%)",
+            f"- Output: {part4_stats['output_path']}",
+        ]
+        lines.extend(_format_reason_lines(part4_stats.get("reason_counts", {}), part4_stats["total"]))
+        add_run_summary("Part 4: Bridge ESOA to Annex F Drug Codes", lines)
+
+    overall_lines: list[str] = []
+    if part3_stats:
+        overall_lines.append(
+            f"- ESOA ATC coverage: {part3_stats['matched_atc']:,}/{part3_stats['total']:,} ({part3_stats['matched_atc_pct']:.1f}%)"
+        )
+        overall_lines.append(
+            f"- ESOA DrugBank coverage: {part3_stats['matched_drugbank']:,}/{part3_stats['total']:,} ({part3_stats['matched_drugbank_pct']:.1f}%)"
+        )
+    if part4_stats:
+        overall_lines.append(
+            f"- ESOA → Drug code coverage: {part4_stats['matched']:,}/{part4_stats['total']:,} ({part4_stats['matched_pct']:.1f}%)"
+        )
+        overall_lines.append(f"- Final output: {part4_stats['output_path']}")
+    if overall_lines:
+        add_run_summary("Overall", overall_lines)
+
+    write_run_summary()
 
     print("\nPIPELINE COMPLETE")
     print("=" * 60)

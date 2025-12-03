@@ -494,6 +494,16 @@ def categorize_tokens(tokens: List[str]) -> Dict[str, Dict[str, int]]:
             categories[CATEGORY_OTHER][tok_upper] = categories[CATEGORY_OTHER].get(tok_upper, 0) + 1
             continue
         
+        # Strict validation for generic tokens
+        # Only allow alphanumeric tokens with reasonable length
+        if (not tok_upper.strip() or 
+            len(tok_upper.strip()) < 2 or
+            not any(c.isalpha() for c in tok_upper) or
+            tok_upper.count('*') > 0 or  # No asterisks in generic names
+            tok_upper in {'GENERIC', 'OP', 'GRAM', '100S'}):  # Descriptors, not drug names
+            categories[CATEGORY_OTHER][tok_upper] = categories[CATEGORY_OTHER].get(tok_upper, 0) + 1
+            continue
+        
         # Default to generic
         categories[CATEGORY_GENERIC][tok_upper] = categories[CATEGORY_GENERIC].get(tok_upper, 0) + 1
     

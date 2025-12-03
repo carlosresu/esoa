@@ -25,7 +25,8 @@ except ImportError:
 
 
 # Default paths
-PROJECT_DIR = Path(__file__).resolve().parents[4]
+# lookup.py is at pipelines/drugs/scripts/lookup.py (3 levels from project root)
+PROJECT_DIR = Path(__file__).resolve().parents[3]
 INPUTS_DIR = PROJECT_DIR / "inputs" / "drugs"
 OUTPUTS_DIR = PROJECT_DIR / "outputs" / "drugs"
 
@@ -251,13 +252,15 @@ def batch_lookup_generics(
             all_lookups.add(syn)
     
     # BATCH EXACT MATCH - single SQL query for all tokens
+    # Join unified with atc table to get ATC codes
     if all_lookups:
         placeholders = ",".join(["?" for _ in all_lookups])
         query = f"""
-            SELECT generic_name, drugbank_id, atc_code, source,
-                   generic_name as reference_text
-            FROM unified
-            WHERE UPPER(generic_name) IN ({placeholders})
+            SELECT DISTINCT u.generic_name, u.drugbank_id, a.atc_code, u.source,
+                   u.generic_name as reference_text
+            FROM unified u
+            LEFT JOIN atc a ON u.generic_name = a.generic_name
+            WHERE UPPER(u.generic_name) IN ({placeholders})
         """
         try:
             rows = con.execute(query, list(all_lookups)).fetchall()
@@ -389,5 +392,8 @@ def build_combination_keys(
     # Format: "A, B AND C" (WHO style for 3+ components)
     if len(sorted_parts) > 2:
         keys.add(", ".join(sorted_parts[:-1]) + " AND " + sorted_parts[-1])
+    # Format: "A B" (space-joined, for synonym lookup like "ETHYL ALCOHOL" -> ETHANOL)
+    keys.add(" ".join(unique_parts))
+    keys.add(" ".join(unique_parts[::-1]))  # Reverse order too
     
     return list(keys)

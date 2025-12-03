@@ -161,6 +161,15 @@ def build_unified_reference(
     
     generics_df = generics_df.drop_duplicates(subset=['generic_name'])
     
+    # Add canonical drug name aliases for common combinations
+    canonical_generics = [
+        {"drugbank_id": "DB00766", "generic_name": "AMOXICILLIN + CLAVULANIC ACID", "name_key": "amoxicillin + clavulanic acid", "source": "canonical"},
+        {"drugbank_id": None, "generic_name": "COTRIMOXAZOLE", "name_key": "cotrimoxazole", "source": "canonical"},
+        {"drugbank_id": None, "generic_name": "SULFAMETHOXAZOLE + TRIMETHOPRIM", "name_key": "sulfamethoxazole + trimethoprim", "source": "canonical"},
+    ]
+    canonical_gen_df = pd.DataFrame(canonical_generics)
+    generics_df = pd.concat([generics_df, canonical_gen_df], ignore_index=True).drop_duplicates(subset=['generic_name'])
+    
     # =========================================================================
     # TABLE 2: unified_synonyms - drugbank_id → synonyms (aggregated)
     # =========================================================================
@@ -211,6 +220,19 @@ def build_unified_reference(
         pass
     
     atc_map_df = atc_map_df.drop_duplicates()
+    
+    # Add canonical drug name aliases for common combinations
+    # These map user-friendly names to their ATC codes
+    canonical_aliases = [
+        # Amoxicillin + Clavulanic acid combinations -> J01CR02
+        {"drugbank_id": "DB00766", "generic_name": "AMOXICILLIN + CLAVULANIC ACID", "atc_code": "J01CR02"},
+        {"drugbank_id": "DB00766", "generic_name": "CO-AMOXICLAV", "atc_code": "J01CR02"},
+        # Sulfamethoxazole + Trimethoprim -> J01EE01
+        {"drugbank_id": None, "generic_name": "COTRIMOXAZOLE", "atc_code": "J01EE01"},
+        {"drugbank_id": None, "generic_name": "SULFAMETHOXAZOLE + TRIMETHOPRIM", "atc_code": "J01EE01"},
+    ]
+    canonical_df = pd.DataFrame(canonical_aliases)
+    atc_map_df = pd.concat([atc_map_df, canonical_df], ignore_index=True).drop_duplicates()
     
     # =========================================================================
     # TABLE 4: unified_dosages - drugbank_id × form × route × dose (VALID combos)

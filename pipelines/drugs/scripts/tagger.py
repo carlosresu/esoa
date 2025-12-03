@@ -28,7 +28,8 @@ from .tokenizer import (
 
 
 # Default paths
-PROJECT_DIR = Path(__file__).resolve().parents[4]
+# tagger.py is at pipelines/drugs/scripts/tagger.py (3 levels from project root)
+PROJECT_DIR = Path(__file__).resolve().parents[3]
 INPUTS_DIR = PROJECT_DIR / "inputs" / "drugs"
 OUTPUTS_DIR = PROJECT_DIR / "outputs" / "drugs"
 
@@ -215,6 +216,10 @@ class UnifiedTagger:
         return swap_brand_to_generic(token, self.brand_map)
     
     def _strip_salt(self, generic: str) -> tuple:
+        # Don't strip from known multiword generics (e.g., ISOSORBIDE DINITRATE)
+        generic_upper = generic.upper()
+        if generic_upper in self.multiword_generics:
+            return generic_upper, None
         return strip_salt_suffix(generic)
     
     def _lookup_mixture(self, generics: List[str]) -> Optional[Dict[str, Any]]:
@@ -369,9 +374,10 @@ class UnifiedTagger:
                 chunk_rate = len(chunk_texts) / chunk_time if chunk_time > 0 else 0
                 eta = rows_remaining / chunk_rate if chunk_rate > 0 else 0
                 
+                rows_per_sec = chunk_rate if chunk_rate > 0 else 0
                 print(
                     f"⣿ {chunk_time:7.2f}s "
-                    f"Chunk {chunk_num}/{num_chunks}: {rows_done:,}/{total_rows:,} rows "
+                    f"Chunk {chunk_num:02d}/{num_chunks:02d}: {rows_per_sec:,.0f} rows/s "
                     f"ETA {eta:.0f}s"
                 )
         
@@ -496,9 +502,18 @@ class UnifiedTagger:
             # Build from both original and normalized components for #7 (synonym swapping in mixtures)
             combo_keys = build_combination_keys(gt)
             unique_generics.update(combo_keys)
+            # Add synonyms of combo keys (e.g., "ETHYL ALCOHOL" -> "ETHANOL")
+            for ck in combo_keys:
+                ck_syn = self._apply_synonyms(ck)
+                if ck_syn != ck:
+                    unique_generics.add(ck_syn)
             # Also build from normalized components (e.g., SALBUTAMOL -> ALBUTEROL)
             normalized_combo_keys = build_combination_keys(normalized_components)
             unique_generics.update(normalized_combo_keys)
+            for nck in normalized_combo_keys:
+                nck_syn = self._apply_synonyms(nck)
+                if nck_syn != nck:
+                    unique_generics.add(nck_syn)
         
         # Batch lookup with cached generics for faster fuzzy matching
         generic_cache = batch_lookup_generics(
@@ -512,29 +527,34 @@ class UnifiedTagger:
             tokens = all_tokens[i]
             generic_tokens = all_generic_tokens[i]
             
-            # Get stripped generics
+            # Get stripped generics with defensive filtering
             stripped_generics = []
             for g in generic_tokens:
                 if g.upper() in PURE_SALT_COMPOUNDS:
                     stripped_generics.append(g.upper())
                 else:
                     base, _ = self._strip_salt(g)
-                    stripped_generics.append(base)
+                    # Defensive filtering: exclude known formulation markers and junk
+                    if (base and 
+                        base.upper() not in {"FC", "EC", "SR", "XR", "ER", "DR", 
+                                           "NON-PNF", "NONPNF", "MG", "ML", 
+                                           "TABLET", "CAPSULE", "SOLUTION"} and
+                        len(base.strip()) > 1):
+                        stripped_generics.append(base)
             
-            # Collect matches
+            # Collect matches - COMBO MATCHES FIRST for priority (e.g., ETHYL ALCOHOL -> ETHANOL)
             generic_matches = []
-            for sg in stripped_generics:
-                if sg in generic_cache:
-                    generic_matches.extend(generic_cache[sg])
-                syn = self._apply_synonyms(sg)
-                if syn in generic_cache and syn != sg:
-                    generic_matches.extend(generic_cache[syn])
             
-            # Add combination matches (both original and normalized)
+            # Add combination matches FIRST (both original and normalized)
+            # This ensures combo matches like ETHANOL take priority over single-token fuzzy matches
             combo_keys = build_combination_keys(stripped_generics)
             for ck in combo_keys:
                 if ck in generic_cache:
                     generic_matches.extend(generic_cache[ck])
+                # Also apply synonym to the combo key itself (e.g., "ETHYL ALCOHOL" -> "ETHANOL")
+                ck_syn = self._apply_synonyms(ck)
+                if ck_syn != ck and ck_syn in generic_cache:
+                    generic_matches.extend(generic_cache[ck_syn])
             
             # Also check normalized combo keys (e.g., PARACETAMOL -> ACETAMINOPHEN)
             normalized_components = [self._apply_synonyms(sg) for sg in stripped_generics]
@@ -542,6 +562,18 @@ class UnifiedTagger:
             for nck in normalized_combo_keys:
                 if nck in generic_cache and nck not in combo_keys:
                     generic_matches.extend(generic_cache[nck])
+                # Apply synonym to normalized combo key too
+                nck_syn = self._apply_synonyms(nck)
+                if nck_syn != nck and nck_syn in generic_cache:
+                    generic_matches.extend(generic_cache[nck_syn])
+            
+            # Then add individual token matches
+            for sg in stripped_generics:
+                if sg in generic_cache:
+                    generic_matches.extend(generic_cache[sg])
+                syn = self._apply_synonyms(sg)
+                if syn in generic_cache and syn != sg:
+                    generic_matches.extend(generic_cache[syn])
             
             # Deduplicate
             seen = set()
@@ -551,6 +583,30 @@ class UnifiedTagger:
                 if key not in seen:
                     seen.add(key)
                     unique_matches.append(m)
+            
+            if not unique_matches:
+                # Check if any synonym maps to a mixture name (e.g., CO-AMOXICLAV -> AMOXICILLIN AND CLAVULANATE POTASSIUM)
+                for sg in stripped_generics:
+                    syn = self._apply_synonyms(sg)
+                    if syn != sg and self._mixtures_loaded:
+                        # Try to find the synonym in mixtures table by name
+                        try:
+                            mixture_result = self.con.execute("""
+                                SELECT mixture_name, drugbank_id, component_key
+                                FROM mixtures
+                                WHERE UPPER(mixture_name) = ?
+                                LIMIT 1
+                            """, [syn.upper()]).fetchone()
+                            if mixture_result:
+                                unique_matches.append({
+                                    "generic_name": mixture_result[0],
+                                    "drugbank_id": mixture_result[1],
+                                    "atc_code": None,  # Mixtures often don't have ATC
+                                    "source": "mixtures",
+                                    "reference_text": mixture_result[0],
+                                })
+                        except Exception:
+                            pass
             
             if not unique_matches:
                 # Try mixture lookup for multi-generic inputs
@@ -661,6 +717,12 @@ class UnifiedTagger:
                     normalized = self._apply_synonyms(sg_upper)
                 if normalized and normalized not in {"+", "MG/5"}:
                     input_generics_normalized.add(normalized)
+            
+            # Also add combo synonyms to normalized set (e.g., ETHYL ALCOHOL -> ETHANOL)
+            for ck in combo_keys:
+                ck_syn = self._apply_synonyms(ck)
+                if ck_syn != ck and ck_syn not in {"+", "MG/5"}:
+                    input_generics_normalized.add(ck_syn)
             
             num_input = len(input_generics_normalized)
             has_plus = "+" in text
