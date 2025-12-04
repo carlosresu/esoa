@@ -349,10 +349,22 @@ def run_esoa_to_drug_code(
     import re
     
     def extract_dose_mg(text):
-        """Extract dose in mg from text. Returns None if not found."""
+        """Extract dose in mg from text. Returns None if not found.
+        
+        For percentage-based drugs (e.g., 5% DEXTROSE, 0.9% SODIUM CHLORIDE),
+        returns the percentage as a string (e.g., "5%", "0.9%") for exact matching.
+        """
         if not text:
             return None
         text = str(text).upper()
+        
+        # First check for percentage-based doses (IV solutions, etc.)
+        # These are matched as strings, not converted to mg
+        pct_match = re.search(r'(\d+(?:\.\d+)?)\s*%', text)
+        if pct_match:
+            # For percentage drugs, return the percentage as a string
+            return f"{pct_match.group(1)}%"
+        
         # Match patterns like "600MG", "600 MG", "100MG/5ML", "200 MG/ML"
         # For concentrations like 100MG/5ML, extract 100
         patterns = [

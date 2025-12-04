@@ -1171,15 +1171,26 @@ SPELLING_SYNONYMS: Dict[str, str] = {
     # DEXTROSE/D-GLUCOSE = GLUCOSE (same compound, WHO ATC uses "GLUCOSE")
     "PNSS": "SODIUM CHLORIDE",  # Plain Normal Saline Solution
     "NSS": "SODIUM CHLORIDE",   # Normal Saline Solution
-    "D5": "GLUCOSE",            # 5% Dextrose → GLUCOSE for ATC (V06DC01)
-    "D5W": "GLUCOSE",           # 5% Dextrose in Water
-    "D10": "GLUCOSE",           # 10% Dextrose → GLUCOSE for ATC
-    "D10W": "GLUCOSE",          # 10% Dextrose in Water
-    "DEXTROSE": "GLUCOSE",      # Dextrose = D-glucose = Glucose
-    "D-GLUCOSE": "GLUCOSE",     # DrugBank name → WHO ATC name
+    "0.9% SODIUM CHLORIDE": "SODIUM CHLORIDE",  # Normal saline
+    "0.45% SODIUM CHLORIDE": "SODIUM CHLORIDE",  # Half-normal saline
+    "D5": "DEXTROSE",           # 5% Dextrose (concentration in dose)
+    "D5W": "DEXTROSE",          # 5% Dextrose in Water
+    "D10": "DEXTROSE",          # 10% Dextrose
+    "D10W": "DEXTROSE",         # 10% Dextrose in Water
+    "5% DEXTROSE": "DEXTROSE",  # Generic with percentage
+    "10% DEXTROSE": "DEXTROSE",
+    "50% DEXTROSE": "DEXTROSE",
+    "DEXTROSE": "DEXTROSE",     # Keep as DEXTROSE (matched in PNF)
+    "D-GLUCOSE": "DEXTROSE",
+    "GLUCOSE": "DEXTROSE",      # WHO ATC uses GLUCOSE, PNF uses DEXTROSE
     "LRS": "LACTATED RINGER'S", # Lactated Ringer's Solution
-    "D5LR": "GLUCOSE + LACTATED RINGER'S",
-    "D5NSS": "GLUCOSE + SODIUM CHLORIDE",
+    "D5LR": "DEXTROSE + LACTATED RINGER'S",
+    "D5NSS": "DEXTROSE + SODIUM CHLORIDE",
+    "5% DEXTROSE IN WATER": "DEXTROSE",
+    "10% DEXTROSE IN WATER": "DEXTROSE",
+    "5% DEXTROSE IN 0.9% SODIUM CHLORIDE": "DEXTROSE + SODIUM CHLORIDE",
+    "5% DEXTROSE IN 0.3% SODIUM CHLORIDE": "DEXTROSE + SODIUM CHLORIDE",
+    "5% DEXTROSE IN LACTATED RINGER'S": "DEXTROSE + LACTATED RINGER'S",
     # Brand name mappings
     "REBAMID": "REBAMIPIDE",
     # Alcohol synonyms
