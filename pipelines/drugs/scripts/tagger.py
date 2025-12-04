@@ -496,8 +496,11 @@ class UnifiedTagger:
             
             # Check if this is a vaccine and normalize
             vaccine_name, vaccine_details = normalize_vaccine_name(text)
+            is_vaccine = False
             if vaccine_name:
                 drug_details["generic_name"] = vaccine_name
+                drug_details["_is_vaccine"] = True
+                is_vaccine = True
                 if vaccine_details:
                     if drug_details.get("type_details"):
                         drug_details["type_details"] += "; " + vaccine_details
@@ -510,6 +513,11 @@ class UnifiedTagger:
             clean_text = drug_details["generic_name"]
             # But also keep the original for dose/form extraction
             tokens, generic_tokens = extract_generic_tokens(text, self.multiword_generics)
+            
+            # For vaccines, prepend the canonical vaccine name as the primary token
+            if is_vaccine and vaccine_name:
+                # Use the canonical vaccine name as the main token
+                generic_tokens = [vaccine_name] + [g for g in generic_tokens if g.upper() != vaccine_name.upper()]
             
             # If we extracted a cleaner generic name, use it
             clean_generic_tokens = []
@@ -879,6 +887,13 @@ class UnifiedTagger:
                 generic_name = best.get("generic_name")
                 if generic_name:
                     generic_name = get_regional_canonical(generic_name)
+                
+                # For vaccines, override with canonical vaccine name to ensure full name (e.g., DTP VACCINE not just PERTUSSIS VACCINE)
+                if all_drug_details[i].get("_is_vaccine"):
+                    canonical_vaccine = all_drug_details[i].get("generic_name")
+                    if canonical_vaccine:
+                        generic_name = canonical_vaccine
+                        ref_text = canonical_vaccine
                 
                 results.append({
                     "id": ids[i],
