@@ -1148,12 +1148,13 @@ SPELLING_SYNONYMS: Dict[str, str] = {
     "BACTRIM": "SULFAMETHOXAZOLE + TRIMETHOPRIM",
     # TB drug combinations (first-line treatment for drug-susceptible TB)
     # HRZE = H(Isoniazid) + R(Rifampicin) + Z(Pyrazinamide) + E(Ethambutol)
+    # Only use 3+ letter abbreviations to avoid false matches (HR/HE too short)
     "HRZE": "ISONIAZID + RIFAMPICIN + PYRAZINAMIDE + ETHAMBUTOL",
     "HRZ": "ISONIAZID + RIFAMPICIN + PYRAZINAMIDE",
-    "HR": "ISONIAZID + RIFAMPICIN",
-    "HE": "ISONIAZID + ETHAMBUTOL",
+    "HRE": "ISONIAZID + RIFAMPICIN + ETHAMBUTOL",
     "RHZ": "ISONIAZID + RIFAMPICIN + PYRAZINAMIDE",  # Alternate order
     "RHZE": "ISONIAZID + RIFAMPICIN + PYRAZINAMIDE + ETHAMBUTOL",  # Alternate order
+    "RHEZ": "ISONIAZID + RIFAMPICIN + PYRAZINAMIDE + ETHAMBUTOL",  # Alternate order
     # Salt form synonyms
     "POTASSIUM CLAVULANATE": "CLAVULANIC ACID",
     "CLAVULANATE": "CLAVULANIC ACID",
@@ -1582,8 +1583,9 @@ CANONICAL_GENERICS: List[Dict[str, Any]] = [
     # TB drug combinations (first-line anti-tuberculosis)
     {"drugbank_id": None, "generic_name": "ISONIAZID + RIFAMPICIN + PYRAZINAMIDE + ETHAMBUTOL", "source": "canonical"},  # HRZE
     {"drugbank_id": None, "generic_name": "ISONIAZID + RIFAMPICIN + PYRAZINAMIDE", "source": "canonical"},  # HRZ
-    {"drugbank_id": None, "generic_name": "ISONIAZID + RIFAMPICIN", "source": "canonical"},  # HR
-    {"drugbank_id": None, "generic_name": "ISONIAZID + ETHAMBUTOL", "source": "canonical"},  # HE
+    {"drugbank_id": None, "generic_name": "ISONIAZID + RIFAMPICIN + ETHAMBUTOL", "source": "canonical"},  # HRE
+    {"drugbank_id": None, "generic_name": "ISONIAZID + RIFAMPICIN", "source": "canonical"},
+    {"drugbank_id": None, "generic_name": "ISONIAZID + ETHAMBUTOL", "source": "canonical"},
     # IV Solutions
     {"drugbank_id": None, "generic_name": "ACETATED RINGER'S SOLUTION", "source": "canonical"},
     {"drugbank_id": None, "generic_name": "RINGER'S SOLUTION, ACETATED", "source": "canonical"},
@@ -1665,14 +1667,15 @@ CANONICAL_ATC_MAPPINGS: List[Dict[str, Any]] = [
     {"drugbank_id": None, "generic_name": "AMPICILLIN + SULBACTAM", "atc_code": "J01CR01"},
     {"drugbank_id": None, "generic_name": "SULTAMICILLIN", "atc_code": "J01CR04"},
     # TB drug combinations (WHO ATC J04AM - combinations of anti-mycobacterials)
+    # Only use 3+ letter abbreviations to avoid false matches
     {"drugbank_id": None, "generic_name": "ISONIAZID + RIFAMPICIN + PYRAZINAMIDE + ETHAMBUTOL", "atc_code": "J04AM06"},  # HRZE
     {"drugbank_id": None, "generic_name": "HRZE", "atc_code": "J04AM06"},
     {"drugbank_id": None, "generic_name": "ISONIAZID + RIFAMPICIN + PYRAZINAMIDE", "atc_code": "J04AM05"},  # HRZ
     {"drugbank_id": None, "generic_name": "HRZ", "atc_code": "J04AM05"},
-    {"drugbank_id": None, "generic_name": "ISONIAZID + RIFAMPICIN", "atc_code": "J04AM02"},  # HR
-    {"drugbank_id": None, "generic_name": "HR", "atc_code": "J04AM02"},
-    {"drugbank_id": None, "generic_name": "ISONIAZID + ETHAMBUTOL", "atc_code": "J04AM03"},  # HE
-    {"drugbank_id": None, "generic_name": "HE", "atc_code": "J04AM03"},
+    {"drugbank_id": None, "generic_name": "ISONIAZID + RIFAMPICIN + ETHAMBUTOL", "atc_code": "J04AM06"},  # HRE (3-drug, same ATC as HRZE)
+    {"drugbank_id": None, "generic_name": "HRE", "atc_code": "J04AM06"},
+    {"drugbank_id": None, "generic_name": "ISONIAZID + RIFAMPICIN", "atc_code": "J04AM02"},
+    {"drugbank_id": None, "generic_name": "ISONIAZID + ETHAMBUTOL", "atc_code": "J04AM03"},
     # IV Solutions - Ringer's
     {"drugbank_id": None, "generic_name": "ACETATED RINGER'S SOLUTION", "atc_code": "B05BB01"},
     {"drugbank_id": None, "generic_name": "RINGER'S SOLUTION, ACETATED", "atc_code": "B05BB01"},
