@@ -77,7 +77,8 @@ def run_annex_f_tagging(
     merge_cols = ["row_idx", "atc_code", "drugbank_id", "generic_name", "reference_text", 
                   "match_score", "match_reason", "sources",
                   "dose", "form", "route", "type_details", "release_details", "form_details",
-                  "salt_details", "brand_details", "indication_details", "alias_details"]
+                  "salt_details", "brand_details", "indication_details", "alias_details",
+                  "diluent_details"]
     # Only include columns that exist in results_df
     merge_cols = [c for c in merge_cols if c in results_df.columns]
     merged = annex_df.merge(

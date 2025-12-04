@@ -719,6 +719,7 @@ class UnifiedTagger:
                             "brand_details": all_drug_details[i].get("brand_details"),
                             "indication_details": all_drug_details[i].get("indication_details"),
                             "alias_details": all_drug_details[i].get("alias_details"),
+                            "diluent_details": all_drug_details[i].get("diluent_details"),
                         })
                         continue
                 
@@ -743,6 +744,7 @@ class UnifiedTagger:
                     "brand_details": all_drug_details[i].get("brand_details"),
                     "indication_details": all_drug_details[i].get("indication_details"),
                     "alias_details": all_drug_details[i].get("alias_details"),
+                    "diluent_details": all_drug_details[i].get("diluent_details"),
                 })
                 continue
             
@@ -804,6 +806,7 @@ class UnifiedTagger:
                     "brand_details": all_drug_details[i].get("brand_details"),
                     "indication_details": all_drug_details[i].get("indication_details"),
                     "alias_details": all_drug_details[i].get("alias_details"),
+                    "diluent_details": all_drug_details[i].get("diluent_details"),
                 })
                 continue
             
@@ -916,6 +919,7 @@ class UnifiedTagger:
                     "brand_details": all_drug_details[i].get("brand_details"),
                     "indication_details": all_drug_details[i].get("indication_details"),
                     "alias_details": all_drug_details[i].get("alias_details"),
+                    "diluent_details": all_drug_details[i].get("diluent_details"),
                 })
             else:
                 # Try mixture lookup for multi-generic inputs when scoring fails
@@ -943,6 +947,7 @@ class UnifiedTagger:
                             "brand_details": all_drug_details[i].get("brand_details"),
                             "indication_details": all_drug_details[i].get("indication_details"),
                             "alias_details": all_drug_details[i].get("alias_details"),
+                            "diluent_details": all_drug_details[i].get("diluent_details"),
                         })
                         continue
                 
@@ -967,6 +972,7 @@ class UnifiedTagger:
                     "brand_details": all_drug_details[i].get("brand_details"),
                     "indication_details": all_drug_details[i].get("indication_details"),
                     "alias_details": all_drug_details[i].get("alias_details"),
+                    "diluent_details": all_drug_details[i].get("diluent_details"),
                 })
         
         return results

@@ -180,6 +180,7 @@ def extract_drug_details(drug_name: str) -> Dict[str, Optional[str]]:
         "type_details": None,
         "release_details": None,
         "form_details": None,
+        "diluent_details": None,  # Volume of diluent/solvent (base solution volume)
     }
     
     working = drug_name.strip()
@@ -197,16 +198,71 @@ def extract_drug_details(drug_name: str) -> Dict[str, Optional[str]]:
     working = re.sub(r"\(\s+", "(", working)
     working = re.sub(r"\s+\)", ")", working)
     
-    # Strip diluent/solvent patterns - these are packaging info, not drug components
-    # Patterns to remove:
-    # - "+ diluent", "+ 2 mL diluent", "+ solvent", "+ reconstitution fluid"
-    # - "LYOPHILIZED POWDER + DILUENT", "FREEZE-DRIED POWDER + DILUENT"
-    # - "monodose vial + 0.5 mL diluent", "1 dose + 1 mL diluent"
+    # Extract diluent/solvent volume BEFORE stripping
+    # Diluent volume = base solution volume for concentration calculation
+    # e.g., "250 mg + 5 mL diluent" → dose=250mg, diluent=5mL → concentration=50mg/mL
     diluent_keywords = (
         r"diluent|solvent|reconstitution\s+fluid|sterile\s+water|"
         r"water\s+for\s+injection|w\.?f\.?i\.?"
     )
     
+    # Extract diluent volume patterns
+    diluent_volumes = []
+    
+    # Pattern 1: "+ X mL diluent" (explicit diluent after +)
+    diluent_vol_pattern1 = re.compile(
+        r"\+\s*(\d+(?:[.,]\d+)?)\s*(m?L)\s*(?:" + diluent_keywords + r")",
+        re.IGNORECASE
+    )
+    for match in diluent_vol_pattern1.finditer(working):
+        vol = match.group(1).replace(",", ".")
+        unit = match.group(2).upper()
+        if unit == "L":
+            diluent_volumes.append(f"{vol} L")
+        else:
+            diluent_volumes.append(f"{vol} mL")
+    
+    # Pattern 2: "+ X mL LYOPHILIZED/FREEZE-DRIED POWDER + DILUENT" - volume before form word
+    diluent_vol_pattern2 = re.compile(
+        r"\+\s*(\d+(?:[.,]\d+)?)\s*(m?L)\s+(?:LYOPHILIZED|FREEZE-?DRIED)\s+POWDER\s*\+\s*(?:" + diluent_keywords + r")",
+        re.IGNORECASE
+    )
+    for match in diluent_vol_pattern2.finditer(working):
+        vol = match.group(1).replace(",", ".")
+        unit = match.group(2).upper()
+        if unit == "L":
+            diluent_volumes.append(f"{vol} L")
+        else:
+            diluent_volumes.append(f"{vol} mL")
+    
+    # Pattern 3: "X mg/Y mL + Diluent" - dose/volume ratio before diluent
+    # e.g., "METHYLPREDNISOLONE 1 g/16 mL + Diluent" → diluent is 16 mL
+    diluent_vol_pattern3 = re.compile(
+        r"(\d+(?:[.,]\d+)?)\s*(?:mg|g|mcg|iu)\s*/\s*(\d+(?:[.,]\d+)?)\s*(m?L)\s*\+\s*(?:" + diluent_keywords + r")",
+        re.IGNORECASE
+    )
+    for match in diluent_vol_pattern3.finditer(working):
+        vol = match.group(2).replace(",", ".")
+        unit = match.group(3).upper()
+        if unit == "L":
+            diluent_volumes.append(f"{vol} L")
+        else:
+            diluent_volumes.append(f"{vol} mL")
+    
+    # Pattern 4: "+ Diluent" without volume (just note presence)
+    if re.search(r"\+\s*(?:" + diluent_keywords + r")", working, re.IGNORECASE):
+        if not diluent_volumes:
+            diluent_volumes.append("with diluent")
+    
+    # Pattern 5: "LYOPHILIZED POWDER + DILUENT/SOLVENT" without volume
+    if re.search(r"(?:LYOPHILIZED|FREEZE-?DRIED)\s+POWDER\s*\+\s*(?:" + diluent_keywords + r")", working, re.IGNORECASE):
+        if not diluent_volumes:
+            diluent_volumes.append("with diluent")
+    
+    if diluent_volumes:
+        result["diluent_details"] = "|".join(diluent_volumes)
+    
+    # Now strip diluent patterns from working string
     # Pattern 0: Strip "monodose vial + X mL diluent" and "multidose vial + X mL diluent" entirely
     monodose_diluent = re.compile(
         r"\s+(?:mono|multi)?dose\s+vial\s*\+\s*\d+(?:[.,]\d+)?\s*m?L?\s*" + diluent_keywords + r".*$",
@@ -1114,3 +1170,99 @@ def strip_salt_suffix(
                 return parts[0].strip(), potential_salt
     
     return generic_upper, None
+
+
+def parse_combo_doses(text: str, generics: List[str]) -> Dict[str, str]:
+    """
+    Parse combination drug doses and associate each dose with its generic.
+    
+    Doses separated by +, /, or | correspond to generics in order.
+    
+    Examples:
+        "AMPICILLIN + SULBACTAM 500MG/250MG" with generics ["AMPICILLIN", "SULBACTAM"]
+            -> {"AMPICILLIN": "500MG", "SULBACTAM": "250MG"}
+        
+        "HRZE 1250MG+75MG+400MG+276MG" with generics ["H", "R", "Z", "E"]
+            -> {"H": "1250MG", "R": "75MG", "Z": "400MG", "E": "276MG"}
+    
+    Returns dict of generic -> dose, or empty dict if parsing fails.
+    """
+    if not generics:
+        return {}
+    
+    text_upper = text.upper()
+    
+    # Find dose patterns: "500MG/250MG" or "500MG+250MG" or "500 MG + 250 MG"
+    # Pattern for individual doses
+    dose_pattern = r'(\d+(?:[.,]\d+)?)\s*(MG|G|MCG|UG|IU|ML|%)'
+    
+    # Try to find dose sequences separated by +, /, or |
+    # First look for "XMGYYMG" or "XMG/YMG" or "XMG+YMG" patterns
+    combo_dose_pattern = re.compile(
+        r'(\d+(?:[.,]\d+)?)\s*(MG|G|MCG|UG|IU|ML|%)\s*[/+|]\s*' +
+        r'(\d+(?:[.,]\d+)?)\s*(MG|G|MCG|UG|IU|ML|%)',
+        re.IGNORECASE
+    )
+    
+    # Find all dose values in order
+    all_doses = []
+    dose_matches = list(re.finditer(dose_pattern, text_upper))
+    
+    if not dose_matches:
+        return {}
+    
+    # Check if doses are in a combo pattern (separated by +, /, |)
+    # by looking at the text between matches
+    prev_end = 0
+    for match in dose_matches:
+        between = text_upper[prev_end:match.start()]
+        # Skip if this looks like a concentration (X/Y mL pattern)
+        if prev_end > 0 and '/' in between and 'ML' in text_upper[match.end():match.end()+5]:
+            continue
+        
+        dose_val = match.group(1).replace(",", ".")
+        dose_unit = match.group(2).upper()
+        all_doses.append(f"{dose_val}{dose_unit}")
+        prev_end = match.end()
+    
+    # If we have the same number of doses as generics, map them in order
+    if len(all_doses) == len(generics):
+        return dict(zip([g.upper() for g in generics], all_doses))
+    
+    # If more doses than generics (e.g., "500MG/5ML" concentration pattern), 
+    # try to match first N doses
+    if len(all_doses) > len(generics) and len(generics) > 0:
+        # Check if this is a concentration pattern (dose/volume)
+        # by looking for ML or L at the end
+        if all_doses[-1].endswith('ML') or all_doses[-1].endswith('L'):
+            # Last dose is volume, use previous doses for generics
+            return dict(zip([g.upper() for g in generics], all_doses[:len(generics)]))
+    
+    # Fallback: try to pair first dose with first generic
+    if len(all_doses) >= 1 and len(generics) >= 1:
+        result = {}
+        for i, g in enumerate(generics):
+            if i < len(all_doses):
+                result[g.upper()] = all_doses[i]
+        return result
+    
+    return {}
+
+
+def format_combo_doses(generics: List[str], dose_map: Dict[str, str]) -> str:
+    """
+    Format combo doses as a pipe-separated string.
+    
+    Example: {"AMPICILLIN": "500MG", "SULBACTAM": "250MG"}
+        -> "AMPICILLIN 500MG|SULBACTAM 250MG"
+    """
+    if not dose_map:
+        return ""
+    
+    parts = []
+    for g in generics:
+        g_upper = g.upper()
+        if g_upper in dose_map:
+            parts.append(f"{g_upper} {dose_map[g_upper]}")
+    
+    return "|".join(parts) if parts else ""
