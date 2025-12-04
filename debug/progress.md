@@ -1,7 +1,7 @@
 # Drug Pipeline Progress Tracker
 
 **Started:** Nov 28, 2025  
-**Last Updated:** Nov 28, 2025 (Phase 8 COMPLETE - ALL PHASES DONE)
+**Last Updated:** Dec 4, 2025 (Phase 9: Dose normalization fixes)
 
 ---
 
@@ -246,13 +246,81 @@
 
 ---
 
+## Phase 9: Part 4 Dose Matching Enhancement ✅ COMPLETE
+
+**Goal:** Improve ESOA → Annex F Drug Code matching through better dose parsing and matching
+
+### Completed Work
+
+#### Dose String Parsing ✅
+- Parse `40MG`, `1G`, `300MG/2ML`, `100MG/ML` formats
+- IU handling: `1000IU/ML`, `10 I.U`, `10IU/ML|5ML`
+- Percentage w/v conversion: `5%` → 50 mg/mL
+- Bare numeric doses: `25` → 25mg (assume MG for tablet range)
+- Bottle size extraction: `250MG/5ML|60ML` → conc=50mg/mL, vol=60mL
+
+#### Combination Dose Handling ✅  
+- Parse `500MG+125MG` → total 625mg
+- Parse Annex F `250|MG|125` → total 375mg
+- Parse `400|MG|57|ML|35` → 457mg combo (suspension)
+- Match combo totals across formats
+
+#### IV Solution Inference ✅
+- NSS/PNSS with volume only → assume 0.9% = 9 mg/mL
+- D5 with volume only → assume 5% = 50 mg/mL
+- D10 with volume only → assume 10% = 100 mg/mL
+
+#### Form Equivalence Matching ✅
+- TABLET ↔ FILM COATED, CHEWABLE, SUBLINGUAL
+- CAPSULE ↔ SOFTGEL, GELCAP
+- SYRUP ↔ SUSPENSION ↔ SOLUTION
+- AMPULE ↔ VIAL ↔ INJECTION
+- NEBULE ↔ INHALATION
+
+#### Dose Tolerance ✅
+- MG matching: 1% relative or 0.5mg absolute tolerance
+- Concentration matching: 1% relative or 0.1 mg/mL absolute tolerance
+- Volume not required for concentration matching (same conc = same drug)
+
+### Fuzzy Match Verification ✅
+- Analyzed 66,940 `generic_not_in_annex` entries
+- Only 288 (0.43%) are typos/synonyms
+- 99.57% are genuinely different drugs not in Annex F
+
+### Match Rate Progression
+| Change | Match Rate |
+|--------|------------|
+| Initial (zero tolerance) | 1.5% |
+| + Dose string parsing | 32.1% |
+| + IU handling | 33.1% |
+| + Volume-only inference | 33.6% |
+| + NSS/D5/D10 inference | 34.0% |
+| + Bare numeric doses | 34.0% |
+| + Form equivalence | 34.3% |
+| + Tolerance matching | 34.3% |
+| + Fixed vial size parsing | 36.4% |
+| + Strict dose requirement | **34.8%** |
+
+#### Vial Size Parsing Fix
+- `250|MG|1|G` was incorrectly parsed as combo (250mg + 1000mg = 1250mg)
+- Fixed: Now correctly parses as 250mg (the `1|G` is vial size, not second dose)
+- Pattern: If previous dose was in MG and current is in G with small value (≤10), treat as vial size
+
+#### Strict Dose Matching Policy
+- Dose matching is REQUIRED - no fallback when dose key is None
+- Only allow unit conversions: 500mcg = 0.5mg, 1g = 1000mg
+- Different doses never match: 400mg ≠ 600mg
+- Bare numbers assumed to be MG: "275" → 275mg (for cases like "FLANAX 275")
+
+---
+
 ## Current Metrics
 
 | Metric | Current | Target |
 |--------|---------|--------|
-| Annex F tagging | 96.3% ATC, 73.6% DrugBank ID | Maximize |
-| ESOA ATC tagging | 87.5% | 95%+ |
-| ESOA→Drug Code | 7.0% | 60%+ |
+| Annex F tagging | 86.6% ATC, 69.3% DrugBank ID | Maximize |
+| ESOA ATC tagging | 67.0% | 95%+ |
+| ESOA→Drug Code | **34.8%** | 60%+ |
 
 ---
 
@@ -305,3 +373,15 @@
 
 ### Phase 8
 18. `Phase 8 Complete: Cleanup` - Metrics tracking, documentation complete
+
+### Post-Phase Improvements
+19. `Vaccine Acronym Bidirectional Matching` - WHO/CDC standard vaccine abbreviations (DTP, MMR, PENTA, etc.) with bidirectional matching between acronyms and components
+20. `Diluent Handling Confirmed` - Verified diluent presence doesn't affect generic detection (only dose, which is flexible at ATC stage)
+
+### Phase 9
+21. `Phase 9: Part 4 Dose Matching Enhancement` - Parse dose strings, handle combos, IV solution inference
+22. `Form Equivalence Groups` - TABLET↔FILM COATED, SYRUP↔SUSPENSION, AMPULE↔VIAL
+23. `Dose Tolerance Matching` - 1% relative tolerance for floating point precision
+24. `Bare Numeric Dose Parsing` - "25" → 25mg for tablet-range values
+25. `Vial Size Parsing Fix` - "250|MG|1|G" correctly parses as 250mg, not 1250mg combo
+26. `Strict Dose Requirement` - Dose matching required, no fallback when dose missing

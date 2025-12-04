@@ -83,16 +83,193 @@ These rules are meant for GPT agents. Apply them whenever you are editing this r
 19. **Scoring algorithm.** Use deterministic pharmaceutical-principled scoring (NOT numeric weights):
     - Generic match is REQUIRED (no match without it)
     - Salt forms are IGNORED (unless pure salt compound)
-    - Dose is FLEXIBLE for ATC tagging, EXACT for Drug Code matching
+    - Dose is FLEXIBLE for ATC tagging, EXACT (zero tolerance) for Drug Code matching
     - Form allows equivalents (TABLET ≈ CAPSULE)
     - Route is INFERRED from form if missing
     - ATC preference: single vs combo based on input molecule count
+    - Tie-breaking uses `*_details` columns: release > type > form > indication > salt > alias > iv_diluent_type > brand
+    - Brand is for resolution only (brand→generic), NOT for preference
     - See `debug/pipeline.md` for full scoring logic
+
+20. **IV diluent equivalence.** Diluent name variants are normalized to canonical forms:
+    - WATER = WATER FOR INJECTION = STERILE WATER = WFI
+    - NORMAL_SALINE = SODIUM CHLORIDE = NS = 0.9% SODIUM CHLORIDE
+    - HALF_SALINE = 0.45% SODIUM CHLORIDE
+    - LACTATED_RINGERS = LACTATED RINGER'S = LR = RL (NOT equivalent to Acetated)
+    - ACETATED_RINGERS = ACETATED RINGER'S = AR (NOT equivalent to Lactated)
+
+21. **Part 4 form equivalence.** For Drug Code matching, forms within these groups are considered compatible:
+    - TABLET ↔ FILM COATED, COATED, CHEWABLE, SUBLINGUAL, ORALLY DISINTEGRATING
+    - CAPSULE ↔ SOFTGEL, GELCAP
+    - EXTENDED RELEASE ↔ SUSTAINED RELEASE, CONTROLLED RELEASE, MR, SR, XR, ER
+    - SYRUP ↔ SUSPENSION, SOLUTION, ELIXIR, DROPS
+    - AMPULE ↔ VIAL, INJECTION
+    - NEBULE ↔ NEBULIZER, INHALATION
+    - INHALER ↔ MDI, INHALATION
+
+22. **Part 4 dose tolerance.** Drug Code matching uses small tolerances for floating point precision:
+    - MG matching: 1% relative difference OR 0.5mg absolute difference
+    - Concentration matching: 1% relative OR 0.1 mg/mL absolute
+    - Volume NOT required for concentration matching (same concentration = same drug)
+
+23. **Part 4 dose inference.** When only volume is present, infer concentration from description:
+    - NSS/PNSS + volume → assume 0.9% = 9 mg/mL (Normal Saline)
+    - D5 + volume → assume 5% = 50 mg/mL (5% Dextrose)
+    - D10 + volume → assume 10% = 100 mg/mL (10% Dextrose)
+    - Bare numeric dose (no unit) → assume MG for tablet-range values (0.1-5000)
 
 ## Reference Data
 
-20. **WHO ATC data.** Use the canonical `who_atc_YYYY-MM-DD.csv` files from `dependencies/atcd/`. The `load_who_molecules()` function loads CSV files.
+24. **WHO ATC data.** Use the canonical `who_atc_YYYY-MM-DD.csv` files from `dependencies/atcd/`. The `load_who_molecules()` function loads CSV files.
 
-21. **FDA data.** Use `dependencies/fda_ph_scraper/` to generate:
+25. **FDA data.** Use `dependencies/fda_ph_scraper/` to generate:
     - `fda_drug_YYYY-MM-DD.csv` - brand → generic mapping with dose/form/route
     - `fda_food_YYYY-MM-DD.csv` - food product catalog (fallback for non-drugs)
+
+26. **Keep data dictionary updated.** Whenever you add, rename, or remove columns from any dataset, update the Data Dictionary section below.
+
+27. **Standardized output column naming.** All pipeline outputs must use consistent column names:
+    - `atc_code` - WHO ATC code (NOT `atc_code_final`)
+    - `drugbank_id` - DrugBank ID (NOT `drugbank_id_final`)
+    - `matched_generic_name` - Canonical generic name (NOT `generic_final`)
+    - `matched_reference_text` - Reference drug name from lookup
+    - `matched_source` - Data source (NOT `reference_source`)
+    - `match_score`, `match_reason` - Match result metadata
+    - `dose`, `form`, `route` - Extracted drug form info
+    - All `*_details` columns - Extracted qualifiers (salt, brand, indication, etc.)
+    - All computed columns - `drug_amount_mg`, `concentration_mg_per_ml`, etc.
+
+---
+
+## Data Dictionary
+
+> **IMPORTANT:** Keep this section updated whenever dataset columns change.
+
+### Pipeline Outputs
+
+#### `outputs/drugs/annex_f_with_atc.csv`
+Tagged Annex F drug codes with ATC/DrugBank IDs and extracted details.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `Drug Code` | str | Original Annex F drug code |
+| `Drug Description` | str | Original drug description text |
+| `matched_reference_text` | str | Matched reference drug name from lookup |
+| `atc_code` | str | Matched WHO ATC code |
+| `drugbank_id` | str | Matched DrugBank ID |
+| `matched_generic_name` | str | Canonical generic name |
+| `match_score` | int | Match confidence (1=matched, 0=no_match) |
+| `match_reason` | str | Why matched/unmatched (matched, no_match, no_candidates) |
+| `matched_source` | str | Data source (who_atc, drugbank, fda, mixtures) |
+| `dose` | str | Extracted dose(s), pipe-separated |
+| `form` | str | Extracted dosage form (TABLET, CAPSULE, etc.) |
+| `route` | str | Extracted route(s), pipe-separated |
+| `type_details` | str | Drug type qualifier (e.g., "ANHYDROUS") |
+| `release_details` | str | Release modifier (SR, XR, MR, etc.) |
+| `form_details` | str | Form modifier (FC, EC, ODT) |
+| `salt_details` | str | Salt form (HYDROCHLORIDE, SODIUM, etc.) |
+| `brand_details` | str | Brand name in parentheses |
+| `indication_details` | str | Indication qualifier (FOR HEPATIC FAILURE) |
+| `alias_details` | str | Alias (VIT. D3, etc.) |
+| `diluent_details` | str | Diluent volume (reconstitution info) |
+| `iv_diluent_type` | str | IV base solution (WATER, SODIUM CHLORIDE, LACTATED RINGER'S) |
+| `iv_diluent_amount` | str | IV diluent concentration (0.9%, 0.3%) |
+| `dose_values` | list | Numeric dose values [5.0, 0.9, 500.0] |
+| `dose_units` | list | Dose units ["%", "%", "ML"] |
+| `dose_types` | list | Dose classifications ["percentage", "percentage", "volume"] |
+| `total_volume_ml` | float | Total solution volume in mL |
+| `drug_amount_mg` | float | Computed drug amount in mg (w/v calculation) |
+| `diluent_amount_mg` | float | Computed diluent amount in mg (for saline) |
+| `concentration_mg_per_ml` | float | Drug concentration in mg/mL |
+
+#### `outputs/drugs/esoa_with_atc.csv`
+Tagged ESOA entries with ATC/DrugBank IDs. Has same generated columns as `annex_f_with_atc.csv` plus original ESOA columns (ITEM_NUMBER, ITEM_REF_CODE, DESCRIPTION).
+
+**Standardized column names (same as Annex F):**
+- `atc_code` - WHO ATC code
+- `drugbank_id` - DrugBank ID
+- `matched_generic_name` - Canonical generic name
+- `matched_reference_text` - Reference drug name from lookup
+- `matched_source` - Data source (who_atc, drugbank, fda, mixtures)
+- All `*_details` columns
+- All dose/IV solution computed columns
+
+#### `outputs/drugs/esoa_with_drug_codes.csv`
+ESOA entries bridged to Annex F drug codes via ATC/DrugBank matching.
+
+### Pipeline Inputs
+
+#### `inputs/drugs/pnf_prepared.csv`
+Prepared PNF (Philippine National Formulary) reference dataset.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `generic_name` | str | Generic drug name (uppercase) |
+| `generic_normalized` | str | Normalized generic name (salts stripped) |
+| `salt_form` | str | Extracted salt suffixes |
+| `atc_code` | str | WHO ATC code |
+| `route` | str | Normalized route (standardized from route_tokens) |
+| `form` | str | Dosage form (standardized from form_token) |
+| `dose_kind` | str | Dose type (simple, ratio, etc.) |
+| `strength` | float | Numeric strength value |
+| `unit` | str | Strength unit |
+| All `*_details` columns | str | Extracted qualifiers |
+
+#### `inputs/drugs/fda_drug_YYYY-MM-DD.csv`
+FDA Philippines drug registry (brand → generic mapping).
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `brand_name` | str | Brand/trade name |
+| `generic_name` | str | Generic/INN name |
+| `dosage_form` | str | Dosage form |
+| `route` | str | Administration route |
+| `dosage_strength` | str | Dose strength |
+| `registration_number` | str | FDA registration number |
+
+#### `inputs/drugs/fda_food_YYYY-MM-DD.csv`
+FDA Philippines food product catalog.
+
+### Unified Reference Tables
+
+Located in `outputs/drugs/` after running `build_unified_reference.py`:
+
+| File | Description |
+|------|-------------|
+| `unified_generics.csv` | drugbank_id → generic_name mapping |
+| `unified_synonyms.csv` | drugbank_id → synonyms (pipe-separated) |
+| `unified_atc.csv` | drugbank_id → atc_code (one row per combo) |
+| `unified_dosages.csv` | drugbank_id × form × route × dose |
+| `unified_brands.csv` | brand_name → generic_name, drugbank_id |
+| `unified_salts.csv` | drugbank_id → salt forms |
+| `unified_mixtures.csv` | Mixture components with component_key |
+
+### DrugBank Lean Tables
+
+Located in `dependencies/drugbank_generics/output/`:
+
+| File | Description |
+|------|-------------|
+| `generics_lean.csv` | drugbank_id → generic_name (one row per drug) |
+| `synonyms_lean.csv` | drugbank_id → synonyms (English, INN/BAN/USAN/JAN/USP) |
+| `dosages_lean.csv` | drugbank_id × form × route × strength |
+| `brands_lean.csv` | brand_name → drugbank_id |
+| `salts_lean.csv` | drugbank_id → salt_name |
+| `mixtures_lean.csv` | Mixture components with component_key |
+| `products_lean.csv` | drugbank_id × dosage_form × strength × route |
+| `atc_lean.csv` | drugbank_id → atc_code |
+
+### WHO ATC Tables
+
+Located in `dependencies/atcd/output/`:
+
+| File | Description |
+|------|-------------|
+| `who_atc_YYYY-MM-DD.csv` | WHO ATC hierarchy with molecule names |
+
+### Dose Calculation Notes
+
+**Pharmaceutical percentage = w/v (weight/volume)**
+- Definition: `% w/v = grams of solute per 100 mL of solution`
+- Formula: `drug_amount_mg = (percentage/100) × volume_mL × 1000`
+- Example: 5% Dextrose in 250mL = 12,500 mg dextrose, concentration = 50 mg/mL

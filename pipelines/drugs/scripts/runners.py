@@ -19,6 +19,9 @@ from .unified_constants import (
     GARBAGE_TOKENS,
     ALL_DRUG_SYNONYMS,
     DRUGBANK_COMPONENT_SYNONYMS,
+    FORM_TO_ROUTES,
+    FORM_EQUIVALENTS,
+    get_valid_routes_for_form,
 )
 
 
@@ -74,11 +77,24 @@ def run_annex_f_tagging(
     
     # Merge results
     annex_df["row_idx"] = range(len(annex_df))
-    merge_cols = ["row_idx", "atc_code", "drugbank_id", "generic_name", "reference_text", 
-                  "match_score", "match_reason", "sources",
-                  "dose", "form", "route", "type_details", "release_details", "form_details",
-                  "salt_details", "brand_details", "indication_details", "alias_details",
-                  "diluent_details"]
+    # Include all columns from the tagger results
+    # Core matching columns
+    merge_cols = [
+        "row_idx", "atc_code", "drugbank_id", "generic_name", "reference_text",
+        "match_score", "match_reason", "sources",
+        # Extracted form/route/dose
+        "dose", "form", "route",
+        # Extracted qualifiers
+        "type_details", "release_details", "form_details",
+        "salt_details", "brand_details", "indication_details", "alias_details",
+        "diluent_details",
+        # IV solution fields
+        "iv_diluent_type", "iv_diluent_amount",
+        # Structured dose information
+        "dose_values", "dose_units", "dose_types", "total_volume_ml",
+        # Computed amounts (w/v calculation for IV solutions)
+        "drug_amount_mg", "diluent_amount_mg", "concentration_mg_per_ml",
+    ]
     # Only include columns that exist in results_df
     merge_cols = [c for c in merge_cols if c in results_df.columns]
     merged = annex_df.merge(
@@ -188,10 +204,23 @@ def run_esoa_tagging(
     results_df = results_df.rename(columns={"input_text": "_tag_text"})
     esoa_df["_tag_text"] = esoa_df[text_column].fillna("").astype(str)
     
-    merge_cols = ["_tag_text", "atc_code", "drugbank_id", "generic_name", "reference_text", 
-                  "match_score", "match_reason", "sources",
-                  "dose", "form", "route", "type_details", "release_details", "form_details",
-                  "salt_details", "brand_details", "indication_details", "alias_details"]
+    # Include all columns from the tagger results
+    merge_cols = [
+        "_tag_text", "atc_code", "drugbank_id", "generic_name", "reference_text",
+        "match_score", "match_reason", "sources",
+        # Extracted form/route/dose
+        "dose", "form", "route",
+        # Extracted qualifiers
+        "type_details", "release_details", "form_details",
+        "salt_details", "brand_details", "indication_details", "alias_details",
+        "diluent_details",
+        # IV solution fields
+        "iv_diluent_type", "iv_diluent_amount",
+        # Structured dose information
+        "dose_values", "dose_units", "dose_types", "total_volume_ml",
+        # Computed amounts (w/v calculation for IV solutions)
+        "drug_amount_mg", "diluent_amount_mg", "concentration_mg_per_ml",
+    ]
     # Only include columns that exist in results_df
     merge_cols = [c for c in merge_cols if c in results_df.columns]
     merged = esoa_df.merge(
@@ -200,13 +229,11 @@ def run_esoa_tagging(
         how="left",
     ).drop(columns=["_tag_text"])
     
-    # Rename columns
+    # Rename columns (standardized with annex_f_with_atc)
     merged = merged.rename(columns={
-        "atc_code": "atc_code_final",
-        "drugbank_id": "drugbank_id_final",
-        "generic_name": "generic_final",
+        "generic_name": "matched_generic_name",
         "reference_text": "matched_reference_text",
-        "sources": "reference_source",
+        "sources": "matched_source",
     })
     
     # Reorder columns
@@ -219,9 +246,9 @@ def run_esoa_tagging(
     tagger.close()
     
     # Summary
-    matched_atc = merged["atc_code_final"].notna() & (merged["atc_code_final"] != "")
+    matched_atc = merged["atc_code"].notna() & (merged["atc_code"] != "")
     matched_atc_count = matched_atc.sum()
-    matched_drugbank = merged["drugbank_id_final"].notna() & (merged["drugbank_id_final"] != "")
+    matched_drugbank = merged["drugbank_id"].notna() & (merged["drugbank_id"] != "")
     matched_drugbank_count = matched_drugbank.sum()
     
     results = {
@@ -349,40 +376,638 @@ def run_esoa_to_drug_code(
     
     import re
     
-    def extract_dose_mg(text):
-        """Extract dose in mg from text. Returns None if not found.
-        
-        For percentage-based drugs (e.g., 5% DEXTROSE, 0.9% SODIUM CHLORIDE),
-        returns the percentage as a string (e.g., "5%", "0.9%") for exact matching.
-        """
-        if not text:
+    # IV diluent equivalence - diluents that are clinically interchangeable
+    # NOTE: Water and Saline are NOT interchangeable (different osmolarity)
+    # NOTE: Lactated Ringer's and Acetated Ringer's are NOT interchangeable (different buffer)
+    DILUENT_EQUIVALENTS = {
+        # Water variants
+        "WATER": "WATER",
+        "WATER FOR INJECTION": "WATER",
+        "STERILE WATER": "WATER",
+        "WFI": "WATER",
+        # Normal saline variants (0.9% NaCl)
+        "SODIUM CHLORIDE": "NORMAL_SALINE",
+        "NORMAL SALINE": "NORMAL_SALINE",
+        "NS": "NORMAL_SALINE",
+        "0.9% SODIUM CHLORIDE": "NORMAL_SALINE",
+        "0.9% NACL": "NORMAL_SALINE",
+        # Half-normal saline (0.45% NaCl) - different from normal saline
+        "0.45% SODIUM CHLORIDE": "HALF_SALINE",
+        "0.45% NACL": "HALF_SALINE",
+        "HALF NORMAL SALINE": "HALF_SALINE",
+        # Lactated Ringer's - NOT equivalent to Acetated Ringer's
+        "LACTATED RINGER'S": "LACTATED_RINGERS",
+        "LACTATED RINGERS": "LACTATED_RINGERS",
+        "LR": "LACTATED_RINGERS",
+        "RL": "LACTATED_RINGERS",
+        # Acetated Ringer's - NOT equivalent to Lactated Ringer's
+        "ACETATED RINGER'S": "ACETATED_RINGERS",
+        "ACETATED RINGERS": "ACETATED_RINGERS",
+        "AR": "ACETATED_RINGERS",
+    }
+    
+    def normalize_diluent(diluent: str) -> str:
+        """Normalize diluent name to canonical form for comparison."""
+        if not diluent:
             return None
-        text = str(text).upper()
+        d = str(diluent).upper().strip()
+        return DILUENT_EQUIVALENTS.get(d, d)  # Return canonical or original if not found
+    
+    # Unit conversion to mg (for weight-based units)
+    UNIT_TO_MG = {
+        "MG": 1.0,
+        "G": 1000.0,
+        "GM": 1000.0,
+        "GRAM": 1000.0,
+        "MCG": 0.001,
+        "UG": 0.001,
+        "MICROGRAM": 0.001,
+        "KG": 1000000.0,
+    }
+    
+    def parse_combo_dose(dose_str):
+        """
+        Parse combination doses like "500MG+125MG" or "500MG/125MG" or "500|MG|125".
         
-        # First check for percentage-based doses (IV solutions, etc.)
-        # These are matched as strings, not converted to mg
-        pct_match = re.search(r'(\d+(?:\.\d+)?)\s*%', text)
-        if pct_match:
-            # For percentage drugs, return the percentage as a string
-            return f"{pct_match.group(1)}%"
+        Returns: (component_doses_mg, total_mg, per_volume_ml) or (None, None, None) if not a combo
         
-        # Match patterns like "600MG", "600 MG", "100MG/5ML", "200 MG/ML"
-        # For concentrations like 100MG/5ML, extract 100
-        patterns = [
-            r'(\d+(?:\.\d+)?)\s*MG(?:/\d+\s*ML)?(?:\s|$|[^A-Z])',  # 600MG, 100MG/5ML
-            r'(\d+(?:\.\d+)?)\s*MCG',  # 500MCG -> convert to mg
-            r'(\d+(?:\.\d+)?)\s*G(?:\s|$|[^A-Z])',  # 1G -> convert to mg
-        ]
-        for i, pattern in enumerate(patterns):
-            match = re.search(pattern, text)
-            if match:
-                val = float(match.group(1))
-                if i == 1:  # MCG -> MG
-                    val = val / 1000
-                elif i == 2:  # G -> MG
-                    val = val * 1000
-                return val
+        Handles:
+        - "500MG+125MG" → ([500, 125], 625, None) - tablet combo
+        - "500MG/125MG" → ([500, 125], 625, None) - tablet combo
+        - "250|MG|125" → ([250, 125], 375, None) - Annex F tablet
+        - "400|MG|57|ML|35" → ([400, 57], 457, None) - Annex F suspension per 5mL (5mL implicit)
+        - "457MG/5ML" → concentration, not combo (handled by parse_dose_to_mg)
+        """
+        if not dose_str or pd.isna(dose_str):
+            return None, None, None
+        
+        dose_str = str(dose_str).upper().strip()
+        
+        # Skip if this is clearly a concentration (number/ML or number/L pattern)
+        if re.search(r'\d+\s*(MG|G|MCG)?\s*/\s*\d*\s*M?L\b', dose_str):
+            return None, None, None
+        
+        # Pattern 1: "500MG+125MG" (explicit combo with +)
+        plus_match = re.findall(r'(\d+(?:\.\d+)?)\s*(MG|G|MCG)\s*\+\s*(\d+(?:\.\d+)?)\s*(MG|G|MCG)?', dose_str)
+        if plus_match:
+            components = []
+            for match in plus_match:
+                val1 = float(match[0])
+                unit1 = match[1]
+                val2 = float(match[2])
+                unit2 = match[3] if match[3] else unit1
+                
+                mg1 = val1 * UNIT_TO_MG.get(unit1, 1.0)
+                mg2 = val2 * UNIT_TO_MG.get(unit2, 1.0)
+                components.extend([mg1, mg2])
+            
+            if components:
+                return components, sum(components), None
+        
+        # Pattern 2: "500MG/125MG" (combo with / but BOTH have weight units)
+        slash_match = re.match(r'^(\d+(?:\.\d+)?)\s*(MG|G|MCG)\s*/\s*(\d+(?:\.\d+)?)\s*(MG|G|MCG)$', dose_str)
+        if slash_match:
+            val1 = float(slash_match.group(1))
+            unit1 = slash_match.group(2)
+            val2 = float(slash_match.group(3))
+            unit2 = slash_match.group(4)
+            
+            mg1 = val1 * UNIT_TO_MG.get(unit1, 1.0)
+            mg2 = val2 * UNIT_TO_MG.get(unit2, 1.0)
+            return [mg1, mg2], mg1 + mg2, None
+        
+        # Pattern 3: Annex F pipe format - "250|MG|125" or "400|MG|57|ML|35"
+        # Parse all numeric values and identify doses vs volumes
+        # For combo drugs like CO-AMOXICLAV: 400|MG|57|ML|35 = 400mg + 57mg per 5mL in 35mL
+        # The 57 before ML is a dose component, not a volume!
+        # BUT: "250|MG|1|G" means 250mg in a 1g vial - NOT a combo!
+        parts = dose_str.replace(' ', '').split('|')
+        doses = []
+        bottle_vol = None
+        last_was_dose = False
+        last_unit = None
+        
+        i = 0
+        while i < len(parts):
+            part = parts[i]
+            if re.match(r'^\d+(?:\.\d+)?$', part):
+                num = float(part)
+                # Check what comes after
+                if i + 1 < len(parts):
+                    next_part = parts[i + 1]
+                    if next_part in ('MG', 'G', 'MCG'):
+                        # Check if this is a vial size (e.g., "1|G" after "250|MG")
+                        # Vial sizes are typically 1G, 2G, etc. - round numbers
+                        # If we already have a dose in MG and this is in G, it's likely vial size
+                        if last_unit == 'MG' and next_part == 'G' and num <= 10:
+                            # This is likely a vial size, not a second dose
+                            i += 2
+                            continue
+                        doses.append(num * UNIT_TO_MG.get(next_part, 1.0))
+                        last_was_dose = True
+                        last_unit = next_part
+                        i += 2
+                        continue
+                    elif next_part == 'ML':
+                        # If we just had a dose, this number is likely a second dose component
+                        # e.g., 400|MG|57|ML|35 where 57 is the second dose
+                        if last_was_dose and num < 1000:  # Reasonable dose range
+                            doses.append(num)  # Assume MG
+                            last_was_dose = True
+                            i += 2  # Skip the ML
+                            continue
+                        else:
+                            # This is a volume
+                            bottle_vol = num
+                            last_was_dose = False
+                            i += 2
+                            continue
+                # Standalone number after MG - probably second dose component
+                # But NOT if it's followed by G (vial size)
+                if i > 0 and parts[i-1] in ('MG', 'G', 'MCG'):
+                    # Check if next part is G (vial size indicator)
+                    if i + 1 < len(parts) and parts[i + 1] == 'G':
+                        i += 2  # Skip vial size
+                        continue
+                    doses.append(num)  # Assume same unit as previous
+                    last_was_dose = True
+                    i += 1
+                    continue
+            else:
+                last_was_dose = False
+                last_unit = None
+            i += 1
+        
+        if len(doses) >= 2:
+            return doses, sum(doses), bottle_vol
+        
+        return None, None, None
+    
+    def parse_dose_to_mg(dose_str):
+        """
+        Parse dose string to extract effective dose value and concentration.
+        
+        NORMALIZATION RULES:
+        1. All weights converted to MG (G→1000mg, MCG→0.001mg)
+        2. Bare numbers without units assumed to be MG (e.g., "275" → 275mg)
+        3. Concentrations normalized to mg/mL
+        4. Percentages converted to mg/mL (X% = X*10 mg/mL)
+        5. Pipe-separated Annex F format normalized (e.g., "200|MG" → 200mg)
+        
+        Returns: (total_dose_mg, concentration_mg_per_ml, volume_ml, unit_type)
+        """
+        if not dose_str or pd.isna(dose_str):
+            return None, None, None, None
+        
+        dose_str = str(dose_str).upper().strip()
+        
+        # First check for combination doses
+        combo_components, combo_total, combo_vol = parse_combo_dose(dose_str)
+        if combo_total is not None:
+            return combo_total, None, combo_vol, "combo"
+        
+        # Normalize pipes to spaces for parsing
+        dose_str = dose_str.replace("|", " ")
+        
+        # Clean up common formatting issues
+        dose_str = re.sub(r'\s+', ' ', dose_str)  # Multiple spaces to single
+        dose_str = re.sub(r'(\d)\s+(\d)', r'\1\2', dose_str)  # "200 000" → "200000"
+        
+        total_dose = None
+        concentration = None
+        volume_ml = None
+        unit_type = None
+        
+        # Pattern 0: IU concentration like "1000IU/ML" or "1000 IU/ML" or "1000 I.U/ML"
+        iu_conc_match = re.search(r'(\d+(?:\.\d+)?)\s*I\.?U\.?\s*/\s*(ML|L)', dose_str)
+        if iu_conc_match:
+            val = float(iu_conc_match.group(1))
+            vol_unit = iu_conc_match.group(2)
+            if vol_unit == "L":
+                concentration = val / 1000.0
+            else:
+                concentration = val
+            unit_type = "iu"
+        
+        # Pattern 0b: IU dose/volume like "1000IU/5ML" or "1000 I.U/5ML"
+        iu_dose_vol_match = re.search(r'(\d+(?:\.\d+)?)\s*I\.?U\.?\s*/\s*(\d+(?:\.\d+)?)\s*(ML|L)', dose_str)
+        if iu_dose_vol_match:
+            dose_val = float(iu_dose_vol_match.group(1))
+            vol_val = float(iu_dose_vol_match.group(2))
+            vol_unit = iu_dose_vol_match.group(3)
+            
+            total_dose = dose_val
+            if vol_unit == "L":
+                volume_ml = vol_val * 1000.0
+            else:
+                volume_ml = vol_val
+            
+            if volume_ml and volume_ml > 0:
+                concentration = total_dose / volume_ml
+            unit_type = "iu"
+        
+        # Pattern 0c: Simple IU like "10IU" or "10 IU" or "10 I.U" or "200 000 IU"
+        if unit_type is None:
+            iu_simple_match = re.search(r'(\d+(?:\.\d+)?)\s*I\.?U\.?\b', dose_str)
+            if iu_simple_match:
+                total_dose = float(iu_simple_match.group(1))
+                unit_type = "iu"
+        
+        # Pattern 1: concentration like "100MG/ML" or "100 MG/ML"
+        if unit_type is None:
+            conc_match = re.search(r'(\d+(?:\.\d+)?)\s*(MG|G|MCG|UG)/\s*(ML|L)', dose_str)
+            if conc_match:
+                val = float(conc_match.group(1))
+                unit = conc_match.group(2)
+                vol_unit = conc_match.group(3)
+                
+                # Convert to mg
+                mg_val = val * UNIT_TO_MG.get(unit, 1.0)
+                
+                # Convert to per mL
+                if vol_unit == "L":
+                    concentration = mg_val / 1000.0
+                else:
+                    concentration = mg_val
+                unit_type = "mg"
+        
+        # Pattern 2: dose/volume like "300MG/2ML" or "250MG/5ML 60ML" (suspension with bottle size)
+        if unit_type is None or unit_type == "mg":
+            dose_vol_match = re.search(r'(\d+(?:\.\d+)?)\s*(MG|G|MCG|UG)\s*/\s*(\d+(?:\.\d+)?)\s*(ML|L)', dose_str)
+            if dose_vol_match:
+                dose_val = float(dose_vol_match.group(1))
+                dose_unit = dose_vol_match.group(2)
+                vol_val = float(dose_vol_match.group(3))
+                vol_unit = dose_vol_match.group(4)
+                
+                # Convert dose to mg
+                total_dose = dose_val * UNIT_TO_MG.get(dose_unit, 1.0)
+                
+                # The denominator volume (e.g., 5ML in 250MG/5ML) for concentration
+                denom_vol = vol_val * 1000.0 if vol_unit == "L" else vol_val
+                
+                # Calculate concentration
+                if denom_vol and denom_vol > 0:
+                    concentration = total_dose / denom_vol
+                unit_type = "mg"
+                
+                # Look for a SEPARATE bottle volume after the concentration (e.g., "250MG/5ML 60ML")
+                # This is the actual bottle size, distinct from the concentration denominator
+                after_conc = dose_str[dose_vol_match.end():]
+                bottle_match = re.search(r'(\d+(?:\.\d+)?)\s*(ML|L)\b', after_conc)
+                if bottle_match:
+                    bottle_val = float(bottle_match.group(1))
+                    bottle_unit = bottle_match.group(2)
+                    volume_ml = bottle_val * 1000.0 if bottle_unit == "L" else bottle_val
+                else:
+                    # No separate bottle size, use the denominator as volume
+                    volume_ml = denom_vol
+        
+        # Pattern 3: simple dose like "40MG" or "40 MG" or "1GM" or "1 G"
+        if total_dose is None and concentration is None and unit_type is None:
+            simple_match = re.search(r'(\d+(?:\.\d+)?)\s*(MG|G|GM|GRAM|MCG|UG|MICROGRAM)\b', dose_str)
+            if simple_match:
+                val = float(simple_match.group(1))
+                unit = simple_match.group(2)
+                total_dose = val * UNIT_TO_MG.get(unit, 1.0)
+                unit_type = "mg"
+        
+        # Pattern 3b: Annex F pipe format with unit - "200 MG" (from "200|MG")
+        if total_dose is None and concentration is None and unit_type is None:
+            annex_match = re.match(r'^(\d+(?:\.\d+)?)\s+(MG|G|MCG|UG)\s*$', dose_str)
+            if annex_match:
+                val = float(annex_match.group(1))
+                unit = annex_match.group(2)
+                total_dose = val * UNIT_TO_MG.get(unit, 1.0)
+                unit_type = "mg"
+        
+        # Pattern 3c: bare numeric dose like "25" or "500" or "275" (assume MG)
+        # This handles cases like "FLANAX 275" where 275 is naproxen sodium 275mg
+        if total_dose is None and concentration is None and unit_type is None:
+            # Match bare number, possibly with trailing non-unit text
+            bare_match = re.match(r'^(\d+(?:\.\d+)?)\s*(?:$|[^A-Z0-9]|TAB|CAP|TABLET|CAPSULE)', dose_str)
+            if bare_match:
+                val = float(bare_match.group(1))
+                # Treat as MG for reasonable tablet doses (0.1-10000 range)
+                if 0.1 <= val <= 10000:
+                    total_dose = val
+                    unit_type = "mg"
+        
+        # Pattern 4: standalone volume like "15ML" or "500 ML" (only if not already extracted)
+        if volume_ml is None:
+            # Find ALL volume matches and take the LAST one (likely bottle size)
+            vol_matches = list(re.finditer(r'(\d+(?:\.\d+)?)\s*(ML|L|CC)\b', dose_str))
+            if vol_matches:
+                last_match = vol_matches[-1]
+                vol_val = float(last_match.group(1))
+                vol_unit = last_match.group(2)
+                if vol_unit == "L":
+                    volume_ml = vol_val * 1000.0
+                elif vol_unit == "CC":
+                    volume_ml = vol_val  # CC = mL
+                else:
+                    volume_ml = vol_val
+        
+        # Pattern 5: percentage like "0.9%" or "5%" or ".9%"
+        if total_dose is None and concentration is None and unit_type is None:
+            pct_match = re.search(r'(\d*\.?\d+)\s*%', dose_str)
+            if pct_match:
+                pct_val = float(pct_match.group(1))
+                # Fix common parsing errors: 9% is likely 0.9% for saline
+                if pct_val == 9:
+                    pct_val = 0.9  # Common error: .9% parsed as 9%
+                # Convert percentage to mg/mL using w/v formula: X% = X g/100mL = X*10 mg/mL
+                concentration = pct_val * 10.0
+                unit_type = "pct"
+        
+        return total_dose, concentration, volume_ml, unit_type
+    
+    def get_dose_key(row):
+        """
+        Build a dose key for matching using structured dose columns,
+        falling back to parsing the dose string if needed.
+        
+        Returns a tuple for precise matching:
+        - IV solutions: ("iv", concentration_mg_per_ml, normalized_diluent, total_volume_ml)
+        - Concentration drugs: ("conc", concentration_per_ml, total_volume_ml, unit_type)
+        - Simple drugs: ("mg", total_mg) or ("iu", total_iu)
+        """
+        drug_mg = row.get("drug_amount_mg")
+        conc = row.get("concentration_mg_per_ml")
+        iv_type = row.get("iv_diluent_type")
+        total_vol = row.get("total_volume_ml")
+        dose_str = row.get("dose")
+        
+        # For IV solutions with diluent type, use concentration + diluent type + volume
+        if pd.notna(iv_type) and iv_type:
+            return ("iv", float(conc) if pd.notna(conc) else None, normalize_diluent(iv_type), float(total_vol) if pd.notna(total_vol) else None)
+        
+        # If structured columns available, use them
+        if pd.notna(drug_mg) and drug_mg:
+            if pd.notna(conc) and conc:
+                return ("conc", float(conc), float(total_vol) if pd.notna(total_vol) else None, "mg")
+            return ("mg", float(drug_mg))
+        
+        # Parse dose string to extract values
+        parsed_dose, parsed_conc, parsed_vol, unit_type = parse_dose_to_mg(dose_str)
+        
+        # If we have a concentration, use concentration-based matching
+        if parsed_conc is not None:
+            return ("conc", parsed_conc, parsed_vol, unit_type)
+        
+        # If we have a simple dose value, use type-based matching
+        if parsed_dose is not None:
+            if unit_type == "iu":
+                return ("iu", parsed_dose)
+            return ("mg", parsed_dose)
+        
+        # Special handling: common IV solutions with only volume
+        # Get description or generic name for context
+        desc = str(row.get("DESCRIPTION") or row.get("Drug Description") or "").upper()
+        generic = str(row.get("matched_generic_name") or "").upper()
+        
+        if parsed_vol is not None and parsed_vol > 0:
+            # Check if this is plain NSS/PNSS (sodium chloride without specific percentage)
+            is_nss = any(kw in desc for kw in ["PNSS", "NSS", "PLAIN NSS", "NORMAL SALINE", "N/S"]) or \
+                     ("SODIUM CHLORIDE" in generic and "DEXTROSE" not in generic)
+            if is_nss and "%" not in str(dose_str or ""):
+                # Assume 0.9% for plain NSS: 0.9% = 9 mg/mL
+                return ("conc", 9.0, parsed_vol, "pct")
+            
+            # Check if this is D5 (5% Dextrose) - "D5" prefix in description
+            is_d5 = re.search(r'\bD5\b', desc) is not None or "5% DEXTROSE" in desc
+            if is_d5 and "DEXTROSE" in generic and "%" not in str(dose_str or ""):
+                # Assume 5% for D5: 5% = 50 mg/mL
+                return ("conc", 50.0, parsed_vol, "pct")
+            
+            # Check if this is D10 (10% Dextrose)
+            is_d10 = re.search(r'\bD10\b', desc) is not None or "10% DEXTROSE" in desc
+            if is_d10 and "DEXTROSE" in generic and "%" not in str(dose_str or ""):
+                # Assume 10% for D10: 10% = 100 mg/mL
+                return ("conc", 100.0, parsed_vol, "pct")
+        
+        # No dose info available
         return None
+    
+    def doses_match(annex_key, esoa_key):
+        """
+        Compare dose keys for matching with ZERO TOLERANCE.
+        
+        For IV solutions: concentration + diluent type + volume must match EXACTLY
+        For concentration drugs: concentration must match EXACTLY (unit type must be compatible)
+        For simple drugs: total dose must match EXACTLY
+        For IU drugs: IU must match other IU (not mg)
+        
+        Cross-type matching is allowed when equivalent:
+        - "mg" 40mg can match "conc" 40mg/mL if volume context allows
+        - "conc" with same concentration matches regardless of volume (volume optional)
+        """
+        if annex_key is None or esoa_key is None:
+            return False
+        
+        annex_type, esoa_type = annex_key[0], esoa_key[0]
+        
+        # IV solutions only match other IV solutions
+        if annex_type == "iv" or esoa_type == "iv":
+            if annex_type != esoa_type:
+                return False
+            # IV solutions: concentration + diluent type + volume (ZERO TOLERANCE)
+            a_conc, a_dil, a_vol = annex_key[1], annex_key[2], annex_key[3]
+            e_conc, e_dil, e_vol = esoa_key[1], esoa_key[2], esoa_key[3]
+            
+            # Concentration must match EXACTLY
+            if a_conc != e_conc:
+                return False
+            
+            # Diluent type must match (using normalized equivalents)
+            if a_dil != e_dil:
+                return False
+            
+            # Volume must match EXACTLY if both present
+            if a_vol is not None and e_vol is not None:
+                if a_vol != e_vol:
+                    return False
+            
+            return True
+        
+        # IU type matching - IU only matches IU, not mg
+        if annex_type == "iu" or esoa_type == "iu":
+            if annex_type != esoa_type:
+                # Special case: IU with concentration can match IU simple
+                # e.g., "1000IU/ML|5ML" vs "1000IU/ML|5ML"
+                pass  # Fall through to conc matching below
+            else:
+                # Both are simple IU
+                return annex_key[1] == esoa_key[1]
+        
+        # Both are "mg" type - comparison with small tolerance
+        if annex_type == "mg" and esoa_type == "mg":
+            a_mg, e_mg = annex_key[1], esoa_key[1]
+            if a_mg is None or e_mg is None:
+                return a_mg == e_mg
+            diff = abs(a_mg - e_mg)
+            rel_diff = diff / max(a_mg, e_mg, 1.0)
+            # Allow 1% relative difference or 0.5 mg absolute difference
+            return diff <= 0.5 or rel_diff <= 0.01
+        
+        # Combo type matching - combo total can match mg or other combo
+        if annex_type == "combo" or esoa_type == "combo":
+            # Get the dose values
+            if annex_type == "combo":
+                a_val = annex_key[1]
+            elif annex_type == "mg":
+                a_val = annex_key[1]
+            else:
+                a_val = None
+                
+            if esoa_type == "combo":
+                e_val = esoa_key[1]
+            elif esoa_type == "mg":
+                e_val = esoa_key[1]
+            else:
+                e_val = None
+            
+            # Both must have values and match
+            if a_val is not None and e_val is not None:
+                if abs(a_val - e_val) < 0.01:
+                    return True
+            return False
+        
+        # Both are "conc" type - compare concentration only (volume is just packaging)
+        if annex_type == "conc" and esoa_type == "conc":
+            a_conc, a_vol = annex_key[1], annex_key[2]
+            e_conc, e_vol = esoa_key[1], esoa_key[2]
+            # Get unit types if available (4th element)
+            a_unit = annex_key[3] if len(annex_key) > 3 else "mg"
+            e_unit = esoa_key[3] if len(esoa_key) > 3 else "mg"
+            
+            # Unit types must be compatible (mg can match pct since both are mg/mL)
+            if a_unit == "iu" and e_unit != "iu":
+                return False
+            if e_unit == "iu" and a_unit != "iu":
+                return False
+            
+            # Concentration must match with small tolerance for floating point precision
+            # Allow 1% relative difference or 0.1 mg/mL absolute difference
+            if a_conc is None or e_conc is None:
+                return a_conc == e_conc
+            diff = abs(a_conc - e_conc)
+            rel_diff = diff / max(a_conc, e_conc, 1.0)
+            if diff > 0.1 and rel_diff > 0.01:  # More than 0.1 mg/mL AND more than 1%
+                return False
+            # Note: We do NOT require volume match - 5mL vial of 100mg/mL = 10mL vial of 100mg/mL
+            # Both are the same drug at the same concentration, just different packaging
+            return True
+        
+        # Cross-type matching: "mg" vs "conc"
+        # This handles cases like Annex F "40|MG" vs ESOA "40MG/ML|1ML"
+        if (annex_type == "mg" and esoa_type == "conc") or (annex_type == "conc" and esoa_type == "mg"):
+            if annex_type == "mg":
+                mg_val = annex_key[1]
+                conc_val, vol = esoa_key[1], esoa_key[2]
+                conc_unit = esoa_key[3] if len(esoa_key) > 3 else "mg"
+            else:
+                mg_val = esoa_key[1]
+                conc_val, vol = annex_key[1], annex_key[2]
+                conc_unit = annex_key[3] if len(annex_key) > 3 else "mg"
+            
+            # IU concentration can't match mg simple
+            if conc_unit == "iu":
+                return False
+            
+            # If concentration has volume, check if total dose matches
+            if vol is not None and vol > 0:
+                total_from_conc = conc_val * vol
+                if abs(total_from_conc - mg_val) < 0.01:  # Small tolerance for floating point
+                    return True
+            
+            # Also allow matching if concentration equals mg (1mL implied)
+            if abs(conc_val - mg_val) < 0.01:
+                return True
+            
+            return False
+        
+        # Cross-type matching: "iu" vs "conc" (IU concentration)
+        if (annex_type == "iu" and esoa_type == "conc") or (annex_type == "conc" and esoa_type == "iu"):
+            if annex_type == "iu":
+                iu_val = annex_key[1]
+                conc_val, vol = esoa_key[1], esoa_key[2]
+                conc_unit = esoa_key[3] if len(esoa_key) > 3 else None
+            else:
+                iu_val = esoa_key[1]
+                conc_val, vol = annex_key[1], annex_key[2]
+                conc_unit = annex_key[3] if len(annex_key) > 3 else None
+            
+            # Only match if concentration is also IU type
+            if conc_unit != "iu":
+                return False
+            
+            # If concentration has volume, check if total IU matches
+            if vol is not None and vol > 0:
+                total_from_conc = conc_val * vol
+                if abs(total_from_conc - iu_val) < 0.01:
+                    return True
+            
+            # Also allow matching if concentration equals IU (1mL implied)
+            if abs(conc_val - iu_val) < 0.01:
+                return True
+            
+            return False
+        
+        return False
+    
+    def rank_candidate_for_drug_code(cand, esoa_row):
+        """
+        Rank candidates for Part 4 tie-breaking using all *_details columns.
+        
+        Lower score = better match.
+        """
+        score = 0
+        cand_desc = str(cand.get("description", "")).upper()
+        
+        # Extract ESOA details for comparison
+        esoa_release = str(esoa_row.get("release_details") or "").upper()
+        esoa_type = str(esoa_row.get("type_details") or "").upper()
+        esoa_form_det = str(esoa_row.get("form_details") or "").upper()
+        esoa_indication = str(esoa_row.get("indication_details") or "").upper()
+        esoa_salt = str(esoa_row.get("salt_details") or "").upper()
+        esoa_alias = str(esoa_row.get("alias_details") or "").upper()
+        esoa_iv_type = str(esoa_row.get("iv_diluent_type") or "").upper()
+        esoa_iv_amount = str(esoa_row.get("iv_diluent_amount") or "").upper()
+        
+        # Release details match (e.g., MR, SR, XR, ER) - highest priority
+        if esoa_release and esoa_release in cand_desc:
+            score -= 10
+        
+        # Type details match (e.g., HUMAN, ANHYDROUS)
+        if esoa_type and esoa_type in cand_desc:
+            score -= 5
+        
+        # Form details match (e.g., FILM COATED, CHEWABLE)
+        if esoa_form_det and esoa_form_det in cand_desc:
+            score -= 5
+        
+        # Indication details match (e.g., FOR HEPATIC FAILURE)
+        if esoa_indication and esoa_indication in cand_desc:
+            score -= 5
+        
+        # Salt details match
+        if esoa_salt and esoa_salt in cand_desc:
+            score -= 3
+        
+        # Alias details match (e.g., VIT. D3 = CHOLECALCIFEROL)
+        if esoa_alias and esoa_alias in cand_desc:
+            score -= 2
+        
+        # IV diluent type match
+        if esoa_iv_type and esoa_iv_type in cand_desc:
+            score -= 5
+        
+        # IV diluent amount match (e.g., 0.9%, 0.45%)
+        if esoa_iv_amount and esoa_iv_amount in cand_desc:
+            score -= 3
+        
+        return score
     
     annex_lookup = {}  # generic_name -> list of candidates
     drugbank_lookup = {}  # drugbank_id -> list of candidates
@@ -418,8 +1043,8 @@ def run_esoa_to_drug_code(
         else:
             drugbank_id = None
         
-        # Extract dose from Drug Description
-        annex_dose = extract_dose_mg(drug_desc)
+        # Use structured dose columns for matching
+        dose_key = get_dose_key(row)
         
         # Extract form and route from Annex F
         annex_form = normalize_for_match(row.get("form"))
@@ -430,7 +1055,7 @@ def run_esoa_to_drug_code(
             "atc_code": atc,
             "drugbank_id": drugbank_id,
             "generic_name": annex_generics[0],  # Primary generic
-            "dose_mg": annex_dose,
+            "dose_key": dose_key,  # Structured dose key for matching
             "form": annex_form,
             "route": annex_route,
             "description": drug_desc,
@@ -521,8 +1146,9 @@ def run_esoa_to_drug_code(
     
     # Match ESOA to Annex F - STRICT MATCHING
     # Only matches when: generic + dose + form + route all match (salt can vary)
+    # Brand names are resolved to generics for matching (brand doesn't matter, only underlying generic)
     def match_to_drug_code(row):
-        generic_raw = row.get("generic_final") or row.get("generic_name") or ""
+        generic_raw = row.get("matched_generic_name") or row.get("generic_name") or ""
         
         # Fix known wrong synonyms (from unified_constants)
         for wrong, correct in DRUGBANK_COMPONENT_SYNONYMS.items():
@@ -531,7 +1157,7 @@ def run_esoa_to_drug_code(
         
         generics = extract_clean_generics(generic_raw)
         
-        # Fallback: if no generics from generic_final, try extracting from DESCRIPTION
+        # Fallback: if no generics from matched_generic_name, try extracting from DESCRIPTION
         esoa_desc = row.get("DESCRIPTION") or ""
         if not generics:
             generics = extract_generics_from_description(esoa_desc)
@@ -539,8 +1165,8 @@ def run_esoa_to_drug_code(
         if not generics:
             return None, "no_generic"
         
-        # Extract ESOA attributes for matching
-        esoa_dose = extract_dose_mg(esoa_desc)
+        # Use structured dose columns for matching (same as Annex F)
+        esoa_dose_key = get_dose_key(row)
         esoa_form = normalize_for_match(row.get("form"))
         esoa_route = normalize_for_match(row.get("route"))
         
@@ -563,28 +1189,172 @@ def run_esoa_to_drug_code(
                 unique_candidates.append(c)
         candidates = unique_candidates
         
-        # Helper to check if form/route match (None matches anything)
-        def form_matches(cand_form, esoa_form):
+        # Use FORM_EQUIVALENTS from unified_constants.py for basic form equivalence
+        # Use FORM_TO_ROUTES to check if forms can share the same route
+        
+        def forms_compatible(cand_form, esoa_form, cand_route=None, esoa_route=None):
+            """
+            Check if forms are compatible, considering:
+            1. Direct form equivalence (from FORM_EQUIVALENTS)
+            2. Forms that can share the same route (from FORM_TO_ROUTES)
+            """
             if not esoa_form or not cand_form:
-                return True  # Missing form in either = compatible
-            return cand_form == esoa_form
+                return True  # Missing form = compatible
+            
+            cand_form_upper = cand_form.upper().strip()
+            esoa_form_upper = esoa_form.upper().strip()
+            
+            if cand_form_upper == esoa_form_upper:
+                return True
+            
+            # Check direct form equivalence from unified_constants
+            if cand_form_upper in FORM_EQUIVALENTS:
+                if esoa_form_upper in FORM_EQUIVALENTS.get(cand_form_upper, set()):
+                    return True
+            if esoa_form_upper in FORM_EQUIVALENTS:
+                if cand_form_upper in FORM_EQUIVALENTS.get(esoa_form_upper, set()):
+                    return True
+            
+            # Check if forms can share the same route using FORM_TO_ROUTES
+            # Get all valid routes for each form
+            cand_routes = set(FORM_TO_ROUTES.get(cand_form_upper, []))
+            esoa_routes = set(FORM_TO_ROUTES.get(esoa_form_upper, []))
+            
+            # If either has no route mapping, try partial matching on form name
+            if not cand_routes:
+                # Try to find a matching key in FORM_TO_ROUTES
+                for key in FORM_TO_ROUTES:
+                    if key in cand_form_upper or cand_form_upper in key:
+                        cand_routes.update(FORM_TO_ROUTES[key])
+                        break
+            if not esoa_routes:
+                for key in FORM_TO_ROUTES:
+                    if key in esoa_form_upper or esoa_form_upper in key:
+                        esoa_routes.update(FORM_TO_ROUTES[key])
+                        break
+            
+            # If we have routes from the data, use them to constrain
+            if cand_route:
+                cand_route_upper = cand_route.upper().strip()
+                if cand_route_upper:
+                    cand_routes = cand_routes & {cand_route_upper} if cand_routes else {cand_route_upper}
+            if esoa_route:
+                esoa_route_upper = esoa_route.upper().strip()
+                if esoa_route_upper:
+                    esoa_routes = esoa_routes & {esoa_route_upper} if esoa_routes else {esoa_route_upper}
+            
+            # Forms are compatible if they share at least one valid route
+            if cand_routes and esoa_routes:
+                # Expand route equivalences
+                expanded_cand = set()
+                expanded_esoa = set()
+                
+                route_synonyms = {
+                    "ORAL": {"ORAL", "PO", "BY MOUTH"},
+                    "PARENTERAL": {"PARENTERAL", "INTRAVENOUS", "IV", "INTRAMUSCULAR", "IM", "SUBCUTANEOUS", "SC"},
+                    "INTRAVENOUS": {"INTRAVENOUS", "IV", "PARENTERAL"},
+                    "INTRAMUSCULAR": {"INTRAMUSCULAR", "IM", "PARENTERAL"},
+                    "SUBCUTANEOUS": {"SUBCUTANEOUS", "SC", "PARENTERAL"},
+                    "INHALATION": {"INHALATION", "RESPIRATORY", "INHALED", "NEBULIZATION"},
+                    "TOPICAL": {"TOPICAL", "EXTERNAL", "CUTANEOUS"},
+                    "OPHTHALMIC": {"OPHTHALMIC", "EYE", "OCULAR"},
+                    "RECTAL": {"RECTAL", "PR"},
+                }
+                
+                for r in cand_routes:
+                    expanded_cand.add(r)
+                    if r in route_synonyms:
+                        expanded_cand.update(route_synonyms[r])
+                for r in esoa_routes:
+                    expanded_esoa.add(r)
+                    if r in route_synonyms:
+                        expanded_esoa.update(route_synonyms[r])
+                
+                return bool(expanded_cand & expanded_esoa)
+            
+            # If no route info, fall back to permissive matching for certain form pairs
+            # These are forms that are clearly compatible regardless of route
+            compatible_pairs = [
+                # Injectable containers
+                {"AMPULE", "AMPOULE", "VIAL", "INJECTION", "BOTTLE"},
+                # Oral liquids
+                {"SYRUP", "SUSPENSION", "SOLUTION", "ELIXIR", "LIQUID", "DROPS"},
+                # Oral solids
+                {"TABLET", "CAPSULE", "CAPLET"},
+                # Inhalation
+                {"NEBULE", "NEBULIZER", "INHALER", "AEROSOL", "MDI", "DPI"},
+                # Topical
+                {"CREAM", "OINTMENT", "GEL", "LOTION"},
+                # Reconstitutable
+                {"GRANULE", "POWDER", "SACHET"},
+            ]
+            
+            for group in compatible_pairs:
+                if cand_form_upper in group and esoa_form_upper in group:
+                    return True
+            
+            return False
         
         def route_matches(cand_route, esoa_route):
             if not esoa_route or not cand_route:
-                return True  # Missing route in either = compatible
-            return cand_route == esoa_route
+                return True  # Missing route = compatible
+            
+            cand_upper = cand_route.upper().strip()
+            esoa_upper = esoa_route.upper().strip()
+            
+            if cand_upper == esoa_upper:
+                return True
+            
+            # Route equivalence groups
+            route_groups = {
+                "ORAL": {"ORAL", "PO", "BY MOUTH"},
+                "PARENTERAL": {"PARENTERAL", "INTRAVENOUS", "IV", "INTRAMUSCULAR", "IM", "SUBCUTANEOUS", "SC", "SQ"},
+                "INTRAVENOUS": {"INTRAVENOUS", "IV", "PARENTERAL"},
+                "INTRAMUSCULAR": {"INTRAMUSCULAR", "IM", "PARENTERAL"},
+                "SUBCUTANEOUS": {"SUBCUTANEOUS", "SC", "SQ", "PARENTERAL"},
+                "INHALATION": {"INHALATION", "RESPIRATORY", "INHALED", "NEBULIZATION"},
+                "TOPICAL": {"TOPICAL", "EXTERNAL", "CUTANEOUS"},
+                "OPHTHALMIC": {"OPHTHALMIC", "EYE", "OCULAR"},
+                "OTIC": {"OTIC", "EAR", "AURAL"},
+                "NASAL": {"NASAL", "INTRANASAL"},
+                "RECTAL": {"RECTAL", "PR"},
+                "VAGINAL": {"VAGINAL", "PV"},
+            }
+            
+            # Find groups containing each route
+            cand_groups = set()
+            esoa_groups = set()
+            for base, synonyms in route_groups.items():
+                if cand_upper in synonyms or cand_upper == base:
+                    cand_groups.update(synonyms)
+                    cand_groups.add(base)
+                if esoa_upper in synonyms or esoa_upper == base:
+                    esoa_groups.update(synonyms)
+                    esoa_groups.add(base)
+            
+            return bool(cand_groups & esoa_groups) if cand_groups and esoa_groups else False
         
-        # STRICT MATCHING: Require generic + dose + form + route
-        # Only return a match if dose matches (and form/route if available)
-        if esoa_dose:
-            perfect_matches = [
-                c for c in candidates 
-                if c.get("dose_mg") == esoa_dose 
-                and form_matches(c.get("form"), esoa_form)
-                and route_matches(c.get("route"), esoa_route)
-            ]
-            if perfect_matches:
-                return perfect_matches[0]["drug_code"], "matched_perfect"
+        # STRICT MATCHING: Require generic + dose + form/route compatibility
+        # Dose matching is REQUIRED - do not match different doses (400mg ≠ 600mg)
+        # Only allow unit conversions (500mcg = 0.5mg)
+        # Use route-aware form matching (forms compatible if they share valid routes)
+        
+        # No dose key = no match (we cannot verify dose equivalence)
+        if not esoa_dose_key:
+            return None, "no_perfect_match"
+        
+        perfect_matches = [
+            c for c in candidates 
+            if doses_match(c.get("dose_key"), esoa_dose_key)
+            and forms_compatible(c.get("form"), esoa_form, c.get("route"), esoa_route)
+            and route_matches(c.get("route"), esoa_route)
+        ]
+        
+        if perfect_matches:
+            # If multiple perfect matches, use tie-breaking with *_details columns
+            if len(perfect_matches) > 1:
+                perfect_matches.sort(key=lambda c: rank_candidate_for_drug_code(c, row))
+            return perfect_matches[0]["drug_code"], "matched_perfect"
         
         # No perfect match found
         return None, "no_perfect_match"

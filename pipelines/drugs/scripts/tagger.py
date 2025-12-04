@@ -15,6 +15,8 @@ from .unified_constants import (
     PURE_SALT_COMPOUNDS, UNIT_TOKENS, get_regional_canonical,
     CATEGORY_DOSE, CATEGORY_FORM, CATEGORY_ROUTE,
     VACCINE_CANONICAL, normalize_vaccine_name,
+    # Vaccine acronym bidirectional lookup
+    match_vaccine_text, expand_vaccine_acronym, get_vaccine_acronym,
 )
 from .lookup import (
     apply_synonym, batch_lookup_generics, build_combination_keys,
@@ -35,6 +37,85 @@ from .tokenizer import (
 PROJECT_DIR = Path(__file__).resolve().parents[3]
 INPUTS_DIR = PROJECT_DIR / "inputs" / "drugs"
 OUTPUTS_DIR = PROJECT_DIR / "outputs" / "drugs"
+
+
+# All fields from extract_drug_details that should be propagated to output
+# These are extracted from the input text and provide structured dose/form/diluent info
+DRUG_DETAILS_COLUMNS = [
+    # Extracted qualifiers
+    "salt_details",
+    "brand_details", 
+    "indication_details",
+    "alias_details",
+    "type_details",
+    "release_details",
+    "form_details",
+    "diluent_details",
+    # IV solution fields
+    "iv_diluent_type",      # WATER, SODIUM CHLORIDE, LACTATED RINGER'S, etc.
+    "iv_diluent_amount",    # Diluent concentration (0.9%, 0.3%)
+    # Structured dose information
+    "dose_values",          # List of numeric values [5.0, 0.9, 500.0]
+    "dose_units",           # List of units ["%", "%", "ML"]
+    "dose_types",           # List of types ["percentage", "percentage", "volume"]
+    "total_volume_ml",      # Total solution volume in mL
+    # Computed amounts (w/v calculation for IV solutions)
+    "drug_amount_mg",       # Computed drug amount in mg
+    "diluent_amount_mg",    # Computed diluent amount in mg (for saline)
+    "concentration_mg_per_ml",  # Drug concentration in mg/mL
+]
+
+
+def _build_result_dict(
+    row_id: Any,
+    input_text: str,
+    row_idx: int,
+    drug_details: Dict[str, Any],
+    atc_code: Optional[str] = None,
+    drugbank_id: Optional[str] = None,
+    generic_name: Optional[str] = None,
+    reference_text: Optional[str] = None,
+    dose: Optional[str] = None,
+    form: Optional[str] = None,
+    route: Optional[str] = None,
+    type_details: Optional[str] = None,
+    release_details: Optional[str] = None,
+    form_details: Optional[str] = None,
+    match_score: int = 0,
+    match_reason: str = "no_match",
+    sources: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Build a standardized result dict with all drug_details fields propagated.
+    
+    This ensures all extracted fields from extract_drug_details() are included
+    in every result, providing consistent output columns across all datasets.
+    """
+    result = {
+        "id": row_id,
+        "input_text": input_text,
+        "row_idx": row_idx,
+        "atc_code": atc_code,
+        "drugbank_id": drugbank_id,
+        "generic_name": generic_name,
+        "reference_text": reference_text,
+        "dose": dose,
+        "form": form,
+        "route": route,
+        "type_details": type_details or drug_details.get("type_details"),
+        "release_details": release_details or drug_details.get("release_details"),
+        "form_details": form_details or drug_details.get("form_details"),
+        "match_score": match_score,
+        "match_reason": match_reason,
+        "sources": sources,
+    }
+    
+    # Add all drug_details fields
+    for col in DRUG_DETAILS_COLUMNS:
+        if col not in result:  # Don't overwrite if already set
+            result[col] = drug_details.get(col)
+    
+    return result
 
 
 class UnifiedTagger:
@@ -507,6 +588,16 @@ class UnifiedTagger:
                     else:
                         drug_details["type_details"] = vaccine_details
             
+            # Bidirectional vaccine acronym matching:
+            # - If text contains "DTP" → expand to components for matching
+            # - If text contains "DIPHTHERIA, TETANUS, PERTUSSIS" → find acronym for matching
+            vaccine_acronym, vaccine_components = match_vaccine_text(text)
+            if vaccine_acronym or vaccine_components:
+                drug_details["_vaccine_acronym"] = vaccine_acronym
+                drug_details["_vaccine_components"] = vaccine_components
+                drug_details["_is_vaccine"] = True
+                is_vaccine = True
+            
             all_drug_details.append(drug_details)
             
             # Use cleaned generic name for tokenization
@@ -587,6 +678,25 @@ class UnifiedTagger:
                     cck_syn = self._apply_synonyms(cck)
                     if cck_syn != cck:
                         unique_generics.add(cck_syn)
+            
+            # Vaccine acronym bidirectional matching:
+            # Add both the acronym AND expanded components to unique_generics
+            # This enables matching DTP ↔ DIPHTHERIA + TETANUS + PERTUSSIS
+            vaccine_acronym = all_drug_details[idx].get("_vaccine_acronym")
+            vaccine_components = all_drug_details[idx].get("_vaccine_components")
+            if vaccine_acronym:
+                # Add acronym (e.g., "DTP")
+                unique_generics.add(vaccine_acronym.upper())
+                # Add acronym + VACCINE variant
+                unique_generics.add(f"{vaccine_acronym.upper()} VACCINE")
+            if vaccine_components:
+                # Add each component (e.g., "DIPHTHERIA", "TETANUS", "PERTUSSIS")
+                for comp in vaccine_components:
+                    unique_generics.add(comp.upper())
+                # Add sorted combo key of components
+                combo_key = " + ".join(sorted([c.upper() for c in vaccine_components]))
+                unique_generics.add(combo_key)
+                unique_generics.add(f"{combo_key} VACCINE")
         
         # Batch lookup with cached generics for faster fuzzy matching
         generic_cache = batch_lookup_generics(
@@ -698,54 +808,29 @@ class UnifiedTagger:
                 if len(stripped_generics) >= 2:
                     mixture_match = self._lookup_mixture(stripped_generics)
                     if mixture_match:
-                        results.append({
-                            "id": ids[i],
-                            "input_text": text,
-                            "row_idx": i,
-                            "atc_code": mixture_match.get("atc_code"),
-                            "drugbank_id": mixture_match.get("drugbank_id"),
-                            "generic_name": mixture_match.get("generic_name"),
-                            "reference_text": mixture_match.get("reference_text"),
-                            "match_score": 100,
-                            "match_reason": "matched",
-                            "sources": mixture_match.get("source", ""),
-                            "dose": None,
-                            "form": None,
-                            "route": None,
-                            "type_details": None,
-                            "release_details": None,
-                            "form_details": None,
-                            "salt_details": all_drug_details[i].get("salt_details"),
-                            "brand_details": all_drug_details[i].get("brand_details"),
-                            "indication_details": all_drug_details[i].get("indication_details"),
-                            "alias_details": all_drug_details[i].get("alias_details"),
-                            "diluent_details": all_drug_details[i].get("diluent_details"),
-                        })
+                        results.append(_build_result_dict(
+                            row_id=ids[i],
+                            input_text=text,
+                            row_idx=i,
+                            drug_details=all_drug_details[i],
+                            atc_code=mixture_match.get("atc_code"),
+                            drugbank_id=mixture_match.get("drugbank_id"),
+                            generic_name=mixture_match.get("generic_name"),
+                            reference_text=mixture_match.get("reference_text"),
+                            match_score=100,
+                            match_reason="matched",
+                            sources=mixture_match.get("source", ""),
+                        ))
                         continue
                 
-                results.append({
-                    "id": ids[i],
-                    "input_text": text,
-                    "row_idx": i,
-                    "atc_code": None,
-                    "drugbank_id": None,
-                    "generic_name": "|".join(stripped_generics) if stripped_generics else None,
-                    "reference_text": None,
-                    "match_score": 0,
-                    "match_reason": "no_candidates",
-                    "sources": None,
-                    "dose": None,
-                    "form": None,
-                    "route": None,
-                    "type_details": None,
-                    "release_details": None,
-                    "form_details": None,
-                    "salt_details": all_drug_details[i].get("salt_details"),
-                    "brand_details": all_drug_details[i].get("brand_details"),
-                    "indication_details": all_drug_details[i].get("indication_details"),
-                    "alias_details": all_drug_details[i].get("alias_details"),
-                    "diluent_details": all_drug_details[i].get("diluent_details"),
-                })
+                results.append(_build_result_dict(
+                    row_id=ids[i],
+                    input_text=text,
+                    row_idx=i,
+                    drug_details=all_drug_details[i],
+                    generic_name="|".join(stripped_generics) if stripped_generics else None,
+                    match_reason="no_candidates",
+                ))
                 continue
             
             # Build candidates
@@ -785,29 +870,14 @@ class UnifiedTagger:
                         })
             
             if not candidates:
-                results.append({
-                    "id": ids[i],
-                    "input_text": text,
-                    "row_idx": i,
-                    "atc_code": None,
-                    "drugbank_id": None,
-                    "generic_name": "|".join(stripped_generics) if stripped_generics else None,
-                    "reference_text": None,
-                    "match_score": 0,
-                    "match_reason": "no_candidates",
-                    "sources": None,
-                    "dose": None,
-                    "form": None,
-                    "route": None,
-                    "type_details": None,
-                    "release_details": None,
-                    "form_details": None,
-                    "salt_details": all_drug_details[i].get("salt_details"),
-                    "brand_details": all_drug_details[i].get("brand_details"),
-                    "indication_details": all_drug_details[i].get("indication_details"),
-                    "alias_details": all_drug_details[i].get("alias_details"),
-                    "diluent_details": all_drug_details[i].get("diluent_details"),
-                })
+                results.append(_build_result_dict(
+                    row_id=ids[i],
+                    input_text=text,
+                    row_idx=i,
+                    drug_details=all_drug_details[i],
+                    generic_name="|".join(stripped_generics) if stripped_generics else None,
+                    match_reason="no_candidates",
+                ))
                 continue
             
             # Normalize input generics
@@ -898,82 +968,64 @@ class UnifiedTagger:
                         generic_name = canonical_vaccine
                         ref_text = canonical_vaccine
                 
-                results.append({
-                    "id": ids[i],
-                    "input_text": text,
-                    "row_idx": i,
-                    "atc_code": best.get("atc_code"),
-                    "drugbank_id": best.get("drugbank_id"),
-                    "generic_name": generic_name,
-                    "reference_text": ref_text,
-                    "dose": "|".join(input_doses) if input_doses else None,
-                    "form": base_form,
-                    "route": "|".join(input_routes) if input_routes else None,
-                    "type_details": type_detail,
-                    "release_details": release_detail,
-                    "form_details": form_detail,
-                    "match_score": 1,
-                    "match_reason": "matched",
-                    "sources": best.get("source"),
-                    "salt_details": all_drug_details[i].get("salt_details"),
-                    "brand_details": all_drug_details[i].get("brand_details"),
-                    "indication_details": all_drug_details[i].get("indication_details"),
-                    "alias_details": all_drug_details[i].get("alias_details"),
-                    "diluent_details": all_drug_details[i].get("diluent_details"),
-                })
+                results.append(_build_result_dict(
+                    row_id=ids[i],
+                    input_text=text,
+                    row_idx=i,
+                    drug_details=all_drug_details[i],
+                    atc_code=best.get("atc_code"),
+                    drugbank_id=best.get("drugbank_id"),
+                    generic_name=generic_name,
+                    reference_text=ref_text,
+                    dose="|".join(input_doses) if input_doses else None,
+                    form=base_form,
+                    route="|".join(input_routes) if input_routes else None,
+                    type_details=type_detail,
+                    release_details=release_detail,
+                    form_details=form_detail,
+                    match_score=1,
+                    match_reason="matched",
+                    sources=best.get("source"),
+                ))
             else:
                 # Try mixture lookup for multi-generic inputs when scoring fails
                 if is_combination and len(stripped_generics) >= 2:
                     mixture_match = self._lookup_mixture(stripped_generics)
                     if mixture_match:
-                        results.append({
-                            "id": ids[i],
-                            "input_text": text,
-                            "row_idx": i,
-                            "atc_code": mixture_match.get("atc_code"),
-                            "drugbank_id": mixture_match.get("drugbank_id"),
-                            "generic_name": mixture_match.get("generic_name"),
-                            "reference_text": mixture_match.get("reference_text"),
-                            "dose": "|".join(input_doses) if input_doses else None,
-                            "form": base_form,
-                            "route": "|".join(input_routes) if input_routes else None,
-                            "type_details": type_detail,
-                            "release_details": release_detail,
-                            "form_details": form_detail,
-                            "match_score": 100,
-                            "match_reason": "matched",
-                            "sources": mixture_match.get("source"),
-                            "salt_details": all_drug_details[i].get("salt_details"),
-                            "brand_details": all_drug_details[i].get("brand_details"),
-                            "indication_details": all_drug_details[i].get("indication_details"),
-                            "alias_details": all_drug_details[i].get("alias_details"),
-                            "diluent_details": all_drug_details[i].get("diluent_details"),
-                        })
+                        results.append(_build_result_dict(
+                            row_id=ids[i],
+                            input_text=text,
+                            row_idx=i,
+                            drug_details=all_drug_details[i],
+                            atc_code=mixture_match.get("atc_code"),
+                            drugbank_id=mixture_match.get("drugbank_id"),
+                            generic_name=mixture_match.get("generic_name"),
+                            reference_text=mixture_match.get("reference_text"),
+                            dose="|".join(input_doses) if input_doses else None,
+                            form=base_form,
+                            route="|".join(input_routes) if input_routes else None,
+                            type_details=type_detail,
+                            release_details=release_detail,
+                            form_details=form_detail,
+                            match_score=100,
+                            match_reason="matched",
+                            sources=mixture_match.get("source"),
+                        ))
                         continue
                 
-                results.append({
-                    "id": ids[i],
-                    "input_text": text,
-                    "row_idx": i,
-                    "atc_code": None,
-                    "drugbank_id": None,
-                    "generic_name": None,
-                    "reference_text": None,
-                    "dose": "|".join(input_doses) if input_doses else None,
-                    "form": base_form,
-                    "route": "|".join(input_routes) if input_routes else None,
-                    "type_details": type_detail,
-                    "release_details": release_detail,
-                    "form_details": form_detail,
-                    "match_score": 0,
-                    "match_reason": "no_match",
-                    "sources": None,
-                    "salt_details": all_drug_details[i].get("salt_details"),
-                    "brand_details": all_drug_details[i].get("brand_details"),
-                    "indication_details": all_drug_details[i].get("indication_details"),
-                    "alias_details": all_drug_details[i].get("alias_details"),
-                    "diluent_details": all_drug_details[i].get("diluent_details"),
-                })
+                results.append(_build_result_dict(
+                    row_id=ids[i],
+                    input_text=text,
+                    row_idx=i,
+                    drug_details=all_drug_details[i],
+                    dose="|".join(input_doses) if input_doses else None,
+                    form=base_form,
+                    route="|".join(input_routes) if input_routes else None,
+                    type_details=type_detail,
+                    release_details=release_detail,
+                    form_details=form_detail,
+                    match_reason="no_match",
+                ))
         
         return results
     

@@ -149,6 +149,184 @@ def _extract_form_detail_impl(form_text: str) -> Tuple[str, Optional[str]]:
     return form_text, None
 
 
+# ============================================================================
+# DOSE PARSING - Structured extraction of dose values and units
+# ============================================================================
+
+# Unit conversion factors to milligrams (for mass units)
+_MASS_TO_MG = {
+    "MG": 1.0,
+    "G": 1000.0,
+    "GM": 1000.0,
+    "GR": 1000.0,  # gram
+    "MCG": 0.001,
+    "UG": 0.001,
+    "ΜG": 0.001,  # micro symbol
+    "KG": 1_000_000.0,
+}
+
+# Volume conversion factors to milliliters
+_VOLUME_TO_ML = {
+    "ML": 1.0,
+    "L": 1000.0,
+    "CC": 1.0,  # cubic centimeter = mL
+    "DL": 100.0,  # deciliter
+}
+
+# Dose pattern with named groups for structured extraction
+_STRUCTURED_DOSE_PATTERN = re.compile(
+    r"(?P<value>\d+(?:[.,]\d+)?)\s*"
+    r"(?P<unit>mg|g|gm|gr|mcg|ug|μg|kg|ml|l|cc|dl|iu|unit|units|%|pct)"
+    r"(?:\s*/\s*(?P<per_value>\d+(?:[.,]\d+)?)\s*(?P<per_unit>ml|l|cc|dl|tab|tablet|cap|capsule|dose|unit|5ml))?",
+    re.IGNORECASE
+)
+
+
+def parse_dose_components(text: str) -> Dict[str, any]:
+    """
+    Parse dose components from text into structured format.
+    
+    Returns dict with:
+        - doses: List of parsed dose dicts, each with:
+            - value: Numeric value
+            - unit: Original unit (uppercase)
+            - unit_type: 'mass', 'volume', 'percentage', 'iu', 'concentration'
+            - value_mg: Value converted to mg (for mass units)
+            - value_ml: Value converted to mL (for volume units)
+            - concentration_mg_per_ml: For concentration units (mg/mL)
+        - total_volume_ml: Total solution volume in mL (if found)
+        - percentages: List of percentage values found
+    
+    Examples:
+        "500 mg TABLET" -> doses: [{value: 500, unit: 'MG', unit_type: 'mass', value_mg: 500}]
+        "5% DEXTROSE 250 mL" -> doses: [...], total_volume_ml: 250, percentages: [5.0]
+        "10 mg/5 mL SYRUP" -> doses: [{..., concentration_mg_per_ml: 2.0}]
+    """
+    result = {
+        "doses": [],
+        "total_volume_ml": None,
+        "percentages": [],
+    }
+    
+    text_upper = text.upper()
+    
+    # Find all dose patterns
+    for match in _STRUCTURED_DOSE_PATTERN.finditer(text_upper):
+        value_str = match.group("value").replace(",", ".")
+        value = float(value_str)
+        unit = match.group("unit").upper()
+        per_value_str = match.group("per_value")
+        per_unit = match.group("per_unit").upper() if match.group("per_unit") else None
+        
+        dose = {
+            "value": value,
+            "unit": unit,
+            "unit_type": None,
+            "value_mg": None,
+            "value_ml": None,
+            "concentration_mg_per_ml": None,
+        }
+        
+        # Classify unit type
+        if unit in ("%", "PCT"):
+            dose["unit_type"] = "percentage"
+            dose["unit"] = "%"
+            result["percentages"].append(value)
+        elif unit in _MASS_TO_MG:
+            dose["unit_type"] = "mass"
+            dose["value_mg"] = value * _MASS_TO_MG[unit]
+        elif unit in _VOLUME_TO_ML:
+            dose["unit_type"] = "volume"
+            dose["value_ml"] = value * _VOLUME_TO_ML[unit]
+            # Track as potential total volume
+            if result["total_volume_ml"] is None or dose["value_ml"] > result["total_volume_ml"]:
+                result["total_volume_ml"] = dose["value_ml"]
+        elif unit in ("IU", "UNIT", "UNITS"):
+            dose["unit_type"] = "iu"
+        
+        # Handle concentration (X per Y)
+        if per_value_str and per_unit:
+            per_value = float(per_value_str.replace(",", "."))
+            
+            # Special case: mg/5mL (common pediatric dosing)
+            if per_unit == "5ML":
+                per_value = 5.0
+                per_unit = "ML"
+            
+            if per_unit in _VOLUME_TO_ML and dose["value_mg"] is not None:
+                per_ml = per_value * _VOLUME_TO_ML.get(per_unit, 1.0)
+                if per_ml > 0:
+                    dose["concentration_mg_per_ml"] = dose["value_mg"] / per_ml
+                    dose["unit_type"] = "concentration"
+        
+        result["doses"].append(dose)
+    
+    return result
+
+
+def calculate_iv_amounts(
+    text: str,
+    drug_percentages: List[float],
+    diluent_type: Optional[str],
+    diluent_percentage: Optional[float],
+    total_volume_ml: Optional[float],
+) -> Dict[str, any]:
+    """
+    Calculate actual amounts for IV solution components.
+    
+    For IV solutions, percentage = w/v (weight/volume) = grams per 100mL.
+    
+    Args:
+        text: Original drug description
+        drug_percentages: List of drug concentration percentages (e.g., [5.0] for 5% dextrose)
+        diluent_type: Type of diluent (WATER, SODIUM CHLORIDE, LACTATED RINGER'S, etc.)
+        diluent_percentage: Concentration of diluent if applicable (e.g., 0.9 for 0.9% NaCl)
+        total_volume_ml: Total solution volume in mL
+    
+    Returns dict with:
+        - drug_amount_mg: Calculated drug amount in milligrams
+        - drug_amount_g: Calculated drug amount in grams
+        - diluent_amount_mg: Calculated diluent amount in mg (for saline)
+        - diluent_amount_g: Calculated diluent amount in g
+        - diluent_volume_ml: Diluent volume (≈ total volume for dissolved solids)
+        - concentration_mg_per_ml: Drug concentration in mg/mL
+    """
+    result = {
+        "drug_amount_mg": None,
+        "drug_amount_g": None,
+        "diluent_amount_mg": None,
+        "diluent_amount_g": None,
+        "diluent_volume_ml": None,
+        "concentration_mg_per_ml": None,
+    }
+    
+    if total_volume_ml is None or not drug_percentages:
+        return result
+    
+    # Calculate drug amount from percentage (w/v: grams per 100mL)
+    # 5% = 5g/100mL = 50mg/mL
+    primary_pct = drug_percentages[0]
+    drug_g = (primary_pct / 100.0) * total_volume_ml  # grams
+    drug_mg = drug_g * 1000  # milligrams
+    
+    result["drug_amount_g"] = round(drug_g, 3)
+    result["drug_amount_mg"] = round(drug_mg, 3)
+    result["concentration_mg_per_ml"] = round((primary_pct / 100.0) * 1000, 3)  # mg/mL
+    
+    # For dissolved solids, the volume they occupy is negligible
+    # So diluent volume ≈ total volume
+    result["diluent_volume_ml"] = total_volume_ml
+    
+    # Calculate diluent amount if it has a concentration (e.g., 0.9% NaCl)
+    if diluent_percentage is not None:
+        diluent_g = (diluent_percentage / 100.0) * total_volume_ml
+        diluent_mg = diluent_g * 1000
+        result["diluent_amount_g"] = round(diluent_g, 3)
+        result["diluent_amount_mg"] = round(diluent_mg, 3)
+    
+    return result
+
+
 def extract_drug_details(drug_name: str) -> Dict[str, Optional[str]]:
     """
     Extract parentheticals and qualifiers from a drug name into separate fields.
@@ -181,9 +359,46 @@ def extract_drug_details(drug_name: str) -> Dict[str, Optional[str]]:
         "release_details": None,
         "form_details": None,
         "diluent_details": None,  # Volume of diluent/solvent (base solution volume)
+        "iv_diluent_type": None,  # IV solution base: WATER, SODIUM CHLORIDE, LACTATED RINGER'S, etc.
+        "iv_diluent_amount": None,  # IV diluent concentration: 0.9%, 0.3%, etc.
+        # Structured dose information
+        "dose_values": None,  # List of dose values (e.g., [5.0, 0.9])
+        "dose_units": None,  # List of units (e.g., ["%", "%"])
+        "dose_types": None,  # List of types (e.g., ["percentage", "percentage"])
+        "total_volume_ml": None,  # Total solution volume in mL
+        # Computed amounts for IV solutions (w/v calculation)
+        "drug_amount_mg": None,  # Computed drug amount in mg
+        "diluent_amount_mg": None,  # Computed diluent amount in mg (for saline)
+        "concentration_mg_per_ml": None,  # Drug concentration in mg/mL
     }
     
     working = drug_name.strip()
+    
+    # Extract IV solution diluent from "X% DRUG IN Y% DILUENT" patterns
+    # Common diluents: WATER, SODIUM CHLORIDE (saline), LACTATED/ACETATED RINGER'S
+    iv_diluent_pattern = re.compile(
+        r'\bIN\s+'
+        r'(?:(\d+(?:\.\d+)?\s*%)\s+)?'  # Optional concentration (e.g., "0.9%")
+        r'(WATER|SODIUM\s+CHLORIDE|LACTATED\s+RINGER[\'\'`]?S?(?:\s+SOLUTION)?|'
+        r'ACETATED\s+RINGER[\'\'`]?S?(?:\s+SOLUTION)?|RINGER[\'\'`]?S?\s+(?:SOLUTION|LACTATE))'
+        r'(?:\s+SOLUTION)?',
+        re.IGNORECASE
+    )
+    iv_match = iv_diluent_pattern.search(working)
+    if iv_match:
+        diluent_amount = iv_match.group(1)  # e.g., "0.9%" or None
+        diluent_type = iv_match.group(2).upper()  # e.g., "SODIUM CHLORIDE"
+        
+        # Normalize apostrophe variants in RINGER'S
+        diluent_type = re.sub(r"RINGER[\'\'`]?S?", "RINGER'S", diluent_type)
+        # Ensure SOLUTION suffix is included if present
+        if 'SOLUTION' not in diluent_type and ('RINGER' in diluent_type or iv_match.group(0).upper().endswith('SOLUTION')):
+            if 'LACTATED' in diluent_type or 'ACETATED' in diluent_type:
+                if not diluent_type.endswith('SOLUTION'):
+                    diluent_type = diluent_type.rstrip() + ' SOLUTION'
+        
+        result["iv_diluent_type"] = diluent_type.strip()
+        result["iv_diluent_amount"] = diluent_amount.strip() if diluent_amount else None
     
     # Handle drug names starting with percentage (e.g., "0.9% SODIUM CHLORIDE")
     # Move the percentage to dose position and keep the drug name
@@ -492,6 +707,40 @@ def extract_drug_details(drug_name: str) -> Dict[str, Optional[str]]:
     result["release_details"] = release_det
     result["form_details"] = form_det
     
+    # Parse structured dose information from original text
+    dose_info = parse_dose_components(drug_name)
+    
+    if dose_info["doses"]:
+        result["dose_values"] = [d["value"] for d in dose_info["doses"]]
+        result["dose_units"] = [d["unit"] for d in dose_info["doses"]]
+        result["dose_types"] = [d["unit_type"] for d in dose_info["doses"]]
+    
+    if dose_info["total_volume_ml"]:
+        result["total_volume_ml"] = dose_info["total_volume_ml"]
+    
+    # Calculate IV solution amounts if we have percentage + volume
+    # Pharmaceutical % = w/v (weight/volume) = grams per 100mL
+    if dose_info["percentages"] and dose_info["total_volume_ml"]:
+        # Parse diluent percentage if present (e.g., "0.9%" from "0.9% SODIUM CHLORIDE")
+        diluent_pct = None
+        if result["iv_diluent_amount"]:
+            try:
+                diluent_pct = float(result["iv_diluent_amount"].replace("%", "").strip())
+            except (ValueError, AttributeError):
+                pass
+        
+        iv_amounts = calculate_iv_amounts(
+            text=drug_name,
+            drug_percentages=dose_info["percentages"],
+            diluent_type=result["iv_diluent_type"],
+            diluent_percentage=diluent_pct,
+            total_volume_ml=dose_info["total_volume_ml"],
+        )
+        
+        result["drug_amount_mg"] = iv_amounts["drug_amount_mg"]
+        result["diluent_amount_mg"] = iv_amounts["diluent_amount_mg"]
+        result["concentration_mg_per_ml"] = iv_amounts["concentration_mg_per_ml"]
+    
     return result
 
 # Dose with denominator pattern: 500MG/5ML, 10MG/ML, etc.
@@ -500,20 +749,10 @@ _DOSE_RATIO_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-# Weight unit conversion factors to mg
-_WEIGHT_TO_MG: Dict[str, float] = {
-    "MG": 1.0,
-    "G": 1000.0,
-    "MCG": 0.001,
-    "UG": 0.001,
-    "IU": 1.0,  # Keep IU as-is (no standard conversion)
-}
-
-# Volume unit conversion factors to ml
-_VOLUME_TO_ML: Dict[str, float] = {
-    "ML": 1.0,
-    "L": 1000.0,
-}
+# Weight unit conversion factors to mg (for normalize_weight_to_mg)
+# Note: _MASS_TO_MG is more complete, defined earlier with DOSE PARSING section
+_WEIGHT_TO_MG: Dict[str, float] = _MASS_TO_MG.copy()
+_WEIGHT_TO_MG["IU"] = 1.0  # Keep IU as-is (no standard conversion)
 
 
 def normalize_dose_ratio(dose_str: str) -> Tuple[str, bool]:
@@ -911,6 +1150,10 @@ def extract_generic_tokens(
         # If there's at least one word before the salt, it's likely a trailing suffix
         before = text_upper[:pos].strip()
         if before and len(before.split()) >= 1:
+            # EXCEPTION: If preceded by " IN " pattern, it's an IV solution component, NOT a salt suffix
+            # e.g., "5% DEXTROSE IN 0.9% SODIUM CHLORIDE" - SODIUM CHLORIDE is the base solution
+            if " IN " in before.upper():
+                return False
             # Check if the word before isn't another salt word
             last_word = before.split()[-1]
             if last_word not in {"SODIUM", "DISODIUM", "POTASSIUM", "CALCIUM", "MAGNESIUM"}:
@@ -1070,14 +1313,34 @@ def extract_generic_tokens(
             active_name = " ".join(active_words) if active_words else None
             
             # Extract solution base (after IN)
+            # Skip leading dose tokens (e.g., "0.9%" in "0.9% SODIUM CHLORIDE")
             base_words = []
+            started = False
             for word in parts[1].strip().split():
-                if word and not any(c.isdigit() for c in word) and word not in UNIT_TOKENS and word not in skip_words:
+                # Skip leading dose tokens (digits, units)
+                if not started:
+                    if any(c.isdigit() for c in word) or word in UNIT_TOKENS:
+                        continue
+                    started = True
+                
+                if word and word not in skip_words:
+                    # Stop at form/packaging words or subsequent dose tokens
+                    if any(c.isdigit() for c in word) and started:
+                        break
+                    if word in UNIT_TOKENS:
+                        break
                     base_words.append(word)
                 else:
                     break
             
+            # Check if base_words form a known pure salt compound (e.g., SODIUM CHLORIDE)
             base_name = " ".join(base_words) if base_words else None
+            # Also check for known IV solution bases like LACTATED RINGER'S
+            if base_name:
+                # Normalize RINGER'S variations
+                if "RINGER" in base_name:
+                    # Keep the full phrase including LACTATED/ACETATED
+                    pass
             
             # Reorder: active first, then base, then others
             if active_name or base_name:

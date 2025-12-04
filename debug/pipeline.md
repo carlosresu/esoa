@@ -1,9 +1,11 @@
 # Drug Pipeline - Algorithmic Logic & Pharmaceutical Rules
 
 **Created:** Nov 27, 2025  
-**Updated:** Nov 28, 2025  
+**Updated:** Dec 4, 2025 (Vial size parsing fix + strict dose matching)  
 
 > **IMPORTANT:** This document captures all algorithmic logic, decisions, choices, rules, and pharmaceutical principles used in the drug tagging pipeline. Update this file with every group of changes.
+>
+> **Data Dictionary:** See `AGENTS.md` for the complete data dictionary with all dataset columns and descriptions.
 
 ---
 
@@ -413,16 +415,54 @@ Some FDA rows have brand/generic swapped. Detect by:
 - **Dose-exact**: Drug Code is unique down to dose
 - PARACETAMOL 500MG TABLET ≠ PARACETAMOL 650MG TABLET
 - Different Drug Codes for different doses
+- **Tolerance**: 1% relative or 0.5mg absolute (floating point precision)
 
-### Dose Extraction Patterns
+### Dose String Parsing (Part 4)
+```python
+# Parse dose strings to structured values
+parse_dose_to_mg(dose_str) → (total_dose, concentration, volume, unit_type)
+
+# Patterns handled:
+- "40MG" → (40.0, None, None, "mg")           # Simple dose
+- "1G" → (1000.0, None, None, "mg")           # Unit conversion
+- "300MG/2ML" → (300.0, 150.0, 2.0, "mg")     # Concentration
+- "250MG/5ML|60ML" → (250.0, 50.0, 60.0, "mg") # Suspension with bottle
+- "100MG/ML|15ML" → (None, 100.0, 15.0, "mg")  # Concentration + volume
+- "1000IU" → (1000.0, None, None, "iu")       # International units
+- "10IU/ML|5ML" → (None, 10.0, 5.0, "iu")     # IU concentration
+- "5%" → (None, 50.0, None, "pct")            # Percentage w/v (5% = 50mg/mL)
+- "25" → (25.0, None, None, "mg")             # Bare number (assume MG)
+- "500MG+125MG" → (625.0, None, None, "combo") # Combination dose
+- "250|MG|125" → (375.0, None, None, "combo")  # Annex F combo format
 ```
-\d+(?:\.\d+)?\s*(MG|G|MCG|UG|IU|ML|%|MG/ML|MCG/ML)
+
+### IV Solution Inference (Part 4)
+When only volume is present, infer concentration from description:
+- **NSS/PNSS + volume** → assume 0.9% = 9 mg/mL (Normal Saline)
+- **D5 + volume** → assume 5% = 50 mg/mL (5% Dextrose)
+- **D10 + volume** → assume 10% = 100 mg/mL (10% Dextrose)
+
+### Dose Key Types (Part 4)
+```python
+# Dose keys for matching:
+("iv", conc, diluent, vol)    # IV solutions: require diluent match
+("conc", conc, vol, unit)     # Concentrations: ignore volume
+("mg", total_mg)              # Simple doses
+("iu", total_iu)              # International units
+("combo", total_mg)           # Combination totals
 ```
+
+### Dose Matching Rules (Part 4)
+1. **IV solutions**: Concentration + diluent type must match exactly
+2. **Concentrations**: Same concentration matches (volume is packaging)
+3. **Simple doses**: With 1% tolerance for floating point
+4. **Combos**: Total can match other combo or simple mg
+5. **Cross-type**: mg vs conc allowed if total equals conc×volume
 
 ### Dose Normalization
 - `500MG/5ML` → `100MG/ML` (divide to per-1-unit)
 - `1G` → `1000MG`
-- `0.5%` → `0.5%` (keep percentage as-is)
+- `0.5%` → 5 mg/mL (using w/v formula)
 
 ---
 
@@ -466,6 +506,86 @@ Some FDA rows have brand/generic swapped. Detect by:
 ---
 
 ## Decision Log
+
+### 2025-12-04 – Part 4 Dose Matching Enhancement (Phase 9)
+- **Goal:** Improve ESOA → Annex F Drug Code matching from 1.5% to 34.8%
+- **Dose Parsing:**
+  - Parse dose strings: `40MG`, `1G`, `300MG/2ML`, `100MG/ML`
+  - Handle IU units: `1000IU/ML`, `10 I.U`
+  - Convert percentages: `5%` → 50 mg/mL (w/v formula)
+  - Parse bare numbers: `25` → 25mg for tablet range (FLANAX 275 = 275mg)
+  - Extract bottle size: `250MG/5ML|60ML` → conc=50mg/mL, vol=60mL
+- **Combo Parsing:**
+  - Parse `500MG+125MG` → total 625mg
+  - Parse Annex F `250|MG|125` → total 375mg
+  - Handle suspension combos `400|MG|57|ML|35` → 457mg
+- **Vial Size Parsing Fix:**
+  - `250|MG|1|G` was incorrectly parsed as combo (250mg + 1000mg = 1250mg)
+  - Fixed: Now correctly parses as 250mg (the `1|G` is vial size, not second dose)
+  - Pattern: If previous dose was in MG and current is in G with small value (≤10), treat as vial size
+- **IV Inference:**
+  - NSS/PNSS with volume only → 0.9% = 9 mg/mL
+  - D5 with volume only → 5% = 50 mg/mL
+  - D10 with volume only → 10% = 100 mg/mL
+- **Form Equivalence:**
+  - TABLET ↔ FILM COATED, CHEWABLE, SUBLINGUAL, ORALLY DISINTEGRATING
+  - CAPSULE ↔ SOFTGEL, GELCAP
+  - SYRUP ↔ SUSPENSION ↔ SOLUTION ↔ ELIXIR ↔ DROPS
+  - AMPULE ↔ VIAL ↔ INJECTION
+  - NEBULE ↔ INHALATION
+  - EXTENDED RELEASE ↔ SUSTAINED RELEASE ↔ MR ↔ SR ↔ XR ↔ ER
+- **Strict Dose Matching Policy:**
+  - Dose matching is REQUIRED - no fallback when dose key is None
+  - Only allow unit conversions: 500mcg = 0.5mg, 1g = 1000mg
+  - Different doses never match: 400mg ≠ 600mg
+  - Bare numbers assumed to be MG: "275" → 275mg
+- **Tolerance:**
+  - MG matching: 1% relative or 0.5mg absolute
+  - Concentration: 1% relative or 0.1 mg/mL absolute
+  - Volume not required for concentration matching
+- **Fuzzy Analysis:**
+  - Checked 66,940 `generic_not_in_annex` entries
+  - Only 288 (0.43%) are typos - 99.57% genuinely not in Annex F
+- **Result:** Match rate 1.5% → 34.8%
+
+### 2025-12-04 – IV Solution Multi-Component Extraction + Dose Computation
+- **Problem:** IV solutions like "5% DEXTROSE IN 0.9% SODIUM CHLORIDE" were only extracting DEXTROSE, ignoring the SODIUM CHLORIDE or LACTATED RINGER'S base solution.
+- **Root Causes:**
+  1. `is_trailing_salt_suffix()` incorrectly filtered SODIUM CHLORIDE as a trailing salt suffix, even when it appeared after " IN " as the base solution
+  2. Base extraction after " IN " broke on first digit, so "0.9% SODIUM CHLORIDE" stopped at "0.9%"
+- **Fix:**
+  1. Added exception in `is_trailing_salt_suffix()`: return False when the text before the compound contains " IN " (indicating IV solution pattern)
+  2. Modified base extraction to skip leading dose tokens (e.g., "0.9%") before collecting base component words
+  3. Added `LACTATED RINGER'S`, `ACETATED RINGER'S`, and variants to `MULTIWORD_GENERICS`
+  4. Added `iv_diluent_type` and `iv_diluent_amount` fields to `extract_drug_details()` to capture IV solution base
+  5. Apostrophe normalization: RINGER'S variants normalized to `RINGER'S`
+  6. **NEW: Structured dose parsing** with `parse_dose_components()` function:
+     - `dose_values`: List of numeric values (e.g., [5.0, 0.9, 500.0])
+     - `dose_units`: List of units (e.g., ["%", "%", "ML"])
+     - `dose_types`: List of types ("percentage", "mass", "volume", "iu", "concentration")
+     - `total_volume_ml`: Total solution volume in mL
+  7. **NEW: w/v dose calculation** with `calculate_iv_amounts()` function:
+     - Pharmaceutical % = w/v (weight/volume) = grams per 100mL
+     - Formula: `drug_amount_mg = (percentage/100) × volume_mL × 1000`
+     - Example: 5% Dextrose in 250mL = 12,500 mg dextrose
+     - `drug_amount_mg`: Computed active ingredient amount
+     - `diluent_amount_mg`: Computed diluent amount (for saline solutions)
+     - `concentration_mg_per_ml`: Drug concentration (e.g., 50 mg/mL for 5%)
+- **Result:** Complete dose extraction and computation for IV solutions
+- **Files changed:** `tokenizer.py`, `unified_constants.py`
+
+### 2025-12-04 – Diluent Handling Confirmation
+- **Decision:** Diluent presence does NOT affect generic detection or matching. Diluent only affects dose (which is flexible at ATC/DrugBank tagging stage).
+- **Implementation:** `DILUENT` and `SOLVENT` are in STOPWORDS (filtered during tokenization). `extract_drug_details()` extracts `diluent_details` as metadata and strips diluent patterns from drug names. The `+ DILUENT` pattern is explicitly skipped in combination drug parsing.
+- **Rationale:** Diluent is a reconstitution aid, not an active ingredient. Dose flexibility at ATC tagging stage means diluent volume doesn't affect matching anyway.
+
+### 2025-12-04 – Vaccine Acronym Bidirectional Matching
+- **Decision:** Added WHO/CDC standard vaccine abbreviation lookup table with bidirectional matching.
+- **Implementation:** `VACCINE_ACRONYM_TO_COMPONENTS` maps acronyms (e.g., DTP) to components (DIPHTHERIA, TETANUS, PERTUSSIS). `match_vaccine_text()` works both ways:
+  - If text contains "DTP" → expands to components for matching
+  - If text contains "DIPHTHERIA, TETANUS, PERTUSSIS" → finds acronym for matching
+- **Coverage:** 50+ vaccine acronyms including BCG, DTP, DTaP, MMR, MMRV, IPV, OPV, PENTA, HEXA, HPV, PCV7-20, MenACWY, etc.
+- **Rationale:** Annex F often uses acronyms while ESOA spells out components. Bidirectional matching enables cross-referencing.
 
 ### 2025-12-03 – CLI progress formatting refresh
 - **Decision:** Unified all pipeline spinners to use a braille-dot animation with aligned `[done]` completions and updated chunk ETA messages.

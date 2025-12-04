@@ -31,7 +31,7 @@ from .tokenizer import extract_drug_details
 
 ALL_DETAILS_COLS = [
     "salt_details", "brand_details", "indication_details", "alias_details",
-    "type_details", "release_details", "form_details",
+    "type_details", "release_details", "form_details", "diluent_details",
 ]
 
 def _add_details_columns(df: pd.DataFrame, name_col: str = "generic_name") -> pd.DataFrame:
@@ -163,12 +163,12 @@ def build_unified_reference(
     generics_df = con.execute("""
         SELECT DISTINCT
             drugbank_id,
-            UPPER(TRIM(name)) as generic_name,
+            UPPER(TRIM(generic_name)) as generic_name,
             name_key,
             'drugbank' as source
         FROM generics
         WHERE drugbank_id IS NOT NULL
-          AND name IS NOT NULL AND name != ''
+          AND generic_name IS NOT NULL AND generic_name != ''
     """).fetchdf()
     
     # Add WHO-only entries
@@ -296,13 +296,13 @@ def build_unified_reference(
     synonyms_df = con.execute("""
         SELECT 
             s.drugbank_id,
-            UPPER(TRIM(g.name)) as generic_name,
-            STRING_AGG(DISTINCT UPPER(TRIM(s.synonym)), '|') as synonyms
+            UPPER(TRIM(g.generic_name)) as generic_name,
+            STRING_AGG(DISTINCT UPPER(TRIM(s.synonyms)), '|') as synonyms
         FROM synonyms s
         LEFT JOIN generics g ON s.drugbank_id = g.drugbank_id
         WHERE s.drugbank_id IS NOT NULL
-          AND s.synonym IS NOT NULL AND s.synonym != ''
-        GROUP BY s.drugbank_id, g.name
+          AND s.synonyms IS NOT NULL AND s.synonyms != ''
+        GROUP BY s.drugbank_id, g.generic_name
     """).fetchdf()
     
     # =========================================================================
@@ -314,7 +314,7 @@ def build_unified_reference(
     atc_map_df = con.execute("""
         SELECT DISTINCT
             a.drugbank_id,
-            UPPER(TRIM(g.name)) as generic_name,
+            UPPER(TRIM(g.generic_name)) as generic_name,
             TRIM(a.atc_code) as atc_code
         FROM atc a
         LEFT JOIN generics g ON a.drugbank_id = g.drugbank_id
@@ -373,7 +373,7 @@ def build_unified_reference(
     dosages_df = con.execute("""
         SELECT DISTINCT
             d.drugbank_id,
-            UPPER(TRIM(g.name)) as generic_name,
+            UPPER(TRIM(g.generic_name)) as generic_name,
             UPPER(TRIM(d.form)) as form,
             UPPER(TRIM(d.route)) as route,
             UPPER(TRIM(d.strength)) as dose,
@@ -394,8 +394,8 @@ def build_unified_reference(
                 SELECT DISTINCT
                     NULL as drugbank_id,
                     UPPER(TRIM(generic_normalized)) as generic_name,
-                    UPPER(TRIM(form_token)) as form,
-                    UPPER(TRIM(route_allowed)) as route,
+                    UPPER(TRIM(form)) as form,
+                    UPPER(TRIM(route)) as route,
                     CASE 
                         WHEN strength_mg IS NOT NULL THEN CAST(CAST(strength_mg AS INTEGER) AS VARCHAR) || ' MG'
                         WHEN strength IS NOT NULL AND unit IS NOT NULL THEN CAST(CAST(strength AS INTEGER) AS VARCHAR) || ' ' || UPPER(unit)
@@ -443,13 +443,13 @@ def build_unified_reference(
     try:
         db_brands_df = con.execute("""
             SELECT DISTINCT
-                UPPER(TRIM(b.brand)) as brand_name,
-                UPPER(TRIM(g.name)) as generic_name,
+                UPPER(TRIM(b.brand_name)) as brand_name,
+                UPPER(TRIM(g.generic_name)) as generic_name,
                 b.drugbank_id,
                 'drugbank' as source
             FROM brands b
             LEFT JOIN generics g ON b.drugbank_id = g.drugbank_id
-            WHERE b.brand IS NOT NULL AND b.brand != ''
+            WHERE b.brand_name IS NOT NULL AND b.brand_name != ''
         """).fetchdf()
         brands_list.append(db_brands_df)
     except Exception:
@@ -467,11 +467,11 @@ def build_unified_reference(
     salts_df = con.execute("""
         SELECT DISTINCT
             drugbank_id,
-            UPPER(TRIM(name)) as salt_form,
+            UPPER(TRIM(salt_name)) as salt_form,
             name_key as salt_key
         FROM salts
         WHERE drugbank_id IS NOT NULL
-          AND name IS NOT NULL AND name != ''
+          AND salt_name IS NOT NULL AND salt_name != ''
     """).fetchdf()
     
     salts_df = salts_df.fillna('').drop_duplicates()

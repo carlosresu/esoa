@@ -74,7 +74,7 @@ def prepare(pnf_csv: str, esoa_csv: str, outdir: str = ".") -> tuple[str, str]:
     pnf["generic_id"] = maybe_parallel_map(generic_names, slug_id)
     pnf["synonyms"] = ""
     route_values = pnf["Route"].fillna("").astype(str).tolist()
-    pnf["route_tokens"] = maybe_parallel_map(route_values, map_route_token)
+    pnf["route"] = maybe_parallel_map(route_values, map_route_token)  # Standardized: route_tokens -> route
     atc_values = pnf["ATC Code"].fillna("").astype(str).tolist()
     pnf["atc_code"] = maybe_parallel_map(atc_values, clean_atc)
 
@@ -107,7 +107,7 @@ def prepare(pnf_csv: str, esoa_csv: str, outdir: str = ".") -> tuple[str, str]:
     pnf["per_val"] = [d.get("per_val") if isinstance(d, dict) else None for d in parsed]
     pnf["per_unit"] = [d.get("per_unit") if isinstance(d, dict) else None for d in parsed]
     pnf["pct"] = [d.get("pct") if isinstance(d, dict) else None for d in parsed]
-    pnf["form_token"] = maybe_parallel_map(pnf["_parse_src"], parse_form_from_text)
+    pnf["form"] = maybe_parallel_map(pnf["_parse_src"], parse_form_from_text)  # Standardized: form_token -> form
 
     # Derive canonical strength units for quick equality checks (e.g., mg vs g
     # conversions) and compute ratio helpers where enough information exists.
@@ -119,13 +119,12 @@ def prepare(pnf_csv: str, esoa_csv: str, outdir: str = ".") -> tuple[str, str]:
     # Expand the multi-route allowances so each row describes a single canonical
     # route.  This mirrors the matching logic that expects one allowed route per
     # record when validating compatibility.
-    exploded = pnf.explode("route_tokens", ignore_index=True)
-    exploded.rename(columns={"route_tokens": "route_allowed"}, inplace=True)
+    exploded = pnf.explode("route", ignore_index=True)
     keep = exploded[exploded["generic_name"].astype(bool)].copy()
 
     pnf_prepared = keep[[
         "generic_id", "generic_name", "generic_normalized", "raw_molecule", "salt_form", "synonyms", "atc_code",
-        "route_allowed", "form_token", "dose_kind",
+        "route", "form", "dose_kind",  # Standardized: route_allowed -> route, form_token -> form
         "strength", "unit", "per_val", "per_unit", "pct",
         "strength_mg", "ratio_mg_per_ml",
         "salt_details", "brand_details", "indication_details", "alias_details",

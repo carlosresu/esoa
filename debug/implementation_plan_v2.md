@@ -1,20 +1,29 @@
 # Drug Pipeline Implementation Plan v2
 
 **Created:** Nov 27, 2025  
-**Updated:** Nov 28, 2025  
+**Updated:** Dec 4, 2025  
 **Objective:** Unified drug tagging with consistent algorithms for Annex F and ESOA
 
 > **IMPORTANT:** After every group of changes, update both `pipeline.md` (algorithmic logic) and this file (implementation status).
 
 ---
 
-## Current State Summary (Nov 27, 2025)
+## Current State Summary (Dec 4, 2025)
 
 | Metric | Current | Target |
 |--------|---------|--------|
-| Annex F tagging | 94.1% | Maximize taggable |
-| ESOA ATC tagging | 55.6% | Maximize taggable |
-| ESOA→Drug Code | 40.5% | 60%+ |
+| Annex F tagging | 86.6% ATC, 69.3% DrugBank | Maximize taggable |
+| ESOA ATC tagging | 67.0% | 95%+ |
+| ESOA→Drug Code | **34.8%** | 60%+ |
+
+### Part 4 Improvement Summary
+- **Initial:** 1.5% (zero tolerance, no parsing)
+- **Final:** 34.8% (dose parsing, combo handling, form equivalence, strict dose matching)
+- **Key fixes:**
+  - Vial size parsing: `250|MG|1|G` → 250mg (not 1250mg combo)
+  - Strict dose requirement: No fallback when dose missing
+  - Bare number assumption: "275" → 275mg
+- **Remaining:** 46.0% `generic_not_in_annex` (confirmed: 99.57% genuinely not in Annex F)
 
 ---
 

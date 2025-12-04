@@ -285,6 +285,10 @@ def select_best_candidate(
     input_form_det = str(input_details.get("form_details") or "").upper()
     input_indication = str(input_details.get("indication_details") or "").upper()
     input_salt = str(input_details.get("salt_details") or "").upper()
+    input_brand = str(input_details.get("brand_details") or "").upper()
+    input_alias = str(input_details.get("alias_details") or "").upper()
+    input_diluent = str(input_details.get("diluent_details") or "").upper()
+    input_iv_type = str(input_details.get("iv_diluent_type") or "").upper()
     
     # Rank valid candidates by preference
     def rank_candidate(item: Tuple[Dict[str, Any], str]) -> Tuple[int, int, int, int, int, str]:
@@ -299,6 +303,7 @@ def select_best_candidate(
         # Priority 1: Match type (exact > substring > combo)
         match_priority = {
             "exact": 0,
+            "exact_with_subtype": 0,
             "combo_match": 1,
             "substring": 2,
             "combo_partial": 3,
@@ -327,7 +332,7 @@ def select_best_candidate(
         # Count how many detail fields match between input and candidate
         details_score = 0
         
-        # Release details match (e.g., MR, SR, XR, ER)
+        # Release details match (e.g., MR, SR, XR, ER) - highest priority
         if input_release:
             if input_release in cand_ref or input_release in cand_generic:
                 details_score -= 10  # Lower is better
@@ -351,6 +356,24 @@ def select_best_candidate(
         if input_salt:
             if input_salt in cand_ref or input_salt in cand_generic:
                 details_score -= 3
+        
+        # Brand details - used for resolution only (brand→generic), NOT for preference
+        # Two different brands of the same generic are equivalent
+        # Brand match only helps when candidate reference mentions the brand
+        # (This helps match brand-only entries to their generic equivalents)
+        if input_brand:
+            if input_brand in cand_ref:
+                details_score -= 1  # Minimal bonus - just for resolution
+        
+        # Alias details match (e.g., VIT. D3 = CHOLECALCIFEROL)
+        if input_alias:
+            if input_alias in cand_ref or input_alias in cand_generic:
+                details_score -= 2
+        
+        # IV diluent type match (e.g., WATER, SODIUM CHLORIDE, LACTATED RINGER'S)
+        if input_iv_type:
+            if input_iv_type in cand_ref or input_iv_type in cand_generic:
+                details_score -= 5
         
         # Priority 5: Prefer longer/more specific generic names
         # This prevents IODINE from being preferred over IODAMIDE when both match

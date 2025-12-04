@@ -1437,6 +1437,276 @@ def normalize_vaccine_name(text: str) -> Tuple[Optional[str], Optional[str]]:
     
     return None, None
 
+
+# ============================================================================
+# VACCINE ACRONYM LOOKUP - Bidirectional mapping for vaccine abbreviations
+# WHO/CDC standard abbreviations that enable matching between:
+#   - Acronym: "DTP" ↔ Components: "DIPHTHERIA + TETANUS + PERTUSSIS"
+# Used to match Annex F (often uses acronyms) with ESOA (often spells out components)
+# ============================================================================
+
+# Acronym → List of component antigens (sorted alphabetically for matching)
+VACCINE_ACRONYM_TO_COMPONENTS: Dict[str, List[str]] = {
+    # Single antigens
+    "BCG": ["BACILLUS CALMETTE-GUERIN"],
+    "D": ["DIPHTHERIA"],
+    "T": ["TETANUS"],
+    "P": ["PERTUSSIS"],
+    "AP": ["ACELLULAR PERTUSSIS"],
+    "WP": ["WHOLE-CELL PERTUSSIS"],
+    "HIB": ["HAEMOPHILUS INFLUENZAE TYPE B"],
+    "HEPB": ["HEPATITIS B"],
+    "HEPA": ["HEPATITIS A"],
+    "IPV": ["INACTIVATED POLIO", "INACTIVATED POLIOVIRUS", "INACTIVATED POLIOMYELITIS"],
+    "OPV": ["ORAL POLIO", "ORAL POLIOVIRUS", "LIVE ATTENUATED POLIO"],
+    "MV": ["MEASLES"],
+    "MR": ["MEASLES", "RUBELLA"],
+    "MMR": ["MEASLES", "MUMPS", "RUBELLA"],
+    "MMRV": ["MEASLES", "MUMPS", "RUBELLA", "VARICELLA"],
+    "VAR": ["VARICELLA"],
+    "VZV": ["VARICELLA", "VARICELLA-ZOSTER"],
+    "RV": ["ROTAVIRUS"],
+    "PCV": ["PNEUMOCOCCAL CONJUGATE"],
+    "PPSV": ["PNEUMOCOCCAL POLYSACCHARIDE"],
+    "FLU": ["INFLUENZA"],
+    "IIV": ["INACTIVATED INFLUENZA"],
+    "LAIV": ["LIVE ATTENUATED INFLUENZA"],
+    "HPV": ["HUMAN PAPILLOMAVIRUS"],
+    "YF": ["YELLOW FEVER"],
+    "JE": ["JAPANESE ENCEPHALITIS"],
+    "RAB": ["RABIES"],
+    "TYP": ["TYPHOID"],
+    "MEN": ["MENINGOCOCCAL"],
+    
+    # Two-component combinations
+    "DT": ["DIPHTHERIA", "TETANUS"],
+    "TD": ["TETANUS", "DIPHTHERIA"],  # Adult formulation
+    "DP": ["DIPHTHERIA", "PERTUSSIS"],
+    "TP": ["TETANUS", "PERTUSSIS"],
+    
+    # Three-component combinations (DTP family)
+    "DTP": ["DIPHTHERIA", "TETANUS", "PERTUSSIS"],
+    "DTAP": ["DIPHTHERIA", "TETANUS", "ACELLULAR PERTUSSIS"],
+    "DTWP": ["DIPHTHERIA", "TETANUS", "WHOLE-CELL PERTUSSIS"],
+    "TDAP": ["TETANUS", "DIPHTHERIA", "ACELLULAR PERTUSSIS"],  # Adult formulation
+    
+    # Four-component combinations
+    "DTP-HIB": ["DIPHTHERIA", "TETANUS", "PERTUSSIS", "HAEMOPHILUS INFLUENZAE TYPE B"],
+    "DTP-HEPB": ["DIPHTHERIA", "TETANUS", "PERTUSSIS", "HEPATITIS B"],
+    "DTP-IPV": ["DIPHTHERIA", "TETANUS", "PERTUSSIS", "INACTIVATED POLIO"],
+    "DTAP-HIB": ["DIPHTHERIA", "TETANUS", "ACELLULAR PERTUSSIS", "HAEMOPHILUS INFLUENZAE TYPE B"],
+    "DTAP-HEPB": ["DIPHTHERIA", "TETANUS", "ACELLULAR PERTUSSIS", "HEPATITIS B"],
+    "DTAP-IPV": ["DIPHTHERIA", "TETANUS", "ACELLULAR PERTUSSIS", "INACTIVATED POLIO"],
+    
+    # Five-component combinations (Pentavalent)
+    "PENTA": ["DIPHTHERIA", "TETANUS", "PERTUSSIS", "HEPATITIS B", "HAEMOPHILUS INFLUENZAE TYPE B"],
+    "DTP-HEPB-HIB": ["DIPHTHERIA", "TETANUS", "PERTUSSIS", "HEPATITIS B", "HAEMOPHILUS INFLUENZAE TYPE B"],
+    "DTP-IPV-HIB": ["DIPHTHERIA", "TETANUS", "PERTUSSIS", "INACTIVATED POLIO", "HAEMOPHILUS INFLUENZAE TYPE B"],
+    "DTAP-HEPB-HIB": ["DIPHTHERIA", "TETANUS", "ACELLULAR PERTUSSIS", "HEPATITIS B", "HAEMOPHILUS INFLUENZAE TYPE B"],
+    "DTAP-IPV-HIB": ["DIPHTHERIA", "TETANUS", "ACELLULAR PERTUSSIS", "INACTIVATED POLIO", "HAEMOPHILUS INFLUENZAE TYPE B"],
+    
+    # Six-component combinations (Hexavalent)
+    "HEXA": ["DIPHTHERIA", "TETANUS", "PERTUSSIS", "HEPATITIS B", "HAEMOPHILUS INFLUENZAE TYPE B", "INACTIVATED POLIO"],
+    "DTP-HEPB-HIB-IPV": ["DIPHTHERIA", "TETANUS", "PERTUSSIS", "HEPATITIS B", "HAEMOPHILUS INFLUENZAE TYPE B", "INACTIVATED POLIO"],
+    "DTAP-HEPB-HIB-IPV": ["DIPHTHERIA", "TETANUS", "ACELLULAR PERTUSSIS", "HEPATITIS B", "HAEMOPHILUS INFLUENZAE TYPE B", "INACTIVATED POLIO"],
+    
+    # Hepatitis combinations
+    "HEPA-HEPB": ["HEPATITIS A", "HEPATITIS B"],
+    "TWINRIX": ["HEPATITIS A", "HEPATITIS B"],  # Brand name used as generic
+    
+    # Meningococcal serogroups
+    "MENACWY": ["MENINGOCOCCAL A", "MENINGOCOCCAL C", "MENINGOCOCCAL W", "MENINGOCOCCAL Y"],
+    "MENB": ["MENINGOCOCCAL B"],
+    "MENABCWY": ["MENINGOCOCCAL A", "MENINGOCOCCAL B", "MENINGOCOCCAL C", "MENINGOCOCCAL W", "MENINGOCOCCAL Y"],
+    
+    # Pneumococcal valency
+    "PCV7": ["PNEUMOCOCCAL CONJUGATE 7-VALENT"],
+    "PCV10": ["PNEUMOCOCCAL CONJUGATE 10-VALENT"],
+    "PCV13": ["PNEUMOCOCCAL CONJUGATE 13-VALENT"],
+    "PCV15": ["PNEUMOCOCCAL CONJUGATE 15-VALENT"],
+    "PCV20": ["PNEUMOCOCCAL CONJUGATE 20-VALENT"],
+    "PPSV23": ["PNEUMOCOCCAL POLYSACCHARIDE 23-VALENT"],
+}
+
+# Component keyword → Normalized component name (for text parsing)
+VACCINE_COMPONENT_KEYWORDS: Dict[str, str] = {
+    # Diphtheria
+    "DIPHTHERIA": "DIPHTHERIA",
+    "DIPHTERIA": "DIPHTHERIA",  # Common misspelling
+    "CORYNEBACTERIUM DIPHTHERIAE": "DIPHTHERIA",
+    
+    # Tetanus
+    "TETANUS": "TETANUS",
+    "CLOSTRIDIUM TETANI": "TETANUS",
+    
+    # Pertussis
+    "PERTUSSIS": "PERTUSSIS",
+    "WHOOPING COUGH": "PERTUSSIS",
+    "BORDETELLA PERTUSSIS": "PERTUSSIS",
+    "ACELLULAR PERTUSSIS": "ACELLULAR PERTUSSIS",
+    "WHOLE-CELL PERTUSSIS": "WHOLE-CELL PERTUSSIS",
+    "WHOLE CELL PERTUSSIS": "WHOLE-CELL PERTUSSIS",
+    
+    # Haemophilus influenzae type B
+    "HAEMOPHILUS INFLUENZAE TYPE B": "HAEMOPHILUS INFLUENZAE TYPE B",
+    "HAEMOPHILUS INFLUENZAE B": "HAEMOPHILUS INFLUENZAE TYPE B",
+    "H. INFLUENZAE TYPE B": "HAEMOPHILUS INFLUENZAE TYPE B",
+    "HIB": "HAEMOPHILUS INFLUENZAE TYPE B",
+    
+    # Hepatitis
+    "HEPATITIS A": "HEPATITIS A",
+    "HEPATITIS B": "HEPATITIS B",
+    "HEP A": "HEPATITIS A",
+    "HEP B": "HEPATITIS B",
+    
+    # Polio
+    "POLIO": "POLIO",
+    "POLIOVIRUS": "POLIO",
+    "POLIOMYELITIS": "POLIO",
+    "INACTIVATED POLIO": "INACTIVATED POLIO",
+    "INACTIVATED POLIOVIRUS": "INACTIVATED POLIO",
+    "INACTIVATED POLIOMYELITIS": "INACTIVATED POLIO",
+    "ORAL POLIO": "ORAL POLIO",
+    "LIVE ATTENUATED POLIO": "ORAL POLIO",
+    
+    # MMR components
+    "MEASLES": "MEASLES",
+    "RUBEOLA": "MEASLES",
+    "MUMPS": "MUMPS",
+    "RUBELLA": "RUBELLA",
+    "GERMAN MEASLES": "RUBELLA",
+    
+    # Varicella
+    "VARICELLA": "VARICELLA",
+    "CHICKENPOX": "VARICELLA",
+    "VARICELLA-ZOSTER": "VARICELLA",
+    "VARICELLA ZOSTER": "VARICELLA",
+    
+    # Others
+    "ROTAVIRUS": "ROTAVIRUS",
+    "INFLUENZA": "INFLUENZA",
+    "FLU": "INFLUENZA",
+    "PNEUMOCOCCAL": "PNEUMOCOCCAL",
+    "MENINGOCOCCAL": "MENINGOCOCCAL",
+    "HUMAN PAPILLOMAVIRUS": "HUMAN PAPILLOMAVIRUS",
+    "HPV": "HUMAN PAPILLOMAVIRUS",
+    "YELLOW FEVER": "YELLOW FEVER",
+    "JAPANESE ENCEPHALITIS": "JAPANESE ENCEPHALITIS",
+    "RABIES": "RABIES",
+    "TYPHOID": "TYPHOID",
+    "TUBERCULOSIS": "TUBERCULOSIS",
+    "BCG": "TUBERCULOSIS",
+    "BACILLUS CALMETTE-GUERIN": "TUBERCULOSIS",
+    "BACILLUS CALMETTE GUERIN": "TUBERCULOSIS",
+}
+
+def _build_components_to_acronym() -> Dict[str, str]:
+    """Build reverse mapping from sorted component key to acronym."""
+    result = {}
+    for acronym, components in VACCINE_ACRONYM_TO_COMPONENTS.items():
+        # Normalize and sort components for order-independent matching
+        normalized = sorted([c.upper() for c in components])
+        key = " + ".join(normalized)
+        # Prefer shorter acronyms (DTP over DTP-HIB-HEPB)
+        if key not in result or len(acronym) < len(result[key]):
+            result[key] = acronym
+    return result
+
+# Reverse mapping: sorted component key → acronym
+VACCINE_COMPONENTS_TO_ACRONYM: Dict[str, str] = _build_components_to_acronym()
+
+
+def normalize_vaccine_components(text: str) -> List[str]:
+    """
+    Extract and normalize vaccine components from text.
+    
+    Returns a sorted list of normalized component names.
+    """
+    text_upper = text.upper()
+    components = []
+    
+    # Check for each component keyword
+    for keyword, normalized in sorted(VACCINE_COMPONENT_KEYWORDS.items(), key=lambda x: -len(x[0])):
+        if keyword in text_upper:
+            if normalized not in components:
+                components.append(normalized)
+            # Remove the keyword to avoid double-matching
+            text_upper = text_upper.replace(keyword, " ")
+    
+    return sorted(components)
+
+
+def expand_vaccine_acronym(acronym: str) -> Optional[List[str]]:
+    """
+    Expand a vaccine acronym to its component antigens.
+    
+    Args:
+        acronym: Vaccine abbreviation (e.g., "DTP", "PENTA")
+    
+    Returns:
+        List of component names, or None if not a recognized acronym
+    """
+    acronym_upper = acronym.upper().strip()
+    # Remove common suffixes
+    for suffix in [" VACCINE", "-VACCINE", "VACCINE"]:
+        if acronym_upper.endswith(suffix):
+            acronym_upper = acronym_upper[:-len(suffix)].strip()
+    
+    return VACCINE_ACRONYM_TO_COMPONENTS.get(acronym_upper)
+
+
+def get_vaccine_acronym(components: List[str]) -> Optional[str]:
+    """
+    Get the standard acronym for a list of vaccine components.
+    
+    Args:
+        components: List of component names (e.g., ["DIPHTHERIA", "TETANUS", "PERTUSSIS"])
+    
+    Returns:
+        Standard acronym (e.g., "DTP"), or None if no match
+    """
+    if not components:
+        return None
+    
+    # Normalize and sort for order-independent matching
+    normalized = sorted([c.upper().strip() for c in components])
+    key = " + ".join(normalized)
+    
+    return VACCINE_COMPONENTS_TO_ACRONYM.get(key)
+
+
+def match_vaccine_text(text: str) -> Tuple[Optional[str], Optional[List[str]]]:
+    """
+    Match vaccine text to acronym and components.
+    
+    Works bidirectionally:
+    - If text contains an acronym, expands it to components
+    - If text contains component names, finds the matching acronym
+    
+    Args:
+        text: Vaccine description text
+    
+    Returns:
+        (acronym, components) tuple, or (None, None) if no match
+    """
+    text_upper = text.upper()
+    
+    # Check if text starts with or contains a known acronym
+    for acronym in sorted(VACCINE_ACRONYM_TO_COMPONENTS.keys(), key=len, reverse=True):
+        # Check for acronym as standalone word
+        import re
+        if re.search(rf'\b{re.escape(acronym)}\b', text_upper):
+            return acronym, VACCINE_ACRONYM_TO_COMPONENTS[acronym]
+    
+    # Extract components from text
+    components = normalize_vaccine_components(text)
+    if components:
+        acronym = get_vaccine_acronym(components)
+        return acronym, components
+    
+    return None, None
+
+
 # ============================================================================
 # REGIONAL CANONICAL NAMES - Map US names to PH/WHO names
 # Philippines uses WHO naming conventions (e.g., PARACETAMOL not ACETAMINOPHEN)
@@ -1483,6 +1753,10 @@ MULTIWORD_GENERICS: Set[str] = {
     "MAGNESIUM SULFATE", "FERROUS SULFATE", "ZINC SULFATE",
     "SODIUM BICARBONATE", "CALCIUM CARBONATE", "MAGNESIUM HYDROXIDE",
     "ALUMINUM HYDROXIDE", "FERROUS FUMARATE", "CALCIUM GLUCONATE",
+    # IV solution bases
+    "LACTATED RINGER'S", "LACTATED RINGER'S SOLUTION",
+    "ACETATED RINGER'S", "ACETATED RINGER'S SOLUTION",
+    "RINGER'S SOLUTION", "WATER FOR INJECTION",
     # Insulins
     "INSULIN GLARGINE", "INSULIN LISPRO", "INSULIN ASPART",
     "INSULIN DETEMIR", "INSULIN DEGLUDEC", "INSULIN GLULISINE",
@@ -1782,6 +2056,11 @@ __all__ = [
     
     # Vaccine normalization
     "VACCINE_CANONICAL", "normalize_vaccine_name",
+    # Vaccine acronym bidirectional lookup (WHO/CDC standard)
+    "VACCINE_ACRONYM_TO_COMPONENTS", "VACCINE_COMPONENT_KEYWORDS",
+    "VACCINE_COMPONENTS_TO_ACRONYM",
+    "normalize_vaccine_components", "expand_vaccine_acronym",
+    "get_vaccine_acronym", "match_vaccine_text",
     
     # Helper functions
     "get_canonical_form", "get_canonical_route",
