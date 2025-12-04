@@ -14,6 +14,7 @@ import pandas as pd
 from .unified_constants import (
     PURE_SALT_COMPOUNDS, UNIT_TOKENS, get_regional_canonical,
     CATEGORY_DOSE, CATEGORY_FORM, CATEGORY_ROUTE,
+    VACCINE_CANONICAL, normalize_vaccine_name,
 )
 from .lookup import (
     apply_synonym, batch_lookup_generics, build_combination_keys,
@@ -492,6 +493,17 @@ class UnifiedTagger:
         for text in texts:
             # Pre-process: extract parentheticals and qualifiers into separate fields
             drug_details = extract_drug_details(text)
+            
+            # Check if this is a vaccine and normalize
+            vaccine_name, vaccine_details = normalize_vaccine_name(text)
+            if vaccine_name:
+                drug_details["generic_name"] = vaccine_name
+                if vaccine_details:
+                    if drug_details.get("type_details"):
+                        drug_details["type_details"] += "; " + vaccine_details
+                    else:
+                        drug_details["type_details"] = vaccine_details
+            
             all_drug_details.append(drug_details)
             
             # Use cleaned generic name for tokenization

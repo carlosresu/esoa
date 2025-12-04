@@ -183,6 +183,16 @@ def extract_drug_details(drug_name: str) -> Dict[str, Optional[str]]:
     }
     
     working = drug_name.strip()
+    
+    # Handle drug names starting with percentage (e.g., "0.9% SODIUM CHLORIDE")
+    # Move the percentage to dose position and keep the drug name
+    pct_start_match = re.match(r'^(\d+(?:\.\d+)?)\s*%\s+(.+)$', working)
+    if pct_start_match:
+        pct_value = pct_start_match.group(1)
+        rest = pct_start_match.group(2)
+        # Move percentage to end as dose info (will be extracted later)
+        working = f"{rest} {pct_value}%"
+    
     # Normalize: remove whitespace after opening parenthesis and before closing
     working = re.sub(r"\(\s+", "(", working)
     working = re.sub(r"\s+\)", ")", working)
@@ -196,16 +206,54 @@ def extract_drug_details(drug_name: str) -> Dict[str, Optional[str]]:
         r"diluent|solvent|reconstitution\s+fluid|sterile\s+water|"
         r"water\s+for\s+injection|w\.?f\.?i\.?"
     )
-    # Pattern 1a: "+ X mL diluent" - explicit volume before keyword
+    
+    # Pattern 0: Strip "monodose vial + X mL diluent" and "multidose vial + X mL diluent" entirely
+    monodose_diluent = re.compile(
+        r"\s+(?:mono|multi)?dose\s+vial\s*\+\s*\d+(?:[.,]\d+)?\s*m?L?\s*" + diluent_keywords + r".*$",
+        re.IGNORECASE
+    )
+    working = monodose_diluent.sub("", working)
+    
+    # Pattern 0b: Strip trailing "LYOPHILIZED POWDER + DILUENT VIAL" etc.
+    lyoph_diluent = re.compile(
+        r"\s+(?:LYOPHILIZED|FREEZE-?DRIED)\s+POWDER\s*\+\s*(?:" + diluent_keywords + r").*$",
+        re.IGNORECASE
+    )
+    working = lyoph_diluent.sub("", working)
+    
+    # Pattern 0c: Strip "+ X mL LYOPHILIZED POWDER + DILUENT" patterns
+    ml_lyoph_pattern = re.compile(
+        r"\s*\+\s*\d+(?:[.,]\d+)?\s*m?L?\s+(?:LYOPHILIZED|FREEZE-?DRIED)\s+POWDER\s*\+\s*(?:" + diluent_keywords + r").*$",
+        re.IGNORECASE
+    )
+    working = ml_lyoph_pattern.sub("", working)
+    
+    # Pattern 1a: "+ X mL diluent" - explicit volume before keyword  
     diluent_pattern1a = re.compile(
         r"\s*\+\s*\d+(?:[.,]\d+)?\s*m?L?\s+" + diluent_keywords,
         re.IGNORECASE
     )
     working = diluent_pattern1a.sub("", working)
     
-    # Pattern 1b: "+ diluent" without volume
+    # Pattern 1a2: "X mg + Y mL diluent" - dose before +, volume after
+    # This catches "250 mg + 5 mL diluent SOLUTION VIAL"
+    diluent_pattern1a2 = re.compile(
+        r"(\d+(?:[.,]\d+)?\s*(?:mg|g|mcg|iu|units?))\s*\+\s*\d+(?:[.,]\d+)?\s*m?L?\s*" + diluent_keywords + r".*$",
+        re.IGNORECASE
+    )
+    working = diluent_pattern1a2.sub(r"\1", working)
+    
+    # Pattern 1a3: "X IU + Y mL + Z mL" multi-part patterns with trailing packaging
+    # This catches "100 IU/g + diluent SOLUTION VIAL"
+    diluent_pattern1a3 = re.compile(
+        r"\s*\+\s*" + diluent_keywords + r"\s+(?:SOLUTION|SUSPENSION|POWDER)?\s*(?:VIAL|AMPULE?|BOTTLE)?.*$",
+        re.IGNORECASE
+    )
+    working = diluent_pattern1a3.sub("", working)
+    
+    # Pattern 1b: "+ diluent" without volume (also handle "+ diluent vial")
     diluent_pattern1b = re.compile(
-        r"\s*\+\s*" + diluent_keywords,
+        r"\s*\+\s*" + diluent_keywords + r"(?:\s+(?:VIAL|AMPULE?|BOTTLE))?\s*",
         re.IGNORECASE
     )
     working = diluent_pattern1b.sub("", working)
@@ -228,6 +276,13 @@ def extract_drug_details(drug_name: str) -> Dict[str, Optional[str]]:
         re.IGNORECASE
     )
     working = potency_qualifier_pattern.sub(" ", working)
+    
+    # Strip "freeze-dried powder monodose vial" patterns
+    freeze_dried_pattern = re.compile(
+        r"\s+freeze-?dried\s+powder\s+(?:mono|multi)?dose\s+vial.*$",
+        re.IGNORECASE
+    )
+    working = freeze_dried_pattern.sub("", working)
     
     # Pattern 2: "POWDER + DILUENT", "SOLUTION + DILUENT" 
     diluent_pattern2 = re.compile(

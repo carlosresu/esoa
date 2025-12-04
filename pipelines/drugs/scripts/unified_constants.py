@@ -1217,6 +1217,207 @@ SPELLING_SYNONYMS: Dict[str, str] = {
 }
 
 # ============================================================================
+# VACCINE CANONICAL NAMES - Normalize vaccine descriptions to canonical form
+# Format: "canonical_name" -> list of patterns/aliases
+# Output: generic_name = canonical, details = specifics (valency, strains, etc.)
+# ============================================================================
+
+VACCINE_CANONICAL: Dict[str, Dict[str, Any]] = {
+    # BCG
+    "BCG VACCINE": {
+        "patterns": ["BCG VACCINE", "BACILLUS CALMETTE-GUERIN", "BACILLUS CALMETTE GUERIN"],
+        "acronym": "BCG",
+    },
+    # Hepatitis
+    "HEPATITIS A VACCINE": {
+        "patterns": ["HEPATITIS A INACTIVATED VACCINE", "HEPATITIS A VACCINE"],
+        "acronym": "HEPA",
+    },
+    "HEPATITIS B VACCINE": {
+        "patterns": ["HEPATITIS B VACCINE", "HEPATITIS B RECOMBINANT"],
+        "acronym": "HEPB",
+    },
+    "HEPATITIS A + B VACCINE": {
+        "patterns": ["HEPATITIS A + B VACCINE", "HEPATITIS A AND B VACCINE"],
+        "acronym": "HEPA+HEPB",
+    },
+    # DTP combinations
+    "DTP VACCINE": {
+        "patterns": ["DIPHTHERIA-TETANUS TOXOIDS AND PERTUSSIS VACCINE", 
+                     "DIPHTHERIA-TETANUS TOXOIDS AND ACELLULAR PERTUSSIS VACCINE",
+                     "DIPHTHERIA, TETANUS, PERTUSSIS"],
+        "acronym": "DTP",
+        "aliases": ["DTP", "DTAP"],
+    },
+    "DT VACCINE": {
+        "patterns": ["DIPHTHERIA-TETANUS TOXOIDS"],
+        "acronym": "DT",
+    },
+    "DTP + HIB VACCINE": {
+        "patterns": ["DTP + HIB", "DTAP + HIB", "DTP-HIB"],
+        "acronym": "DTP-HIB",
+    },
+    "DTP + HEPATITIS B VACCINE": {
+        "patterns": ["DTP + HEPATITIS B VACCINE", "DTAP + HEPATITIS B"],
+        "acronym": "DTP-HEPB",
+    },
+    "DTP + IPV VACCINE": {
+        "patterns": ["DTP + INACTIVATED POLIO VACCINE", "DTP + IPV", "DTAP + IPV"],
+        "acronym": "DTP-IPV",
+    },
+    "DTP + IPV + HIB VACCINE": {
+        "patterns": ["DTP + IPV + HIB", "DTAP + IPV + HIB"],
+        "acronym": "DTP-IPV-HIB",
+    },
+    # Polio
+    "IPV VACCINE": {
+        "patterns": ["INACTIVATED POLIOMYELITIS VACCINE", "INACTIVATED POLIO VACCINE", "IPV"],
+        "acronym": "IPV",
+    },
+    "OPV VACCINE": {
+        "patterns": ["ORAL POLIO VACCINE", "LIVE ATTENUATED TRIVALENT ORAL POLIO VACCINE", "OPV"],
+        "acronym": "OPV",
+    },
+    # Measles/MMR
+    "MEASLES VACCINE": {
+        "patterns": ["LIVE ATTENUATED MEASLES VACCINE", "MEASLES VACCINE"],
+        "acronym": "MV",
+    },
+    "MUMPS VACCINE": {
+        "patterns": ["LIVE ATTENUATED MUMPS VACCINE", "MUMPS VACCINE"],
+        "acronym": "MuV",
+    },
+    "RUBELLA VACCINE": {
+        "patterns": ["LIVE ATTENUATED RUBELLA VACCINE", "RUBELLA VACCINE"],
+        "acronym": "RV",
+    },
+    "MMR VACCINE": {
+        "patterns": ["LIVE ATTENUATED MEASLES, MUMPS, AND RUBELLA", "MMR VACCINE", 
+                     "MEASLES, MUMPS, AND RUBELLA VACCINE", "MMR"],
+        "acronym": "MMR",
+    },
+    "VARICELLA VACCINE": {
+        "patterns": ["LIVE ATTENUATED VARICELLA VACCINE", "VARICELLA VACCINE", "CHICKENPOX VACCINE"],
+        "acronym": "VZV",
+    },
+    # Pneumococcal
+    "PNEUMOCOCCAL VACCINE": {
+        "patterns": ["PNEUMOCOCCAL CONJUGATE VACCINE", "PNEUMOCOCCAL POLYVALENT VACCINE",
+                     "PNEUMOCOCCAL POLYSACCHARIDE"],
+        "acronym": "PCV",
+    },
+    # Meningococcal
+    "MENINGOCOCCAL VACCINE": {
+        "patterns": ["MENINGOCOCCAL POLYSACCHARIDE", "MENINGOCOCCAL CONJUGATE", "NEISSERIA MENINGITIDIS"],
+        "acronym": "MenV",
+    },
+    # HIB
+    "HIB VACCINE": {
+        "patterns": ["HEMOPHILUS INFLUENZAE TYPE B", "HIB CONJUGATED VACCINE", "HAEMOPHILUS INFLUENZAE"],
+        "acronym": "HIB",
+    },
+    # Influenza
+    "INFLUENZA VACCINE": {
+        "patterns": ["INFLUENZA VACCINE", "INFLUENZA POLYVALENT VACCINE", "SPLIT VIRION"],
+        "acronym": "FLU",
+    },
+    # Rotavirus
+    "ROTAVIRUS VACCINE": {
+        "patterns": ["LIVE ATTENUATED ROTAVIRUS", "ROTAVIRUS VACCINE"],
+        "acronym": "RV",
+    },
+    # Rabies
+    "RABIES VACCINE": {
+        "patterns": ["RABIES CHICK EMBRYO CELL", "RABIES VACCINE", "PURIFIED INACTIVATED"],
+        "acronym": "RabV",
+    },
+    # Yellow fever
+    "YELLOW FEVER VACCINE": {
+        "patterns": ["YELLOW FEVER VACCINE"],
+        "acronym": "YFV",
+    },
+    # HPV
+    "HPV VACCINE": {
+        "patterns": ["HUMAN PAPILLOMAVIRUS", "HPV VACCINE", "QUADRIVALENT", "BIVALENT", "NONAVALENT"],
+        "acronym": "HPV",
+    },
+    # Typhoid
+    "TYPHOID VACCINE": {
+        "patterns": ["TYPHOID VACCINE", "SALMONELLA TYPHI"],
+        "acronym": "TyV",
+    },
+    # Japanese encephalitis
+    "JAPANESE ENCEPHALITIS VACCINE": {
+        "patterns": ["JAPANESE ENCEPHALITIS VACCINE", "JE VACCINE"],
+        "acronym": "JEV",
+    },
+    # Pentavalent
+    "PENTAVALENT VACCINE": {
+        "patterns": ["DIPHTHERIA, TETANUS, PERTUSSIS, HEPATITIS B.*HAEMOPHILUS"],
+        "acronym": "PENTA",
+    },
+}
+
+# Helper function to normalize vaccine names
+def normalize_vaccine_name(text: str) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Normalize a vaccine description to canonical name + details.
+    
+    Returns: (canonical_name, details) or (None, None) if not a vaccine
+    """
+    text_upper = text.upper()
+    
+    # Check if it's a vaccine
+    if "VACCINE" not in text_upper and "TOXOID" not in text_upper:
+        return None, None
+    
+    # Try to match against patterns
+    import re
+    for canonical, info in VACCINE_CANONICAL.items():
+        for pattern in info["patterns"]:
+            if pattern in text_upper or re.search(pattern, text_upper, re.IGNORECASE):
+                # Extract details (valency, strains, etc.)
+                details = []
+                
+                # Valency
+                valency_match = re.search(r'(\d+)-?VALENT', text_upper)
+                if valency_match:
+                    details.append(f"{valency_match.group(1)}-valent")
+                
+                # Type/strain info in parentheses
+                type_match = re.search(r'\(TYPE[S]?\s+([^)]+)\)', text_upper)
+                if type_match:
+                    details.append(f"Type {type_match.group(1)}")
+                
+                # Group/serogroup
+                group_match = re.search(r'(?:GROUP|SEROGROUP)\s+([A-Z,\s\+]+?)(?:\s|$|\))', text_upper)
+                if group_match:
+                    details.append(f"Group {group_match.group(1).strip()}")
+                
+                # Recombinant/Attenuated
+                if "RECOMBINANT" in text_upper:
+                    details.append("Recombinant")
+                if "ATTENUATED" in text_upper and "LIVE" in text_upper:
+                    details.append("Live attenuated")
+                elif "INACTIVATED" in text_upper:
+                    details.append("Inactivated")
+                
+                # Pediatric/Adult
+                if "PEDIATRIC" in text_upper or "JUNIOR" in text_upper:
+                    details.append("Pediatric")
+                elif "ADULT" in text_upper:
+                    details.append("Adult")
+                
+                detail_str = "; ".join(details) if details else None
+                return canonical, detail_str
+    
+    # Fallback: return generic "VACCINE" if contains vaccine
+    if "VACCINE" in text_upper:
+        return "VACCINE", text_upper.replace("VACCINE", "").strip()
+    
+    return None, None
+
+# ============================================================================
 # REGIONAL CANONICAL NAMES - Map US names to PH/WHO names
 # Philippines uses WHO naming conventions (e.g., PARACETAMOL not ACETAMINOPHEN)
 # Applied when generating output to prefer regional names
@@ -1276,6 +1477,17 @@ MULTIWORD_GENERICS: Set[str] = {
     "VITAMIN K", "VITAMIN K1",
     "FERRIC CARBOXYMALTOSE", "IRON SUCROSE", "IRON DEXTRAN",
     "SODIUM HYALURONATE", "CHONDROITIN SULFATE",
+    # Vaccines - canonical names (must match VACCINE_CANONICAL keys)
+    "BCG VACCINE", "HEPATITIS A VACCINE", "HEPATITIS B VACCINE",
+    "HEPATITIS A + B VACCINE", "DTP VACCINE", "DT VACCINE",
+    "DTP + HIB VACCINE", "DTP + HEPATITIS B VACCINE",
+    "DTP + IPV VACCINE", "DTP + IPV + HIB VACCINE",
+    "IPV VACCINE", "OPV VACCINE", "MEASLES VACCINE", "MUMPS VACCINE",
+    "RUBELLA VACCINE", "MMR VACCINE", "VARICELLA VACCINE",
+    "PNEUMOCOCCAL VACCINE", "MENINGOCOCCAL VACCINE", "HIB VACCINE",
+    "INFLUENZA VACCINE", "ROTAVIRUS VACCINE", "RABIES VACCINE",
+    "YELLOW FEVER VACCINE", "HPV VACCINE", "TYPHOID VACCINE",
+    "JAPANESE ENCEPHALITIS VACCINE", "PENTAVALENT VACCINE",
 }
 
 
@@ -1531,6 +1743,9 @@ __all__ = [
     "SPELLING_SYNONYMS", "MULTIWORD_GENERICS",
     "REGIONAL_CANONICAL", "REGIONAL_TO_US",
     "get_regional_canonical", "get_us_canonical",
+    
+    # Vaccine normalization
+    "VACCINE_CANONICAL", "normalize_vaccine_name",
     
     # Helper functions
     "get_canonical_form", "get_canonical_route",
